@@ -19,7 +19,7 @@ import { loginWithEmail } from '@/services/auth.service';
 export default function LoginScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
-  const { isAuthenticated, signIn } = useAuth();
+  const { isAuthenticated, isHydrating, signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +28,14 @@ export default function LoginScreen() {
   const isFormValid = useMemo(() => {
     return email.trim().length > 0 && password.trim().length > 0;
   }, [email, password]);
+
+  if (isHydrating) {
+    return (
+      <View style={[styles.screen, { backgroundColor: palette.background, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator color={palette.primary} />
+      </View>
+    );
+  }
 
   if (isAuthenticated) {
     return <Redirect href="/(tabs)" />;
@@ -53,7 +61,7 @@ export default function LoginScreen() {
         return;
       }
 
-      signIn(result);
+      await signIn(result);
       router.replace('/(tabs)');
     } catch (loginError) {
       const message = loginError instanceof Error ? loginError.message : 'Đăng nhập thất bại';

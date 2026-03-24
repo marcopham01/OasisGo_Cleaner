@@ -1,155 +1,66 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
-    ActivityIndicator,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View
 } from 'react-native';
 
+import ShiftsTab from '@/components/shifts-tab';
+import TaskDetailTab from '@/components/task-detail-tab';
+import TasksTab from '@/components/tasks-tab';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import {
-    getMyCleaningTasks,
-    getMyShiftAssignments,
-} from '@/services/cleaner-dashboard.service';
-import type { CleaningTask, StaffShiftAssignment } from '@/types/cleaner-dashboard';
+import type { CleaningTask } from '@/types/cleaner-dashboard';
 
-function formatDate(dateText?: string) {
-  if (!dateText) {
-    return '-';
-  }
-
-  const parsed = new Date(dateText);
-  if (Number.isNaN(parsed.getTime())) {
-    return dateText;
-  }
-
-  return parsed.toLocaleDateString('vi-VN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-}
-
-function formatDateTime(dateText?: string) {
-  if (!dateText) {
-    return '-';
-  }
-
-  const parsed = new Date(dateText);
-  if (Number.isNaN(parsed.getTime())) {
-    return dateText;
-  }
-
-  return parsed.toLocaleString('vi-VN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function statusColor(status: string | undefined, isDark: boolean) {
-  const normalized = (status || '').toUpperCase();
-
-  if (normalized === 'DONE' || normalized === 'COMPLETED') {
-    return isDark ? '#34d399' : '#10b981';
-  }
-
-  if (normalized === 'IN_PROGRESS' || normalized === 'CHECKED_IN') {
-    return isDark ? '#fbbf24' : '#d97706';
-  }
-
-  if (normalized === 'ASSIGNED') {
-    return isDark ? '#60a5fa' : '#2563eb';
-  }
-
-  if (normalized === 'ABSENT' || normalized === 'CANCELLED') {
-    return isDark ? '#fb7185' : '#e11d48';
-  }
-
-  return isDark ? '#94a3b8' : '#64748b';
-}
-
-function getId(item: StaffShiftAssignment | CleaningTask) {
-  const value = item.id || item._id || item.shift_assignment_id;
-  return String(value || Math.random());
-}
 
 export default function HomeScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
-  const isDark = theme === 'dark';
 
   const { token, user, signOut } = useAuth();
 
-  const [assignments, setAssignments] = useState<StaffShiftAssignment[]>([]);
-  const [tasks, setTasks] = useState<CleaningTask[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTab, setSelectedTab] = useState<'shifts' | 'tasks' | 'detail'>('shifts');
+  const [selectedTask, setSelectedTask] = useState<CleaningTask | null>(null);
 
-  const loadData = useCallback(
-    async (silent = false) => {
-      if (!token) {
-        setError('Bạn chưa đăng nhập.');
-        setLoading(false);
-        return;
-      }
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    setRefreshing(false);
+  }, []);
 
-      if (silent) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
+  const handleSelectTask = (task: CleaningTask) => {
+    setSelectedTask(task);
+    setSelectedTab('detail');
+  };
 
-      setError(null);
+  const handleTaskUpdated = (task: CleaningTask) => {
+    setSelectedTask(task);
+  };
 
-      try {
-        const [nextAssignments, nextTasks] = await Promise.all([
-          getMyShiftAssignments(token),
-          getMyCleaningTasks(token),
-        ]);
+  const handleCloseDetail = () => {
+    setSelectedTab('tasks');
+    setSelectedTask(null);
+  };
 
-        setAssignments(nextAssignments);
-        setTasks(nextTasks);
-      } catch (fetchError) {
-        const message = fetchError instanceof Error ? fetchError.message : 'Không thể tải dashboard';
-        setError(message);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [token],
-  );
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const shiftCountText = `${assignments.length} ca làm việc`;
-  const taskCountText = `${tasks.length} công việc vệ sinh`;
-
-  if (loading) {
+  if (!token) {
     return (
-      <View style={[styles.centered, { backgroundColor: palette.background }]}> 
-        <ActivityIndicator size="large" color={palette.primary} />
-        <Text style={[styles.loadingText, { color: palette.textMuted }]}>Đang tải lịch làm việc...</Text>
+      <View style={[styles.centerContainer, { backgroundColor: palette.background }]}>
+        <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
       </View>
     );
   }
 
   return (
     <ScrollView
-      style={{ backgroundColor: palette.background }}
-      contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadData(true)} />}>
+      style={{ flex: 1, backgroundColor: palette.background }}
+      contentContainerStyle={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}>
       <View
         style={[
           styles.headerCard,
@@ -162,100 +73,141 @@ export default function HomeScreen() {
         <Text style={[styles.headerSubtitle, { color: palette.primaryLight }]}>Hôm nay: {new Date().toLocaleDateString('vi-VN')}</Text>
         <View style={styles.headerActions}>
           <Pressable
-            onPress={() => loadData(true)}
-            style={[styles.actionButton, { backgroundColor: palette.secondary }]}> 
-            <Text style={[styles.actionButtonText, { color: palette.primaryDark }]}>Làm mới</Text>
+            onPress={handleRefresh}
+            style={[styles.headerButton, { backgroundColor: palette.secondary }]}>
+            <Text style={[styles.headerButtonText, { color: palette.primaryDark }]}>Làm mới</Text>
           </Pressable>
           <Pressable
-            onPress={signOut}
-            style={[styles.actionButton, { backgroundColor: palette.primaryDark }]}> 
-            <Text style={[styles.actionButtonText, { color: palette.white }]}>Đăng xuất</Text>
+            onPress={() => {
+              void signOut();
+            }}
+            style={[styles.headerButton, { backgroundColor: palette.primaryDark }]}> 
+            <Text style={[styles.headerButtonText, { color: palette.white }]}>Đăng xuất</Text>
           </Pressable>
         </View>
       </View>
 
-      {error ? (
-        <View style={[styles.errorCard, { backgroundColor: palette.card, borderColor: palette.error }]}> 
+      {error && (
+        <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error }]}>
           <Text style={[styles.errorText, { color: palette.error }]}>{error}</Text>
         </View>
-      ) : null}
+      )}
 
-      <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}> 
-        <Text style={[styles.sectionTitle, { color: palette.text }]}>Lịch làm việc (Staff Shift)</Text>
-        <Text style={[styles.sectionCount, { color: palette.textMuted }]}>{shiftCountText}</Text>
+      {/* Tab Switcher */}
+      <View style={styles.tabSwitcher}>
+        <Pressable
+          style={[
+            styles.tabButton,
+            selectedTab === 'shifts' && { backgroundColor: palette.primary, borderColor: palette.primary },
+            selectedTab !== 'shifts' && { backgroundColor: palette.surface, borderColor: palette.border },
+          ]}
+          onPress={() => setSelectedTab('shifts')}>
+          <Text
+            style={[
+              styles.tabButtonText,
+              { color: selectedTab === 'shifts' ? palette.white : palette.text },
+            ]}>
+            Ca làm
+          </Text>
+        </Pressable>
 
-        {assignments.length === 0 ? (
-          <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có ca làm việc nào.</Text>
-        ) : (
-          assignments.map((assignment) => {
-            const status = String(assignment.status || 'UNKNOWN');
+        <Pressable
+          style={[
+            styles.tabButton,
+            selectedTab === 'tasks' && { backgroundColor: palette.primary, borderColor: palette.primary },
+            selectedTab !== 'tasks' && { backgroundColor: palette.surface, borderColor: palette.border },
+          ]}
+          onPress={() => setSelectedTab('tasks')}>
+          <Text
+            style={[
+              styles.tabButtonText,
+              { color: selectedTab === 'tasks' ? palette.white : palette.text },
+            ]}>
+            Tasks
+          </Text>
+        </Pressable>
 
-            return (
-              <View
-                key={getId(assignment)}
-                style={[styles.itemCard, { backgroundColor: palette.surface, borderColor: palette.border }]}> 
-                <View style={styles.itemTopRow}>
-                  <Text style={[styles.itemTitle, { color: palette.text }]}>Ca #{assignment.id || assignment.shift_assignment_id || '-'}</Text>
-                  <Text style={[styles.itemStatus, { color: statusColor(status, isDark) }]}>{status}</Text>
-                </View>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Ngày làm: {formatDate(assignment.work_date as string | undefined)}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Shift: {String(assignment.shift_name || assignment.shift_id || '-')}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Check-in: {formatDateTime(assignment.checkin_time as string | undefined)}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Check-out: {formatDateTime(assignment.checkout_time as string | undefined)}</Text>
-              </View>
-            );
-          })
-        )}
+        <Pressable
+          style={[
+            styles.tabButton,
+            selectedTab === 'detail' && { backgroundColor: palette.primary, borderColor: palette.primary },
+            selectedTab !== 'detail' &&
+              (!selectedTask ? { opacity: 0.5 } : {}),
+            {
+              backgroundColor:
+                selectedTab === 'detail' ? palette.primary : selectedTask ? palette.surface : palette.neutral300,
+              borderColor: selectedTab === 'detail' ? palette.primary : palette.border,
+            },
+          ]}
+          onPress={() => selectedTask && setSelectedTab('detail')}
+          disabled={!selectedTask}>
+          <Text
+            style={[
+              styles.tabButtonText,
+              {
+                color:
+                  selectedTab === 'detail'
+                    ? palette.white
+                    : selectedTask
+                      ? palette.text
+                      : palette.textMuted,
+              },
+            ]}>
+            Chi tiết
+          </Text>
+        </Pressable>
       </View>
 
-      <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}> 
-        <Text style={[styles.sectionTitle, { color: palette.text }]}>Lịch cleaning của tôi</Text>
-        <Text style={[styles.sectionCount, { color: palette.textMuted }]}>{taskCountText}</Text>
+      {/* Tab Content */}
+      {selectedTab === 'shifts' && (
+        <ShiftsTab
+          token={token}
+          isDark={theme === 'dark'}
+          palette={palette}
+          onErrorChange={setError}
+        />
+      )}
 
-        {tasks.length === 0 ? (
-          <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có cleaning task nào.</Text>
-        ) : (
-          tasks.map((task) => {
-            const status = String(task.status || 'UNKNOWN');
+      {selectedTab === 'tasks' && (
+        <TasksTab
+          token={token}
+          isDark={theme === 'dark'}
+          palette={palette}
+          onSelectTask={handleSelectTask}
+          onErrorChange={setError}
+        />
+      )}
 
-            return (
-              <View
-                key={getId(task)}
-                style={[styles.itemCard, { backgroundColor: palette.surface, borderColor: palette.border }]}> 
-                <View style={styles.itemTopRow}>
-                  <Text style={[styles.itemTitle, { color: palette.text }]}>Task #{task.id || task._id || '-'}</Text>
-                  <Text style={[styles.itemStatus, { color: statusColor(status, isDark) }]}>{status}</Text>
-                </View>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Pod: {String(task.pod_id || '-')}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Booking: {String(task.booking_id || '-')}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Shift assignment: {String(task.shift_assignment_id || '-')}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Bắt đầu: {formatDateTime(task.start_time)}</Text>
-                <Text style={[styles.itemMeta, { color: palette.textMuted }]}>Kết thúc: {formatDateTime(task.end_time)}</Text>
-              </View>
-            );
-          })
-        )}
-      </View>
+      {selectedTab === 'detail' && (
+        <TaskDetailTab
+          token={token}
+          taskId={selectedTask ? String(selectedTask.id || selectedTask._id || '') : null}
+          isDark={theme === 'dark'}
+          palette={palette}
+          onClose={handleCloseDetail}
+          onTaskUpdated={handleTaskUpdated}
+          onErrorChange={setError}
+        />
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  centered: {
+  centerContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacingX._20,
   },
-  loadingText: {
-    marginTop: spacingY._10,
-    fontSize: 14,
+  centerText: {
+    fontSize: 16,
     fontFamily: Fonts.sans,
+    fontWeight: '600',
   },
-  content: {
+  container: {
     paddingHorizontal: spacingX._20,
-    paddingBottom: spacingY._40,
-    paddingTop: spacingY._15,
+    paddingVertical: spacingY._15,
     gap: spacingY._15,
   },
   headerCard: {
@@ -278,17 +230,17 @@ const styles = StyleSheet.create({
     gap: spacingX._10,
     marginTop: spacingY._15,
   },
-  actionButton: {
+  headerButton: {
     borderRadius: radius._10,
     paddingHorizontal: spacingX._12,
     paddingVertical: spacingY._10,
   },
-  actionButtonText: {
+  headerButtonText: {
     fontSize: 13,
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
-  errorCard: {
+  errorBox: {
     borderRadius: radius._12,
     borderWidth: 1,
     padding: spacingX._12,
@@ -298,51 +250,21 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     fontWeight: '600',
   },
-  sectionCard: {
-    borderRadius: radius._17,
-    borderWidth: 1,
-    padding: spacingX._15,
-    gap: spacingY._12,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
-  },
-  sectionCount: {
-    fontSize: 13,
-    fontFamily: Fonts.sans,
-  },
-  emptyText: {
-    fontSize: 13,
-    fontFamily: Fonts.sans,
-    paddingVertical: spacingY._10,
-  },
-  itemCard: {
-    borderRadius: radius._12,
-    borderWidth: 1,
-    padding: spacingX._12,
-    gap: spacingY._5,
-  },
-  itemTopRow: {
+  tabSwitcher: {
     flexDirection: 'row',
+    gap: spacingX._7,
+    borderRadius: radius._12,
+  },
+  tabButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    borderWidth: 1,
+    paddingVertical: spacingY._12,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacingX._10,
   },
-  itemTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
-    flexShrink: 1,
-  },
-  itemStatus: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontFamily: Fonts.mono,
-  },
-  itemMeta: {
+  tabButtonText: {
     fontSize: 13,
+    fontWeight: '700',
     fontFamily: Fonts.sans,
   },
 });

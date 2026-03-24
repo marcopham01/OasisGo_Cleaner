@@ -1,4 +1,5 @@
 import { Redirect, Tabs } from 'expo-router';
+import { ActivityIndicator, View } from 'react-native';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -8,7 +9,21 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isHydrating } = useAuth();
+
+  if (isHydrating) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: Colors[colorScheme ?? 'light'].background,
+        }}>
+        <ActivityIndicator color={Colors[colorScheme ?? 'light'].primary} />
+      </View>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Redirect href="/login" />;
