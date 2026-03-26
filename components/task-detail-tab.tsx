@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Image,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -13,21 +15,17 @@ import {
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
     createCleaningPhoto,
-    getBookingById,
     getCleaningPhotos,
     getCleaningTaskById,
-    getPodById,
     updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import type {
-    BookingDetails,
     CleanerTaskAction,
     CleaningPhoto,
     CleaningPhotoType,
     CleaningTask,
-    PodDetails,
 } from '@/types/cleaner-dashboard';
-import { getErrorMessage, validatePhotoUrl, validateRejectionReason } from '@/utils/validation';
+import { getErrorMessage, validateRejectionReason } from '@/utils/validation';
 
 interface TaskDetailTabProps {
   token: string;
@@ -93,6 +91,18 @@ function getActionColor(action: CleanerTaskAction, palette: typeof Colors.light)
   return colors[action];
 }
 
+function progressStepState(status: string | undefined) {
+  const normalized = String(status || '').toUpperCase();
+  const order = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'DONE'];
+  const rank = order.indexOf(normalized);
+
+  return {
+    accepted: rank >= 2,
+    started: rank >= 4,
+    completed: rank >= 5,
+  };
+}
+
 export default function TaskDetailTab({
   token,
   taskId,
@@ -103,19 +113,62 @@ export default function TaskDetailTab({
   onErrorChange,
 }: TaskDetailTabProps) {
   const [task, setTask] = useState<CleaningTask | null>(null);
-  const [pod, setPod] = useState<PodDetails | null>(null);
-  const [booking, setBooking] = useState<BookingDetails | null>(null);
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
+  const cameraRef = useRef<CameraView | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [photoUrl, setPhotoUrl] = useState('');
+  const [capturedPhotoUris, setCapturedPhotoUris] = useState<string[]>([]);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [photoType, setPhotoType] = useState<CleaningPhotoType>('BEFORE');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+
+  const openCamera = async () => {
+    if (!task || !progressStepState(task.status).started) {
+      Alert.alert('Chưa thể chụp ảnh', 'Bạn cần bấm "Bắt đầu dọn" trước khi chụp ảnh task.');
+      return;
+    }
+
+    if (!cameraPermission?.granted) {
+      const permissionResult = await requestCameraPermission();
+      if (!permissionResult.granted) {
+        Alert.alert('Không thể mở camera', 'Vui lòng cấp quyền camera để chụp ảnh.');
+        return;
+      }
+    }
+
+    setIsCameraOpen(true);
+  };
+
+  const handleCapturePhoto = async () => {
+    if (!cameraRef.current) {
+      return;
+    }
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.75,
+      });
+
+      if (!photo?.uri) {
+        Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.');
+        return;
+      }
+
+      setCapturedPhotoUris((prev) => [...prev, photo.uri]);
+    } catch {
+      Alert.alert('Lỗi', 'Không thể chụp ảnh, vui lòng thử lại.');
+    }
+  };
+
+  const removeCapturedPhoto = (indexToRemove: number) => {
+    setCapturedPhotoUris((prev) => prev.filter((_, index) => index !== indexToRemove));
+  };
 
   const loadDetail = useCallback(async () => {
     if (!taskId || !token) return;
@@ -131,16 +184,6 @@ export default function TaskDetailTab({
       ]);
 
       setTask(taskData);
-
-      const [podDetail, bookingDetail] = await Promise.all([
-        taskData.pod_id ? getPodById(String(taskData.pod_id)) : Promise.resolve(null),
-        taskData.booking_id
-          ? getBookingById(token, String(taskData.booking_id))
-          : Promise.resolve(null),
-      ]);
-
-      setPod(podDetail);
-      setBooking(bookingDetail);
 
       setPhotos(photosData);
       onErrorChange?.(null);
@@ -192,14 +235,8 @@ export default function TaskDetailTab({
   };
 
   const handleUploadPhoto = async () => {
-    if (!taskId || !photoUrl.trim()) {
-      Alert.alert('Lỗi', 'Vui lòng nhập URL ảnh');
-      return;
-    }
-
-    const validation = validatePhotoUrl(photoUrl.trim());
-    if (!validation.valid) {
-      Alert.alert('Lỗi', validation.error || 'URL ảnh không hợp lệ');
+    if (!taskId || capturedPhotoUris.length === 0) {
+      Alert.alert('Lỗi', 'Vui lòng chụp ít nhất một ảnh trước khi lưu.');
       return;
     }
 
@@ -208,18 +245,22 @@ export default function TaskDetailTab({
     onErrorChange?.(null);
 
     try {
-      await createCleaningPhoto(token, {
-        cleaning_task_id: taskId,
-        photo_url: photoUrl.trim(),
-        type: photoType,
-      });
+      await Promise.all(
+        capturedPhotoUris.map((uri) =>
+          createCleaningPhoto(token, {
+            cleaning_task_id: taskId,
+            local_uri: uri,
+            type: photoType,
+          }),
+        ),
+      );
 
-      setPhotoUrl('');
+      setCapturedPhotoUris([]);
       const updated = await getCleaningPhotos(token, taskId);
       setPhotos(updated);
       onErrorChange?.(null);
 
-      Alert.alert('Thành công', 'Upload ảnh thành công');
+      Alert.alert('Thành công', `Đã lưu ${capturedPhotoUris.length} ảnh cho task.`);
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
@@ -261,6 +302,7 @@ export default function TaskDetailTab({
   const canStart = task.status === 'ACCEPTED' || task.status === 'ARRIVED';
   const canComplete = task.status === 'IN_PROGRESS';
   const canReject = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED'].includes(String(task.status || ''));
+  const progress = progressStepState(task.status);
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
@@ -285,16 +327,7 @@ export default function TaskDetailTab({
           <Text style={[styles.info, { color: palette.textMuted }]}>Trạng thái: {task.status}</Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>Pod: {String(task.pod_id || '-')}</Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Pod Name: {String(pod?.name || '-')}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
             Booking: {String(task.booking_id || '-')}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking Status: {String(booking?.status || '-')}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Checkin State: {String(booking?.checkin_state || '-')}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
             Source: {String(task.request_source || '-')}
@@ -313,6 +346,39 @@ export default function TaskDetailTab({
         {/* Actions */}
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
           <Text style={[styles.sectionTitle, { color: palette.text }]}>Hành động</Text>
+
+          <View style={styles.progressRow}>
+            <View
+              style={[
+                styles.progressStep,
+                {
+                  borderColor: progress.accepted ? palette.success : palette.border,
+                  backgroundColor: progress.accepted ? `${palette.success}22` : palette.surface,
+                },
+              ]}>
+              <Text style={[styles.progressLabel, { color: palette.text }]}>1. Nhận việc</Text>
+            </View>
+            <View
+              style={[
+                styles.progressStep,
+                {
+                  borderColor: progress.started ? palette.success : palette.border,
+                  backgroundColor: progress.started ? `${palette.success}22` : palette.surface,
+                },
+              ]}>
+              <Text style={[styles.progressLabel, { color: palette.text }]}>2. Bắt đầu</Text>
+            </View>
+            <View
+              style={[
+                styles.progressStep,
+                {
+                  borderColor: progress.completed ? palette.success : palette.border,
+                  backgroundColor: progress.completed ? `${palette.success}22` : palette.surface,
+                },
+              ]}>
+              <Text style={[styles.progressLabel, { color: palette.text }]}>3. Hoàn tất</Text>
+            </View>
+          </View>
 
           <View style={styles.actionGrid}>
             {canAccept && (
@@ -376,44 +442,33 @@ export default function TaskDetailTab({
         </View>
 
         {/* Photos */}
-        <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
-          <Text style={[styles.sectionTitle, { color: palette.text }]}>
-            Ảnh BEFORE/AFTER ({photos.length})
-          </Text>
+        {progress.started ? (
+          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>
+              Ảnh BEFORE/AFTER ({photos.length})
+            </Text>
 
-          {photos.length === 0 ? (
-            <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh</Text>
-          ) : (
-            photos.map((photo) => (
-              <View
-                key={String(photo.id || Math.random())}
-                style={[styles.photoItem, { borderColor: palette.border }]}>
-                <View style={styles.photoHeader}>
-                  <Text style={[styles.photoType, { color: palette.text }]}>{photo.type}</Text>
+            {photos.length === 0 ? (
+              <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh</Text>
+            ) : (
+              photos.map((photo) => (
+                <View
+                  key={String(photo.id || Math.random())}
+                  style={[styles.photoItem, { borderColor: palette.border }]}>
+                  <View style={styles.photoHeader}>
+                    <Text style={[styles.photoType, { color: palette.text }]}>{photo.type}</Text>
+                  </View>
+                  <Text
+                    style={[styles.photoUrl, { color: palette.textMuted }]}
+                    numberOfLines={2}>
+                    {photo.photo_url}
+                  </Text>
+                  <Image source={{ uri: photo.photo_url }} style={styles.photoPreview} />
                 </View>
-                <Text
-                  style={[styles.photoUrl, { color: palette.textMuted }]}
-                  numberOfLines={2}>
-                  {photo.photo_url}
-                </Text>
-              </View>
-            ))
-          )}
+              ))
+            )}
 
-          <Text style={[styles.subsectionTitle, { color: palette.text }]}>Upload ảnh mới</Text>
-
-          <TextInput
-            style={[
-              styles.input,
-              { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-            ]}
-            value={photoUrl}
-            onChangeText={setPhotoUrl}
-            placeholder="Photo URL (https://...)"
-            placeholderTextColor={palette.neutral500}
-            autoCapitalize="none"
-            editable={!uploadingPhoto}
-          />
+            <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp ảnh mới</Text>
 
           <View style={styles.photoTypeSelector}>
             <Pressable
@@ -451,17 +506,68 @@ export default function TaskDetailTab({
             </Pressable>
           </View>
 
-          <Pressable
-            style={[styles.uploadButton, { backgroundColor: palette.success }]}
-            disabled={uploadingPhoto}
-            onPress={() => void handleUploadPhoto()}>
-            {uploadingPhoto ? (
-              <ActivityIndicator color={palette.white} />
+            {isCameraOpen ? (
+              <View style={styles.cameraBox}>
+                <CameraView style={styles.cameraView} facing="back" ref={cameraRef} />
+                <View style={styles.cameraActions}>
+                  <Pressable
+                    style={[styles.cameraButton, { backgroundColor: palette.neutral500 }]}
+                    onPress={() => setIsCameraOpen(false)}>
+                    <Text style={[styles.cameraButtonText, { color: palette.white }]}>Xong</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.cameraButton, { backgroundColor: palette.primary }]}
+                    onPress={() => void handleCapturePhoto()}>
+                    <Text style={[styles.cameraButtonText, { color: palette.white }]}>Chụp thêm</Text>
+                  </Pressable>
+                </View>
+              </View>
             ) : (
-              <Text style={[styles.uploadButtonText, { color: palette.white }]}>Upload ảnh</Text>
+              <Pressable
+                style={[styles.uploadButton, { backgroundColor: palette.primary }]}
+                disabled={uploadingPhoto}
+                onPress={() => void openCamera()}>
+                <Text style={[styles.uploadButtonText, { color: palette.white }]}>Mở camera</Text>
+              </Pressable>
             )}
-          </Pressable>
-        </View>
+
+            {capturedPhotoUris.length > 0 ? (
+              <View style={styles.capturedBox}>
+                <Text style={[styles.capturedTitle, { color: palette.text }]}>Ảnh chờ lưu ({capturedPhotoUris.length})</Text>
+                {capturedPhotoUris.map((uri, index) => (
+                  <View key={`${uri}_${index}`} style={styles.pendingPhotoItem}>
+                    <Image source={{ uri }} style={styles.capturedImage} />
+                    <Pressable
+                      style={[styles.removePhotoButton, { backgroundColor: palette.error }]}
+                      onPress={() => removeCapturedPhoto(index)}>
+                      <Text style={[styles.removePhotoText, { color: palette.white }]}>Xóa ảnh này</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa chụp ảnh mới</Text>
+            )}
+
+            <Pressable
+              style={[styles.uploadButton, { backgroundColor: palette.success }]}
+              disabled={uploadingPhoto || capturedPhotoUris.length === 0}
+              onPress={() => void handleUploadPhoto()}>
+              {uploadingPhoto ? (
+                <ActivityIndicator color={palette.white} />
+              ) : (
+                <Text style={[styles.uploadButtonText, { color: palette.white }]}>Lưu tất cả ảnh vào task</Text>
+              )}
+            </Pressable>
+          </View>
+        ) : (
+          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>Ảnh BEFORE/AFTER</Text>
+            <Text style={[styles.emptyText, { color: palette.textMuted }]}>
+              Ảnh chỉ hiển thị và chụp được sau khi task chuyển sang bước {'"Bắt đầu dọn"'}.
+            </Text>
+          </View>
+        )}
       </View>
     </ScrollView>
   );
@@ -540,6 +646,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: Fonts.sans,
   },
+  progressRow: {
+    gap: spacingY._7,
+  },
+  progressStep: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+  },
+  progressLabel: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
   actionGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -584,6 +704,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: Fonts.mono,
   },
+  photoPreview: {
+    height: 160,
+    borderRadius: radius._10,
+    width: '100%',
+    backgroundColor: '#00000018',
+  },
   photoTypeSelector: {
     flexDirection: 'row',
     gap: spacingX._7,
@@ -607,6 +733,61 @@ const styles = StyleSheet.create({
   },
   uploadButtonText: {
     fontSize: 14,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  cameraBox: {
+    gap: spacingY._10,
+  },
+  cameraView: {
+    width: '100%',
+    height: 260,
+    borderRadius: radius._10,
+    overflow: 'hidden',
+  },
+  cameraActions: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+  },
+  cameraButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    paddingVertical: spacingY._10,
+    alignItems: 'center',
+  },
+  cameraButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  capturedBox: {
+    gap: spacingY._7,
+    padding: spacingX._10,
+    borderRadius: radius._10,
+    borderWidth: 1,
+    borderColor: '#00000018',
+  },
+  capturedTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  capturedImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: radius._10,
+    backgroundColor: '#00000018',
+  },
+  pendingPhotoItem: {
+    gap: spacingY._7,
+  },
+  removePhotoButton: {
+    borderRadius: radius._10,
+    paddingVertical: spacingY._7,
+    alignItems: 'center',
+  },
+  removePhotoText: {
+    fontSize: 12,
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },

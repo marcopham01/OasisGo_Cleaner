@@ -127,6 +127,12 @@ export interface CreateCleaningPhotoPayload {
   type: CleaningPhotoType;
 }
 
+export interface CreateCleaningPhotoUploadPayload {
+  cleaning_task_id: string;
+  local_uri: string;
+  type: CleaningPhotoType;
+}
+
 export interface UpdateCleaningPhotoPayload {
   cleaning_task_id?: string;
   photo_url?: string;

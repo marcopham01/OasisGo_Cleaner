@@ -1,4 +1,5 @@
 import { AxiosError } from 'axios';
+import { Platform } from 'react-native';
 
 import { apiClient } from '@/services/api';
 import type {
@@ -7,7 +8,7 @@ import type {
     CleaningPhotoType,
     CleaningTask,
     CleaningTaskQuery,
-    CreateCleaningPhotoPayload,
+    CreateCleaningPhotoUploadPayload,
     PodDetails,
     StaffShiftAssignment,
     StaffShiftAssignmentQuery,
@@ -66,12 +67,51 @@ function authHeader(token: string) {
   };
 }
 
-function compactParams(params: Record<string, unknown>) {
-  const entries = Object.entries(params).filter(([, value]) => {
+function compactParams<T extends object>(params: T) {
+  const entries = Object.entries(params as Record<string, unknown>).filter(([, value]) => {
     return value !== undefined && value !== null && value !== '';
   });
 
   return Object.fromEntries(entries);
+}
+
+function getFileNameFromUri(uri: string) {
+  const sanitizedUri = uri.split('?')[0];
+  const last = sanitizedUri.split('/').pop();
+  return last && last.includes('.') ? last : `cleaning-photo-${Date.now()}.jpg`;
+}
+
+function getMimeTypeFromUri(uri: string) {
+  const lower = uri.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayload) {
+  const formData = new FormData();
+  formData.append('cleaning_task_id', payload.cleaning_task_id);
+  formData.append('type', payload.type);
+
+  const fileName = getFileNameFromUri(payload.local_uri);
+
+  if (Platform.OS === 'web') {
+    const response = await fetch(payload.local_uri);
+    const blob = await response.blob();
+    formData.append('photo', blob, fileName);
+    return formData;
+  }
+
+  formData.append(
+    'photo',
+    {
+      uri: payload.local_uri,
+      name: fileName,
+      type: getMimeTypeFromUri(payload.local_uri),
+    } as unknown as Blob,
+  );
+
+  return formData;
 }
 
 export async function getMyShiftAssignments(token: string, query: StaffShiftAssignmentQuery = {}) {
@@ -207,10 +247,19 @@ export async function getCleaningPhotos(
   }
 }
 
-export async function createCleaningPhoto(token: string, payload: CreateCleaningPhotoPayload) {
+export async function createCleaningPhoto(token: string, payload: CreateCleaningPhotoUploadPayload) {
   try {
-    const response = await apiClient.post<ApiEnvelope<CleaningPhoto>>('/cleaning-photos', payload, {
-      headers: authHeader(token),
+    const formData = await buildCleaningPhotoFormData(payload);
+    const headers =
+      Platform.OS === 'web'
+        ? authHeader(token)
+        : {
+            ...authHeader(token),
+            'Content-Type': 'multipart/form-data',
+          };
+
+    const response = await apiClient.post<ApiEnvelope<CleaningPhoto>>('/cleaning-photos', formData, {
+      headers,
     });
 
     const item = extractData<CleaningPhoto>(response.data?.data ?? response.data);
@@ -249,9 +298,11 @@ export async function updateCleaningPhoto(
   }
 }
 
-export async function getPodById(podId: string) {
+export async function getPodById(token: string, podId: string) {
   try {
-    const response = await apiClient.get<ApiEnvelope<PodDetails>>(`/pods/${podId}`);
+    const response = await apiClient.get<ApiEnvelope<PodDetails>>(`/pods/${podId}`, {
+      headers: authHeader(token),
+    });
 
     const item = extractData<PodDetails>(response.data?.data ?? response.data);
     if (!item) {
