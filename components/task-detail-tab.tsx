@@ -1,4 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -116,6 +117,7 @@ export default function TaskDetailTab({
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -128,8 +130,16 @@ export default function TaskDetailTab({
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
+  const taskStatus = String(task?.status || '').toUpperCase();
+  const canAccessPhotoFlow =
+    taskStatus === 'ACCEPTED' ||
+    taskStatus === 'ARRIVED' ||
+    taskStatus === 'IN_PROGRESS' ||
+    taskStatus === 'DONE';
+  const canCaptureNewPhotos = canAccessPhotoFlow && taskStatus !== 'DONE';
+
   const openCamera = async () => {
-    if (!task || !progressStepState(task.status).started) {
+    if (!task || !canCaptureNewPhotos) {
       Alert.alert('Chưa thể chụp ảnh', 'Bạn cần bấm "Bắt đầu dọn" trước khi chụp ảnh task.');
       return;
     }
@@ -166,9 +176,50 @@ export default function TaskDetailTab({
     }
   };
 
+  const pickPhotoFromLibrary = async () => {
+    if (!task || !canCaptureNewPhotos) {
+      Alert.alert('Chưa thể thêm ảnh', 'Bạn cần bấm "Bắt đầu dọn" trước khi thêm ảnh task.');
+      return;
+    }
+
+    if (!libraryPermission?.granted) {
+      const permissionResult = await requestLibraryPermission();
+      if (!permissionResult.granted) {
+        Alert.alert('Không thể mở thư viện', 'Vui lòng cấp quyền thư viện để chọn ảnh.');
+        return;
+      }
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.75,
+      allowsEditing: false,
+      selectionLimit: 1,
+    });
+
+    if (result.canceled || !result.assets?.length) {
+      return;
+    }
+
+    const selectedUri = result.assets[0]?.uri;
+    if (!selectedUri) {
+      Alert.alert('Lỗi', 'Không đọc được ảnh đã chọn.');
+      return;
+    }
+
+    setCapturedPhotoUris((prev) => [...prev, selectedUri]);
+  };
+
   const removeCapturedPhoto = (indexToRemove: number) => {
     setCapturedPhotoUris((prev) => prev.filter((_, index) => index !== indexToRemove));
   };
+
+  useEffect(() => {
+    if (!canCaptureNewPhotos) {
+      setIsCameraOpen(false);
+      setCapturedPhotoUris([]);
+    }
+  }, [canCaptureNewPhotos]);
 
   const loadDetail = useCallback(async () => {
     if (!taskId || !token) return;
@@ -442,7 +493,7 @@ export default function TaskDetailTab({
         </View>
 
         {/* Photos */}
-        {progress.started ? (
+        {canAccessPhotoFlow ? (
           <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
               Ảnh BEFORE/AFTER ({photos.length})
@@ -463,102 +514,135 @@ export default function TaskDetailTab({
                     numberOfLines={2}>
                     {photo.photo_url}
                   </Text>
-                  <Image source={{ uri: photo.photo_url }} style={styles.photoPreview} />
+                  <Image source={{ uri: photo.photo_url }} style={styles.photoPreview} resizeMode="contain" />
                 </View>
               ))
             )}
 
-            <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp ảnh mới</Text>
+            {canCaptureNewPhotos ? (
+              <>
+                <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp ảnh mới</Text>
 
-          <View style={styles.photoTypeSelector}>
-            <Pressable
-              style={[
-                styles.typeButton,
-                photoType === 'BEFORE'
-                  ? { backgroundColor: palette.primary }
-                  : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
-              ]}
-              onPress={() => setPhotoType('BEFORE')}>
-              <Text
-                style={[
-                  styles.typeButtonText,
-                  { color: photoType === 'BEFORE' ? palette.white : palette.text },
-                ]}>
-                BEFORE
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.typeButton,
-                photoType === 'AFTER'
-                  ? { backgroundColor: palette.primary }
-                  : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
-              ]}
-              onPress={() => setPhotoType('AFTER')}>
-              <Text
-                style={[
-                  styles.typeButtonText,
-                  { color: photoType === 'AFTER' ? palette.white : palette.text },
-                ]}>
-                AFTER
-              </Text>
-            </Pressable>
-          </View>
-
-            {isCameraOpen ? (
-              <View style={styles.cameraBox}>
-                <CameraView style={styles.cameraView} facing="back" ref={cameraRef} />
-                <View style={styles.cameraActions}>
+                <View style={styles.photoTypeSelector}>
                   <Pressable
-                    style={[styles.cameraButton, { backgroundColor: palette.neutral500 }]}
-                    onPress={() => setIsCameraOpen(false)}>
-                    <Text style={[styles.cameraButtonText, { color: palette.white }]}>Xong</Text>
+                    style={[
+                      styles.typeButton,
+                      photoType === 'BEFORE'
+                        ? { backgroundColor: palette.primary }
+                        : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
+                    ]}
+                    onPress={() => {
+                      setPhotoType('BEFORE');
+                      if (!isCameraOpen) {
+                        void openCamera();
+                      }
+                    }}>
+                    <Text
+                      style={[
+                        styles.typeButtonText,
+                        { color: photoType === 'BEFORE' ? palette.white : palette.text },
+                      ]}>
+                      BEFORE
+                    </Text>
                   </Pressable>
+
                   <Pressable
-                    style={[styles.cameraButton, { backgroundColor: palette.primary }]}
-                    onPress={() => void handleCapturePhoto()}>
-                    <Text style={[styles.cameraButtonText, { color: palette.white }]}>Chụp thêm</Text>
+                    style={[
+                      styles.typeButton,
+                      photoType === 'AFTER'
+                        ? { backgroundColor: palette.primary }
+                        : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
+                    ]}
+                    onPress={() => {
+                      setPhotoType('AFTER');
+                      if (!isCameraOpen) {
+                        void openCamera();
+                      }
+                    }}>
+                    <Text
+                      style={[
+                        styles.typeButtonText,
+                        { color: photoType === 'AFTER' ? palette.white : palette.text },
+                      ]}>
+                      AFTER
+                    </Text>
                   </Pressable>
                 </View>
-              </View>
-            ) : (
-              <Pressable
-                style={[styles.uploadButton, { backgroundColor: palette.primary }]}
-                disabled={uploadingPhoto}
-                onPress={() => void openCamera()}>
-                <Text style={[styles.uploadButtonText, { color: palette.white }]}>Mở camera</Text>
-              </Pressable>
-            )}
 
-            {capturedPhotoUris.length > 0 ? (
-              <View style={styles.capturedBox}>
-                <Text style={[styles.capturedTitle, { color: palette.text }]}>Ảnh chờ lưu ({capturedPhotoUris.length})</Text>
-                {capturedPhotoUris.map((uri, index) => (
-                  <View key={`${uri}_${index}`} style={styles.pendingPhotoItem}>
-                    <Image source={{ uri }} style={styles.capturedImage} />
-                    <Pressable
-                      style={[styles.removePhotoButton, { backgroundColor: palette.error }]}
-                      onPress={() => removeCapturedPhoto(index)}>
-                      <Text style={[styles.removePhotoText, { color: palette.white }]}>Xóa ảnh này</Text>
-                    </Pressable>
+                <View style={styles.sourceActionRow}>
+                  <Pressable
+                    style={[styles.sourceButton, { backgroundColor: palette.primary }]}
+                    disabled={uploadingPhoto}
+                    onPress={() => void openCamera()}>
+                    <Text style={[styles.sourceButtonText, { color: palette.white }]}>Chụp ảnh</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sourceButton, { backgroundColor: palette.secondary }]}
+                    disabled={uploadingPhoto}
+                    onPress={() => void pickPhotoFromLibrary()}>
+                    <Text style={[styles.sourceButtonText, { color: palette.primaryDark }]}>Chọn từ máy</Text>
+                  </Pressable>
+                </View>
+
+                {isCameraOpen ? (
+                  <View style={styles.cameraBox}>
+                    <CameraView style={styles.cameraView} facing="back" ref={cameraRef} />
+                    <View style={styles.cameraActions}>
+                      <Pressable
+                        style={[styles.cameraButton, { backgroundColor: palette.neutral500 }]}
+                        onPress={() => setIsCameraOpen(false)}>
+                        <Text style={[styles.cameraButtonText, { color: palette.white }]}>Xong</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.cameraButton, { backgroundColor: palette.primary }]}
+                        onPress={() => void handleCapturePhoto()}>
+                        <Text style={[styles.cameraButtonText, { color: palette.white }]}>Chụp hình</Text>
+                      </Pressable>
+                    </View>
+                    {capturedPhotoUris.length > 0 && (
+                      <Text style={[styles.cameraHint, { color: palette.textMuted }]}> 
+                        Đã chụp {capturedPhotoUris.length} ảnh. Bấm {'"Chụp hình"'} để chụp thêm.
+                      </Text>
+                    )}
                   </View>
-                ))}
-              </View>
-            ) : (
-              <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa chụp ảnh mới</Text>
-            )}
+                ) : (
+                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa mở camera</Text>
+                )}
 
-            <Pressable
-              style={[styles.uploadButton, { backgroundColor: palette.success }]}
-              disabled={uploadingPhoto || capturedPhotoUris.length === 0}
-              onPress={() => void handleUploadPhoto()}>
-              {uploadingPhoto ? (
-                <ActivityIndicator color={palette.white} />
-              ) : (
-                <Text style={[styles.uploadButtonText, { color: palette.white }]}>Lưu tất cả ảnh vào task</Text>
-              )}
-            </Pressable>
+                {capturedPhotoUris.length > 0 ? (
+                  <View style={styles.capturedBox}>
+                    <Text style={[styles.capturedTitle, { color: palette.text }]}>Ảnh chờ lưu ({capturedPhotoUris.length})</Text>
+                    {capturedPhotoUris.map((uri, index) => (
+                      <View key={`${uri}_${index}`} style={styles.pendingPhotoItem}>
+                        <Image source={{ uri }} style={styles.capturedImage} resizeMode="contain" />
+                        <Pressable
+                          style={[styles.removePhotoButton, { backgroundColor: palette.error }]}
+                          onPress={() => removeCapturedPhoto(index)}>
+                          <Text style={[styles.removePhotoText, { color: palette.white }]}>Xóa ảnh này</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa chụp ảnh mới</Text>
+                )}
+
+                <Pressable
+                  style={[styles.uploadButton, { backgroundColor: palette.success }]}
+                  disabled={uploadingPhoto || capturedPhotoUris.length === 0}
+                  onPress={() => void handleUploadPhoto()}>
+                  {uploadingPhoto ? (
+                    <ActivityIndicator color={palette.white} />
+                  ) : (
+                    <Text style={[styles.uploadButtonText, { color: palette.white }]}>Lưu tất cả ảnh vào task</Text>
+                  )}
+                </Pressable>
+              </>
+            ) : (
+              <Text style={[styles.emptyText, { color: palette.textMuted }]}>
+                Task đã hoàn tất, không thể chụp hoặc thêm ảnh mới.
+              </Text>
+            )}
           </View>
         ) : (
           <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
@@ -736,6 +820,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
+  sourceActionRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+  },
+  sourceButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    paddingVertical: spacingY._10,
+    alignItems: 'center',
+  },
+  sourceButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
   cameraBox: {
     gap: spacingY._10,
   },
@@ -758,6 +857,10 @@ const styles = StyleSheet.create({
   cameraButtonText: {
     fontSize: 13,
     fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  cameraHint: {
+    fontSize: 12,
     fontFamily: Fonts.sans,
   },
   capturedBox: {
