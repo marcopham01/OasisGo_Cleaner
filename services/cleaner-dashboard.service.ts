@@ -4,17 +4,25 @@ import { Platform } from 'react-native';
 
 import { apiClient } from '@/services/api';
 import type {
-  BookingDetails,
-  CleaningPhoto,
-  CleaningPhotoType,
-  CleaningTask,
-  CleaningTaskQuery,
-  CreateCleaningPhotoUploadPayload,
-  PodDetails,
-  StaffShiftAssignment,
-  StaffShiftAssignmentQuery,
-  UpdateCleaningPhotoPayload,
-  UpdateCleaningTaskPayload,
+    BookingDetails,
+    CleaningPhoto,
+    CleaningPhotoType,
+    CleaningTask,
+    CleaningTaskQuery,
+    CreateCleaningPhotoUploadPayload,
+    CreateIncidentFromCleaningTaskPayload,
+    CreateLostFoundItemPayload,
+    Incident,
+    LostFoundItem,
+    LostFoundQuery,
+    LostFoundStatus,
+    PodDetails,
+    StaffShiftAssignment,
+    StaffShiftAssignmentQuery,
+    StaffWorkRoster,
+    StaffWorkRosterQuery,
+    UpdateCleaningPhotoPayload,
+    UpdateCleaningTaskPayload,
 } from '@/types/cleaner-dashboard';
 
 type ApiEnvelope<T> = {
@@ -222,6 +230,65 @@ async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayl
   return formData;
 }
 
+async function toUploadFile(uri: string) {
+  const fileName = getFileNameFromUri(uri);
+
+  if (Platform.OS === 'web') {
+    let blob: Blob;
+
+    if (uri.startsWith('data:image/')) {
+      blob = dataUriToBlob(uri);
+    } else {
+      const response = await fetch(uri);
+      blob = await response.blob();
+    }
+
+    const fileType = blob.type || getMimeTypeFromUri(uri);
+    const compressedBlob = await compressWebImageBlob(blob, fileType);
+    const file = new File([compressedBlob], fileName, { type: fileType });
+    return file;
+  }
+
+  let normalizedUri = uri;
+  let normalizedMimeType = getMimeTypeFromUri(uri);
+  try {
+    const manipulated = await manipulateAsync(uri, [], {
+      compress: 0.75,
+      format: SaveFormat.JPEG,
+    });
+    if (manipulated.uri) {
+      normalizedUri = manipulated.uri;
+      normalizedMimeType = 'image/jpeg';
+    }
+  } catch {
+    // Keep original URI if conversion fails.
+  }
+
+  const normalizedFileName = getFileNameFromUri(normalizedUri).replace(/\.[^/.]+$/, '.jpg');
+
+  return {
+    uri: normalizedUri,
+    name: normalizedFileName,
+    type: normalizedMimeType,
+  } as unknown as Blob;
+}
+
+async function buildIncidentFormData(payload: CreateIncidentFromCleaningTaskPayload) {
+  const formData = new FormData();
+  formData.append('cleaning_task_id', payload.cleaning_task_id);
+  formData.append('description', payload.description);
+  formData.append('severity', payload.severity || 'MEDIUM');
+
+  const validUris = payload.local_uris.filter(Boolean);
+  for (let i = 0; i < validUris.length; i += 1) {
+    const uri = validUris[i];
+    const uploadFile = await toUploadFile(uri);
+    formData.append('photos', uploadFile);
+  }
+
+  return formData;
+}
+
 export async function getMyShiftAssignments(token: string, query: StaffShiftAssignmentQuery = {}) {
   try {
     const response = await apiClient.get<ApiEnvelope<StaffShiftAssignment[]>>(
@@ -233,6 +300,19 @@ export async function getMyShiftAssignments(token: string, query: StaffShiftAssi
     );
 
     return toArray<StaffShiftAssignment>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getStaffWorkRosters(token: string, query: StaffWorkRosterQuery = {}) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<StaffWorkRoster[]>>('/staff-work-rosters', {
+      headers: authHeader(token),
+      params: compactParams(query),
+    });
+
+    return toArray<StaffWorkRoster>(response.data?.data ?? response.data);
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }
@@ -454,6 +534,49 @@ export async function updateCleaningPhoto(
   }
 }
 
+export async function createIncidentFromCleaningTask(
+  token: string,
+  payload: CreateIncidentFromCleaningTaskPayload,
+) {
+  try {
+    const formData = await buildIncidentFormData(payload);
+    const baseUrl = apiClient.defaults.baseURL;
+    if (!baseUrl) {
+      throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
+    }
+
+    const uploadResponse = await fetch(`${baseUrl}/incidents/cleaning-task`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const responseBody = (await uploadResponse.json()) as ApiEnvelope<Incident>;
+    if (!uploadResponse.ok) {
+      const error = new Error(responseBody.message || 'Tạo báo cáo hư hại thất bại') as Error & {
+        statusCode?: number;
+        responseData?: { message?: string };
+      };
+      error.statusCode = uploadResponse.status;
+      error.responseData = {
+        message: responseBody.message,
+      };
+      throw error;
+    }
+
+    const item = extractData<Incident>(responseBody?.data ?? responseBody);
+    if (!item) {
+      throw new Error('Tạo báo cáo hư hại thất bại');
+    }
+
+    return item;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
 export async function getPodById(token: string, podId: string) {
   try {
     const response = await apiClient.get<ApiEnvelope<PodDetails>>(`/pods/${podId}`, {
@@ -480,6 +603,93 @@ export async function getBookingById(token: string, bookingId: string) {
     const item = extractData<BookingDetails>(response.data?.data ?? response.data);
     if (!item) {
       throw new Error('Không tìm thấy booking');
+    }
+
+    return item;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getIncidentsByCleaningTaskId(token: string, cleaningTaskId: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<Incident[]>>('/incidents', {
+      headers: authHeader(token),
+      params: compactParams({
+        cleaning_task_id: cleaningTaskId,
+      }),
+    });
+
+    return toArray<Incident>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getLostFoundItems(token: string, query: LostFoundQuery = {}) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<LostFoundItem[]>>('/lost-found-items', {
+      headers: authHeader(token),
+      params: compactParams(query),
+    });
+
+    return toArray<LostFoundItem>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getLostFoundItemById(token: string, itemId: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<LostFoundItem>>(`/lost-found-items/${itemId}`, {
+      headers: authHeader(token),
+    });
+
+    const item = extractData<LostFoundItem>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Không tìm thấy item thất lạc');
+    }
+
+    return item;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function createLostFoundItem(token: string, payload: CreateLostFoundItemPayload) {
+  try {
+    const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', payload, {
+      headers: authHeader(token),
+    });
+
+    const item = extractData<LostFoundItem>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Tạo item thất lạc thất bại');
+    }
+
+    return item;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function updateLostFoundStatus(
+  token: string,
+  itemId: string,
+  status: LostFoundStatus,
+) {
+  try {
+    const response = await apiClient.patch<ApiEnvelope<LostFoundItem>>(
+      `/lost-found-items/${itemId}/status`,
+      { status },
+      {
+        headers: authHeader(token),
+      },
+    );
+
+    const item = extractData<LostFoundItem>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Cập nhật trạng thái item thất lạc thất bại');
     }
 
     return item;

@@ -16,8 +16,12 @@ import {
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
     createCleaningPhoto,
+    createIncidentFromCleaningTask,
+    getBookingById,
     getCleaningPhotos,
     getCleaningTaskById,
+    getIncidentsByCleaningTaskId,
+    getPodById,
     updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import type {
@@ -25,6 +29,8 @@ import type {
     CleaningPhoto,
     CleaningPhotoType,
     CleaningTask,
+    Incident,
+    IncidentSeverity,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage, validateRejectionReason } from '@/utils/validation';
 
@@ -104,6 +110,31 @@ function progressStepState(status: string | undefined) {
   };
 }
 
+const INCIDENT_SEVERITY_OPTIONS: IncidentSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+function shouldHidePermissionMessage(message: string) {
+  return message.toLowerCase().includes('không có quyền');
+}
+
+function taskPodDisplayName(task: CleaningTask) {
+  const podRecord = task.pod as { name?: string; code?: string } | undefined;
+  return String(task.pod_name || podRecord?.name || task.pod_code || podRecord?.code || '').trim();
+}
+
+function taskBookingDisplayName(task: CleaningTask) {
+  const bookingRecord = task.booking as { order_id?: string; id?: string } | undefined;
+  return String(task.booking_order_id || bookingRecord?.order_id || bookingRecord?.id || '').trim();
+}
+
+function taskBookingWindow(task: CleaningTask) {
+  const bookingRecord = task.booking as { start_time?: string; end_time?: string } | undefined;
+
+  return {
+    start_time: String(task.booking_start_time || bookingRecord?.start_time || '').trim() || undefined,
+    end_time: String(task.booking_end_time || bookingRecord?.end_time || '').trim() || undefined,
+  };
+}
+
 export default function TaskDetailTab({
   token,
   taskId,
@@ -115,6 +146,9 @@ export default function TaskDetailTab({
 }: TaskDetailTabProps) {
   const [task, setTask] = useState<CleaningTask | null>(null);
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [podName, setPodName] = useState<string | null>(null);
+  const [bookingName, setBookingName] = useState<string | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
@@ -125,22 +159,34 @@ export default function TaskDetailTab({
   const [capturedPhotoUris, setCapturedPhotoUris] = useState<string[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [photoType, setPhotoType] = useState<CleaningPhotoType>('BEFORE');
+  const [captureMode, setCaptureMode] = useState<'CLEANING' | 'INCIDENT'>('CLEANING');
+  const [incidentDescription, setIncidentDescription] = useState('');
+  const [incidentSeverity, setIncidentSeverity] = useState<IncidentSeverity>('MEDIUM');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
   const taskStatus = String(task?.status || '').toUpperCase();
+  const isIncidentMode = captureMode === 'INCIDENT';
+  const canReportIncident = taskStatus === 'IN_PROGRESS';
   const canAccessPhotoFlow =
     taskStatus === 'ACCEPTED' ||
     taskStatus === 'ARRIVED' ||
     taskStatus === 'IN_PROGRESS' ||
     taskStatus === 'DONE';
-  const canCaptureNewPhotos = canAccessPhotoFlow && taskStatus !== 'DONE';
+  const canCaptureCleaningPhotos = canAccessPhotoFlow && taskStatus !== 'DONE' && !isIncidentMode;
+  const canCaptureIncidentPhotos = isIncidentMode && canReportIncident;
+  const canCaptureNewPhotos = canCaptureCleaningPhotos || canCaptureIncidentPhotos;
 
   const openCamera = async () => {
     if (!task || !canCaptureNewPhotos) {
-      Alert.alert('Chưa thể chụp ảnh', 'Bạn cần bấm "Bắt đầu dọn" trước khi chụp ảnh task.');
+      Alert.alert(
+        'Chưa thể chụp ảnh',
+        isIncidentMode
+          ? 'Chỉ có thể báo cáo hư hại khi task đang ở trạng thái IN_PROGRESS.'
+          : 'Bạn cần bấm "Bắt đầu dọn" trước khi chụp ảnh task.',
+      );
       return;
     }
 
@@ -178,7 +224,12 @@ export default function TaskDetailTab({
 
   const pickPhotoFromLibrary = async () => {
     if (!task || !canCaptureNewPhotos) {
-      Alert.alert('Chưa thể thêm ảnh', 'Bạn cần bấm "Bắt đầu dọn" trước khi thêm ảnh task.');
+      Alert.alert(
+        'Chưa thể thêm ảnh',
+        isIncidentMode
+          ? 'Chỉ có thể báo cáo hư hại khi task đang ở trạng thái IN_PROGRESS.'
+          : 'Bạn cần bấm "Bắt đầu dọn" trước khi thêm ảnh task.',
+      );
       return;
     }
 
@@ -221,6 +272,16 @@ export default function TaskDetailTab({
     }
   }, [canCaptureNewPhotos]);
 
+  useEffect(() => {
+    if (!canReportIncident && isIncidentMode) {
+      setCaptureMode('CLEANING');
+      setIncidentDescription('');
+      setIncidentSeverity('MEDIUM');
+      setCapturedPhotoUris([]);
+      setIsCameraOpen(false);
+    }
+  }, [canReportIncident, isIncidentMode]);
+
   const loadDetail = useCallback(async () => {
     if (!taskId || !token) return;
 
@@ -229,19 +290,49 @@ export default function TaskDetailTab({
     onErrorChange?.(null);
 
     try {
-      const [taskData, photosData] = await Promise.all([
+      const [taskData, photosData, incidentsData] = await Promise.all([
         getCleaningTaskById(token, taskId),
         getCleaningPhotos(token, taskId),
+        getIncidentsByCleaningTaskId(token, taskId),
       ]);
 
       setTask(taskData);
-
       setPhotos(photosData);
+      setIncidents(incidentsData);
+      setPodName(taskPodDisplayName(taskData) || null);
+      setBookingName(taskBookingDisplayName(taskData) || null);
+
+      const podId = String(taskData.pod_id || '').trim();
+      const bookingId = String(taskData.booking_id || '').trim();
+
+      if (podId) {
+        try {
+          const pod = await getPodById(token, podId);
+          setPodName(String(pod.name || pod.code || '').trim() || null);
+        } catch {
+          // Keep existing pod name resolved from task payload.
+        }
+      }
+
+      if (bookingId) {
+        try {
+          const booking = await getBookingById(token, bookingId);
+          setBookingName(String(booking.order_id || booking.id || '').trim() || null);
+        } catch {
+          // Keep existing booking name resolved from task payload.
+        }
+      }
+
       onErrorChange?.(null);
     } catch (err) {
       const msg = getErrorMessage(err);
-      setError(msg);
-      onErrorChange?.(msg);
+      if (shouldHidePermissionMessage(msg)) {
+        setError(null);
+        onErrorChange?.(null);
+      } else {
+        setError(msg);
+        onErrorChange?.(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -278,8 +369,13 @@ export default function TaskDetailTab({
       Alert.alert('Thành công', `${getActionLabel(action)} thành công`);
     } catch (err) {
       const msg = getErrorMessage(err);
-      setError(msg);
-      onErrorChange?.(msg);
+      if (shouldHidePermissionMessage(msg)) {
+        setError(null);
+        onErrorChange?.(null);
+      } else {
+        setError(msg);
+        onErrorChange?.(msg);
+      }
     } finally {
       setActionLoading(false);
     }
@@ -291,31 +387,60 @@ export default function TaskDetailTab({
       return;
     }
 
+    const normalizedIncidentDescription = incidentDescription.trim();
+    if (isIncidentMode && !normalizedIncidentDescription) {
+      Alert.alert('Thiếu thông tin', 'Vui lòng nhập mô tả hư hại trước khi gửi báo cáo.');
+      return;
+    }
+
     setUploadingPhoto(true);
     setError(null);
     onErrorChange?.(null);
 
     try {
-      await Promise.all(
-        capturedPhotoUris.map((uri) =>
-          createCleaningPhoto(token, {
-            cleaning_task_id: taskId,
-            local_uri: uri,
-            type: photoType,
-          }),
-        ),
-      );
+      if (isIncidentMode) {
+        await createIncidentFromCleaningTask(token, {
+          cleaning_task_id: taskId,
+          description: normalizedIncidentDescription,
+          severity: incidentSeverity,
+          local_uris: capturedPhotoUris,
+        });
 
-      setCapturedPhotoUris([]);
-      const updated = await getCleaningPhotos(token, taskId);
-      setPhotos(updated);
-      onErrorChange?.(null);
+        setCapturedPhotoUris([]);
+        setIncidentDescription('');
+        setIncidentSeverity('MEDIUM');
+        setCaptureMode('CLEANING');
+        setIsCameraOpen(false);
+        onErrorChange?.(null);
 
-      Alert.alert('Thành công', `Đã lưu ${capturedPhotoUris.length} ảnh cho task.`);
+        Alert.alert('Thành công', 'Đã gửi báo cáo hư hại cho task này.');
+      } else {
+        await Promise.all(
+          capturedPhotoUris.map((uri) =>
+            createCleaningPhoto(token, {
+              cleaning_task_id: taskId,
+              local_uri: uri,
+              type: photoType,
+            }),
+          ),
+        );
+
+        setCapturedPhotoUris([]);
+        const updated = await getCleaningPhotos(token, taskId);
+        setPhotos(updated);
+        onErrorChange?.(null);
+
+        Alert.alert('Thành công', `Đã lưu ${capturedPhotoUris.length} ảnh cho task.`);
+      }
     } catch (err) {
       const msg = getErrorMessage(err);
-      setError(msg);
-      onErrorChange?.(msg);
+      if (shouldHidePermissionMessage(msg)) {
+        setError(null);
+        onErrorChange?.(null);
+      } else {
+        setError(msg);
+        onErrorChange?.(msg);
+      }
     } finally {
       setUploadingPhoto(false);
     }
@@ -354,6 +479,7 @@ export default function TaskDetailTab({
   const canComplete = task.status === 'IN_PROGRESS';
   const canReject = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED'].includes(String(task.status || ''));
   const progress = progressStepState(task.status);
+  const bookingWindow = taskBookingWindow(task);
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
@@ -374,11 +500,10 @@ export default function TaskDetailTab({
         {/* Task Info */}
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
           <Text style={[styles.sectionTitle, { color: palette.text }]}>Thông tin task</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>ID: {String(task.id || '-')}</Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>Trạng thái: {task.status}</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>Pod: {String(task.pod_id || '-')}</Text>
+          <Text style={[styles.info, { color: palette.textMuted }]}>Pod: {podName || '-'}</Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking: {String(task.booking_id || '-')}
+            Booking: {bookingName || '-'}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
             Source: {String(task.request_source || '-')}
@@ -387,12 +512,66 @@ export default function TaskDetailTab({
             Due: {formatDateTime(task.due_at || undefined)}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Started: {formatDateTime(task.start_time || undefined)}
+            Booking Start: {formatDateTime(bookingWindow.start_time)}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Completed: {formatDateTime(task.end_time || undefined)}
+            Booking End: {formatDateTime(bookingWindow.end_time)}
+          </Text>
+          <Text style={[styles.info, { color: palette.textMuted }]}>
+            Started (thuc te): {formatDateTime(task.start_time || undefined)}
+          </Text>
+          <Text style={[styles.info, { color: palette.textMuted }]}>
+            Completed (thuc te): {formatDateTime(task.end_time || undefined)}
           </Text>
         </View>
+
+        {/* Incidents Section */}
+        {incidents.length > 0 && (
+          <View style={[styles.section, { backgroundColor: `${palette.error}12`, borderColor: palette.error }]}>
+            <Text style={[styles.sectionTitle, { color: palette.error }]}>Báo cáo hư hại ({incidents.length})</Text>
+            {incidents.map((incident) => {
+              const severityColor = {
+                LOW: palette.success,
+                MEDIUM: '#f59e0b',
+                HIGH: palette.error,
+                CRITICAL: palette.error,
+              }[String(incident.severity || 'MEDIUM')] || palette.textMuted;
+
+              return (
+                <View
+                  key={String(incident.id || Math.random())}
+                  style={[styles.incidentItem, { borderColor: severityColor }]}>
+                  <View style={styles.incidentHeader}>
+                    <Text style={[styles.incidentSeverity, { color: severityColor }]}>
+                      {String(incident.severity || 'MEDIUM')}
+                    </Text>
+                    <Text style={[styles.incidentStatus, { color: palette.textMuted }]}>
+                      {String(incident.status || 'PENDING')}
+                    </Text>
+                  </View>
+                  <Text style={[styles.incidentDescription, { color: palette.text }]}>
+                    {String(incident.description || '-')}
+                  </Text>
+                  {incident.photo_urls && incident.photo_urls.length > 0 && (
+                    <ScrollView horizontal style={styles.incidentPhotosScroll}>
+                      {incident.photo_urls.map((photoUrl, idx) => (
+                        <Image
+                          key={`${incident.id}_${idx}`}
+                          source={{ uri: String(photoUrl) }}
+                          style={styles.incidentPhotoThumb}
+                          resizeMode="cover"
+                        />
+                      ))}
+                    </ScrollView>
+                  )}
+                  <Text style={[styles.incidentTime, { color: palette.textMuted }]}>
+                    {formatDateTime(String(incident.created_at || ''))}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         {/* Actions */}
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
@@ -475,6 +654,35 @@ export default function TaskDetailTab({
                 </Text>
               </Pressable>
             )}
+
+            {canReportIncident && !isIncidentMode && (
+              <Pressable
+                style={[styles.actionButton, { backgroundColor: palette.error }]}
+                disabled={actionLoading || uploadingPhoto}
+                onPress={() => {
+                  setCaptureMode('INCIDENT');
+                  setPhotoType('BEFORE');
+                  setCapturedPhotoUris([]);
+                  setIsCameraOpen(false);
+                }}>
+                <Text style={[styles.actionButtonText, { color: palette.white }]}>Báo cáo hư hại</Text>
+              </Pressable>
+            )}
+
+            {canReportIncident && isIncidentMode && (
+              <Pressable
+                style={[styles.actionButton, { backgroundColor: palette.neutral400 }]}
+                disabled={actionLoading || uploadingPhoto}
+                onPress={() => {
+                  setCaptureMode('CLEANING');
+                  setIncidentDescription('');
+                  setIncidentSeverity('MEDIUM');
+                  setCapturedPhotoUris([]);
+                  setIsCameraOpen(false);
+                }}>
+                <Text style={[styles.actionButtonText, { color: palette.white }]}>Hủy báo cáo</Text>
+              </Pressable>
+            )}
           </View>
 
           {canReject && (
@@ -498,6 +706,15 @@ export default function TaskDetailTab({
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
               Ảnh BEFORE/AFTER ({photos.length})
             </Text>
+
+            {isIncidentMode && (
+              <View style={[styles.incidentModeBox, { backgroundColor: `${palette.error}14`, borderColor: palette.error }]}>
+                <Text style={[styles.incidentModeTitle, { color: palette.error }]}>Chế độ báo cáo hư hại</Text>
+                <Text style={[styles.incidentModeText, { color: palette.textMuted }]}>
+                  Ảnh mới sẽ được gửi vào Incident, không lưu vào bộ ảnh cleaning BEFORE/AFTER.
+                </Text>
+              </View>
+            )}
 
             {photos.length === 0 ? (
               <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh</Text>
@@ -523,51 +740,102 @@ export default function TaskDetailTab({
               <>
                 <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp ảnh mới</Text>
 
-                <View style={styles.photoTypeSelector}>
-                  <Pressable
-                    style={[
-                      styles.typeButton,
-                      photoType === 'BEFORE'
-                        ? { backgroundColor: palette.primary }
-                        : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
-                    ]}
-                    onPress={() => {
-                      setPhotoType('BEFORE');
-                      if (!isCameraOpen) {
-                        void openCamera();
-                      }
-                    }}>
-                    <Text
+                {isIncidentMode ? (
+                  <>
+                    <TextInput
                       style={[
-                        styles.typeButtonText,
-                        { color: photoType === 'BEFORE' ? palette.white : palette.text },
-                      ]}>
-                      BEFORE
-                    </Text>
-                  </Pressable>
+                        styles.input,
+                        {
+                          borderColor: palette.border,
+                          color: palette.text,
+                          backgroundColor: palette.surface,
+                          minHeight: 86,
+                          textAlignVertical: 'top',
+                        },
+                      ]}
+                      value={incidentDescription}
+                      onChangeText={setIncidentDescription}
+                      placeholder="Mô tả hư hại (bắt buộc)"
+                      placeholderTextColor={palette.neutral500}
+                      multiline
+                    />
 
-                  <Pressable
-                    style={[
-                      styles.typeButton,
-                      photoType === 'AFTER'
-                        ? { backgroundColor: palette.primary }
-                        : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
-                    ]}
-                    onPress={() => {
-                      setPhotoType('AFTER');
-                      if (!isCameraOpen) {
-                        void openCamera();
-                      }
-                    }}>
-                    <Text
+                    <View style={styles.photoTypeSelector}>
+                      {INCIDENT_SEVERITY_OPTIONS.map((severity) => {
+                        const selected = incidentSeverity === severity;
+                        return (
+                          <Pressable
+                            key={severity}
+                            style={[
+                              styles.typeButton,
+                              selected
+                                ? { backgroundColor: palette.error }
+                                : {
+                                    backgroundColor: palette.surface,
+                                    borderColor: palette.border,
+                                    borderWidth: 1,
+                                  },
+                            ]}
+                            onPress={() => setIncidentSeverity(severity)}>
+                            <Text
+                              style={[
+                                styles.typeButtonText,
+                                { color: selected ? palette.white : palette.text },
+                              ]}>
+                              {severity}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : (
+                  <View style={styles.photoTypeSelector}>
+                    <Pressable
                       style={[
-                        styles.typeButtonText,
-                        { color: photoType === 'AFTER' ? palette.white : palette.text },
-                      ]}>
-                      AFTER
-                    </Text>
-                  </Pressable>
-                </View>
+                        styles.typeButton,
+                        photoType === 'BEFORE'
+                          ? { backgroundColor: palette.primary }
+                          : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
+                      ]}
+                      onPress={() => {
+                        setPhotoType('BEFORE');
+                        if (!isCameraOpen) {
+                          void openCamera();
+                        }
+                      }}>
+                      <Text
+                        style={[
+                          styles.typeButtonText,
+                          { color: photoType === 'BEFORE' ? palette.white : palette.text },
+                        ]}>
+                        BEFORE
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={[
+                        styles.typeButton,
+                        photoType === 'AFTER'
+                          ? { backgroundColor: palette.primary }
+                          : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
+                      ]}
+                      onPress={() => {
+                        setPhotoType('AFTER');
+                        if (!isCameraOpen) {
+                          void openCamera();
+                        }
+                      }}>
+                      <Text
+                        style={[
+                          styles.typeButtonText,
+                          { color: photoType === 'AFTER' ? palette.white : palette.text },
+                        ]}>
+                        AFTER
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
 
                 <View style={styles.sourceActionRow}>
                   <Pressable
@@ -628,19 +896,26 @@ export default function TaskDetailTab({
                 )}
 
                 <Pressable
-                  style={[styles.uploadButton, { backgroundColor: palette.success }]}
+                  style={[
+                    styles.uploadButton,
+                    { backgroundColor: isIncidentMode ? palette.error : palette.success },
+                  ]}
                   disabled={uploadingPhoto || capturedPhotoUris.length === 0}
                   onPress={() => void handleUploadPhoto()}>
                   {uploadingPhoto ? (
                     <ActivityIndicator color={palette.white} />
                   ) : (
-                    <Text style={[styles.uploadButtonText, { color: palette.white }]}>Lưu tất cả ảnh vào task</Text>
+                    <Text style={[styles.uploadButtonText, { color: palette.white }]}>
+                      {isIncidentMode ? 'Gửi báo cáo hư hại' : 'Lưu tất cả ảnh vào task'}
+                    </Text>
                   )}
                 </Pressable>
               </>
             ) : (
               <Text style={[styles.emptyText, { color: palette.textMuted }]}>
-                Task đã hoàn tất, không thể chụp hoặc thêm ảnh mới.
+                {isIncidentMode
+                  ? 'Chế độ báo cáo hư hại chỉ khả dụng khi task ở trạng thái IN_PROGRESS.'
+                  : 'Task đã hoàn tất, không thể chụp hoặc thêm ảnh mới.'}
               </Text>
             )}
           </View>
@@ -718,6 +993,22 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  incidentModeBox: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._10,
+    gap: spacingY._5,
+  },
+  incidentModeTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  incidentModeText: {
+    fontSize: 12,
     fontFamily: Fonts.sans,
   },
   subsectionTitle: {
@@ -894,4 +1185,44 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
+  incidentItem: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    padding: spacingX._10,
+    gap: spacingY._7,
+    marginBottom: spacingY._7,
+  },
+  incidentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  incidentSeverity: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.mono,
+  },
+  incidentStatus: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+  },
+  incidentDescription: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+    lineHeight: 18,
+  },
+  incidentPhotosScroll: {
+    gap: spacingX._7,
+  },
+  incidentPhotoThumb: {
+    width: 80,
+    height: 80,
+    borderRadius: radius._10,
+    marginRight: spacingX._7,
+  },
+  incidentTime: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+  },
 });
+

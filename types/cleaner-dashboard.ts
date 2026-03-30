@@ -21,10 +21,14 @@ export type CleaningRequestSource = (typeof CLEANING_REQUEST_SOURCES)[number];
 
 export type ShiftAssignmentStatus = 'ASSIGNED' | 'CHECKED_IN' | 'COMPLETED' | 'ABSENT';
 export type CleaningPhotoType = 'BEFORE' | 'AFTER';
+export type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type IncidentStatus = 'PENDING' | 'INVESTIGATING' | 'RESOLVED' | 'CLOSED';
+export type LostFoundStatus = 'FOUND' | 'STORED' | 'CLAIMED' | 'DISPOSED';
 
 export interface ShiftInfo {
   id?: string;
   name?: string;
+  shift_name?: string;
   role?: string;
   start_time?: string;
   end_time?: string;
@@ -45,6 +49,8 @@ export interface StaffShiftAssignment {
   assignment_id?: string;
   shift_assignment_id?: string;
   work_date?: string;
+  start_date?: string;
+  end_date?: string;
   status?: ShiftAssignmentStatus | string;
   checkin_at?: string | null;
   checkout_at?: string | null;
@@ -59,6 +65,24 @@ export interface StaffShiftAssignmentQuery {
   from_date?: string;
   to_date?: string;
   status?: string;
+}
+
+export interface StaffWorkRoster {
+  id?: string;
+  _id?: string;
+  staff_id: string;
+  location_shift_id: string;
+  day_of_week: number;
+  is_active?: boolean;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+export interface StaffWorkRosterQuery {
+  staff_id?: string;
+  location_shift_id?: string;
+  day_of_week?: number;
+  is_active?: boolean | string;
 }
 
 export interface CleaningTask {
@@ -137,6 +161,70 @@ export interface UpdateCleaningPhotoPayload {
   cleaning_task_id?: string;
   photo_url?: string;
   type?: CleaningPhotoType;
+}
+
+export interface Incident {
+  id?: string;
+  pod_id?: string;
+  booking_id?: string | null;
+  cleaning_task_id?: string | null;
+  shift_assignment_id?: string | null;
+  reported_by?: string;
+  description: string;
+  severity?: IncidentSeverity | string;
+  status?: IncidentStatus | string;
+  has_lost_found?: boolean;
+  photo_urls?: string[];
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface CreateIncidentFromCleaningTaskPayload {
+  cleaning_task_id: string;
+  description: string;
+  severity?: IncidentSeverity;
+  local_uris: string[];
+}
+
+export interface LostFoundItem {
+  id?: string;
+  cleaning_task_id?: string | null;
+  pod_id?: string;
+  booking_id?: string | null;
+  found_by_user_id?: string;
+  item_name: string;
+  description?: string | null;
+  found_at?: string;
+  status?: LostFoundStatus | string;
+  claimed_by_user_id?: string | null;
+  claimed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface LostFoundQuery {
+  cleaning_task_id?: string;
+  pod_id?: string;
+  booking_id?: string;
+  found_by_user_id?: string;
+  status?: LostFoundStatus | string;
+  page?: number;
+  limit?: number;
+}
+
+export interface CreateLostFoundItemPayload {
+  cleaning_task_id?: string | null;
+  pod_id?: string | null;
+  booking_id?: string | null;
+  item_name: string;
+  description?: string;
+  found_at?: string;
+}
+
+export interface UpdateLostFoundStatusPayload {
+  status: LostFoundStatus;
 }
 
 export interface PodDetails {

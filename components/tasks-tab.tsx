@@ -10,9 +10,14 @@ import {
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
-import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
+import { getBookingById, getMyCleaningTasks, getPodById } from '@/services/cleaner-dashboard.service';
 import type { CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import { getErrorMessage, validateDateRange } from '@/utils/validation';
+
+type BookingTimeWindow = {
+  start_time?: string;
+  end_time?: string;
+};
 
 interface TasksTabProps {
   token: string;
@@ -51,6 +56,43 @@ function taskId(task: CleaningTask) {
   return String(task.id || task._id || '');
 }
 
+function shouldHidePermissionMessage(message: string) {
+  return message.toLowerCase().includes('không có quyền');
+}
+
+function taskPodDisplayName(task: CleaningTask) {
+  const podRecord = task.pod as { name?: string; code?: string } | undefined;
+  return String(task.pod_name || podRecord?.name || task.pod_code || podRecord?.code || '').trim();
+}
+
+function taskBookingDisplayName(task: CleaningTask) {
+  const bookingRecord = task.booking as { order_id?: string; id?: string } | undefined;
+  return String(task.booking_order_id || bookingRecord?.order_id || bookingRecord?.id || '').trim();
+}
+
+function taskBookingWindow(task: CleaningTask, bookingTimeMap: Record<string, BookingTimeWindow>) {
+  const bookingRecord = task.booking as { start_time?: string; end_time?: string } | undefined;
+  const bookingId = String(task.booking_id || '').trim();
+  const bookingWindow = bookingTimeMap[bookingId];
+
+  return {
+    start_time:
+      String(
+        task.booking_start_time ||
+          bookingRecord?.start_time ||
+          bookingWindow?.start_time ||
+          '',
+      ).trim() || undefined,
+    end_time:
+      String(
+        task.booking_end_time ||
+          bookingRecord?.end_time ||
+          bookingWindow?.end_time ||
+          '',
+      ).trim() || undefined,
+  };
+}
+
 export default function TasksTab({
   token,
   isDark,
@@ -60,6 +102,9 @@ export default function TasksTab({
   onErrorChange,
 }: TasksTabProps) {
   const [tasks, setTasks] = useState<CleaningTask[]>([]);
+  const [podNameMap, setPodNameMap] = useState<Record<string, string>>({});
+  const [bookingNameMap, setBookingNameMap] = useState<Record<string, string>>({});
+  const [bookingTimeMap, setBookingTimeMap] = useState<Record<string, BookingTimeWindow>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,11 +127,16 @@ export default function TasksTab({
 
     return tasks.filter(
       (task) =>
-        taskId(task).toLowerCase().includes(search) ||
+        String(podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || '')
+          .toLowerCase()
+          .includes(search) ||
+        String(bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '')
+          .toLowerCase()
+          .includes(search) ||
         String(task.pod_id || '').toLowerCase().includes(search) ||
         String(task.booking_id || '').toLowerCase().includes(search),
     );
-  }, [tasks, searchQuery]);
+  }, [tasks, searchQuery, podNameMap, bookingNameMap]);
 
   const loadTasks = useCallback(async () => {
     const dateValidation = validateDateRange(dueFromFilter.trim(), dueToFilter.trim());
@@ -116,8 +166,13 @@ export default function TasksTab({
       onErrorChange?.(null);
     } catch (err) {
       const msg = getErrorMessage(err);
-      setError(msg);
-      onErrorChange?.(msg);
+      if (shouldHidePermissionMessage(msg)) {
+        setError(null);
+        onErrorChange?.(null);
+      } else {
+        setError(msg);
+        onErrorChange?.(msg);
+      }
     } finally {
       setLoading(false);
       onLoadingChange?.(false);
@@ -138,6 +193,127 @@ export default function TasksTab({
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadNames = async () => {
+      const podIds = [...new Set(tasks.map((task) => String(task.pod_id || '').trim()).filter(Boolean))];
+      const bookingIds = [
+        ...new Set(tasks.map((task) => String(task.booking_id || '').trim()).filter(Boolean)),
+      ];
+
+      const initialPodMap = Object.fromEntries(
+        tasks
+          .map((task) => [String(task.pod_id || '').trim(), taskPodDisplayName(task)] as const)
+          .filter(([id, label]) => Boolean(id && label)),
+      );
+      const initialBookingMap = Object.fromEntries(
+        tasks
+          .map((task) => [String(task.booking_id || '').trim(), taskBookingDisplayName(task)] as const)
+          .filter(([id, label]) => Boolean(id && label)),
+      );
+      const initialBookingTimeMap = Object.fromEntries(
+        tasks
+          .map((task) => {
+            const booking = task.booking as { start_time?: string; end_time?: string } | undefined;
+            const bookingId = String(task.booking_id || '').trim();
+
+            if (!bookingId) {
+              return null;
+            }
+
+            const start = String(task.booking_start_time || booking?.start_time || '').trim();
+            const end = String(task.booking_end_time || booking?.end_time || '').trim();
+
+            if (!start && !end) {
+              return null;
+            }
+
+            return [bookingId, { start_time: start || undefined, end_time: end || undefined }] as const;
+          })
+          .filter(Boolean) as Array<readonly [string, BookingTimeWindow]>,
+      );
+
+      if (isMounted) {
+        setPodNameMap(initialPodMap);
+        setBookingNameMap(initialBookingMap);
+        setBookingTimeMap(initialBookingTimeMap);
+      }
+
+      if (podIds.length === 0 && bookingIds.length === 0) {
+        if (isMounted) {
+          setPodNameMap(initialPodMap);
+          setBookingNameMap(initialBookingMap);
+          setBookingTimeMap(initialBookingTimeMap);
+        }
+        return;
+      }
+
+      try {
+        const [pods, bookings] = await Promise.all([
+          Promise.all(
+            podIds.map(async (podId) => {
+              try {
+                const pod = await getPodById(token, podId);
+                return [podId, String(pod.name || pod.code || '').trim()] as const;
+              } catch {
+                return [podId, ''] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            bookingIds.map(async (bookingId) => {
+              try {
+                const booking = await getBookingById(token, bookingId);
+                return [
+                  bookingId,
+                  {
+                    label: String(booking.order_id || booking.id || '').trim(),
+                    start_time: String(booking.start_time || '').trim(),
+                    end_time: String(booking.end_time || '').trim(),
+                  },
+                ] as const;
+              } catch {
+                return [bookingId, { label: '', start_time: '', end_time: '' }] as const;
+              }
+            }),
+          ),
+        ]);
+
+        if (!isMounted) return;
+
+        setPodNameMap({ ...initialPodMap, ...Object.fromEntries(pods) });
+        setBookingNameMap({
+          ...initialBookingMap,
+          ...Object.fromEntries(bookings.map(([id, booking]) => [id, booking.label])),
+        });
+        setBookingTimeMap({
+          ...initialBookingTimeMap,
+          ...Object.fromEntries(
+            bookings.map(([id, booking]) => [
+              id,
+              {
+                start_time: booking.start_time || undefined,
+                end_time: booking.end_time || undefined,
+              },
+            ]),
+          ),
+        });
+      } catch {
+        if (!isMounted) return;
+        setPodNameMap(initialPodMap);
+        setBookingNameMap(initialBookingMap);
+        setBookingTimeMap(initialBookingTimeMap);
+      }
+    };
+
+    void loadNames();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [tasks, token]);
 
   const resetFilters = () => {
     setStatusFilter('');
@@ -163,7 +339,7 @@ export default function TasksTab({
           ]}
           value={searchQuery}
           onChangeText={setSearchQuery}
-          placeholder="Tìm kiếm task ID, pod, booking..."
+          placeholder="Tìm kiếm task theo tên pod/booking..."
           placeholderTextColor={palette.neutral500}
           autoCapitalize="none"
         />
@@ -288,6 +464,7 @@ export default function TasksTab({
           filteredTasks.map((task) => {
             const status = String(task.status || 'UNKNOWN');
             const key = taskId(task);
+            const bookingWindow = taskBookingWindow(task, bookingTimeMap);
 
             return (
               <Pressable
@@ -298,15 +475,16 @@ export default function TasksTab({
                   { backgroundColor: palette.surface, borderColor: palette.border },
                 ]}>
                 <View style={styles.cardHeader}>
-                  <Text style={[styles.cardTitle, { color: palette.text }]}>Task #{key || '-'}</Text>
+                  <Text style={[styles.cardTitle, { color: palette.text }]}>Task dọn dẹp</Text>
                   <Text style={[styles.status, { color: statusColor(status, isDark) }]}>{status}</Text>
                 </View>
 
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Pod: {String(task.pod_id || '-')}
+                  Pod: {podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || '-'}
                 </Text>
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Booking: {String(task.booking_id || '-')}
+                  Booking:{' '}
+                  {bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '-'}
                 </Text>
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
                   Source: {String(task.request_source || '-')}
@@ -315,10 +493,16 @@ export default function TasksTab({
                   Due: {formatDateTime(task.due_at || undefined)}
                 </Text>
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Start: {formatDateTime(task.start_time || undefined)}
+                  Booking Start: {formatDateTime(bookingWindow.start_time)}
                 </Text>
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  End: {formatDateTime(task.end_time || undefined)}
+                  Booking End: {formatDateTime(bookingWindow.end_time)}
+                </Text>
+                <Text style={[styles.meta, { color: palette.textMuted }]}>
+                  Start (thuc te): {formatDateTime(task.start_time || undefined)}
+                </Text>
+                <Text style={[styles.meta, { color: palette.textMuted }]}>
+                  End (thuc te): {formatDateTime(task.end_time || undefined)}
                 </Text>
 
                 <View style={styles.footer}>

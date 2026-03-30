@@ -1,13 +1,14 @@
 import { useCallback, useState } from 'react';
 import {
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View
 } from 'react-native';
 
+import LostFoundTab from '@/components/lost-found-tab';
 import ShiftsTab from '@/components/shifts-tab';
 import TaskDetailTab from '@/components/task-detail-tab';
 import TasksTab from '@/components/tasks-tab';
@@ -25,7 +26,7 @@ export default function HomeScreen() {
 
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTab, setSelectedTab] = useState<'shifts' | 'tasks' | 'detail'>('shifts');
+  const [selectedTab, setSelectedTab] = useState<'shifts' | 'tasks' | 'detail' | 'lostfound'>('shifts');
   const [selectedTask, setSelectedTask] = useState<CleaningTask | null>(null);
 
   const handleRefresh = useCallback(async () => {
@@ -130,6 +131,25 @@ export default function HomeScreen() {
         <Pressable
           style={[
             styles.tabButton,
+            selectedTab === 'lostfound' && {
+              backgroundColor: palette.primary,
+              borderColor: palette.primary,
+            },
+            selectedTab !== 'lostfound' && { backgroundColor: palette.surface, borderColor: palette.border },
+          ]}
+          onPress={() => setSelectedTab('lostfound')}>
+          <Text
+            style={[
+              styles.tabButtonText,
+              { color: selectedTab === 'lostfound' ? palette.white : palette.text },
+            ]}>
+            Lost&Found
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[
+            styles.tabButton,
             selectedTab === 'detail' && { backgroundColor: palette.primary, borderColor: palette.primary },
             selectedTab !== 'detail' &&
               (!selectedTask ? { opacity: 0.5 } : {}),
@@ -162,6 +182,7 @@ export default function HomeScreen() {
       {selectedTab === 'shifts' && (
         <ShiftsTab
           token={token}
+          userId={user?.id || null}
           isDark={theme === 'dark'}
           palette={palette}
           onErrorChange={setError}
@@ -186,6 +207,15 @@ export default function HomeScreen() {
           palette={palette}
           onClose={handleCloseDetail}
           onTaskUpdated={handleTaskUpdated}
+          onErrorChange={setError}
+        />
+      )}
+
+      {selectedTab === 'lostfound' && (
+        <LostFoundTab
+          token={token}
+          isDark={theme === 'dark'}
+          palette={palette}
           onErrorChange={setError}
         />
       )}
