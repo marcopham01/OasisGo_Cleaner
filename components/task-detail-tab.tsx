@@ -1,38 +1,38 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningPhoto,
-    createIncidentFromCleaningTask,
-    getBookingById,
-    getCleaningPhotos,
-    getCleaningTaskById,
-    getIncidentsByCleaningTaskId,
-    getPodById,
-    updateCleaningTask,
+  createCleaningPhoto,
+  createIncidentFromCleaningTask,
+  getCleaningPhotos,
+  getCleaningTaskById,
+  getIncidentsByCleaningTaskId,
+  getPodById,
+  updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import type {
-    CleanerTaskAction,
-    CleaningPhoto,
-    CleaningPhotoType,
-    CleaningTask,
-    Incident,
-    IncidentSeverity,
+  CleanerTaskAction,
+  CleaningPhoto,
+  CleaningPhotoType,
+  CleaningTask,
+  Incident,
+  IncidentSeverity,
 } from '@/types/cleaner-dashboard';
-import { getErrorMessage, validateRejectionReason } from '@/utils/validation';
+import { getErrorMessage } from '@/utils/validation';
 
 interface TaskDetailTabProps {
   token: string;
@@ -88,28 +88,6 @@ function getActionLabel(action: CleanerTaskAction): string {
   return labels[action];
 }
 
-function getActionColor(action: CleanerTaskAction, palette: typeof Colors.light): string {
-  const colors: Record<CleanerTaskAction, string> = {
-    accept: palette.secondary,
-    start: '#f59e0b',
-    complete: palette.success,
-    reject: palette.error,
-  };
-  return colors[action];
-}
-
-function progressStepState(status: string | undefined) {
-  const normalized = String(status || '').toUpperCase();
-  const order = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'DONE'];
-  const rank = order.indexOf(normalized);
-
-  return {
-    accepted: rank >= 2,
-    started: rank >= 4,
-    completed: rank >= 5,
-  };
-}
-
 const INCIDENT_SEVERITY_OPTIONS: IncidentSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 function shouldHidePermissionMessage(message: string) {
@@ -121,9 +99,25 @@ function taskPodDisplayName(task: CleaningTask) {
   return String(task.pod_name || podRecord?.name || task.pod_code || podRecord?.code || '').trim();
 }
 
-function taskBookingDisplayName(task: CleaningTask) {
-  const bookingRecord = task.booking as { order_id?: string; id?: string } | undefined;
-  return String(task.booking_order_id || bookingRecord?.order_id || bookingRecord?.id || '').trim();
+function taskClusterDisplayName(task: CleaningTask) {
+  const clusterRecord = task.cluster as { name?: string; code?: string } | undefined;
+  const podRecord = task.pod as {
+    pod_cluster_name?: string;
+    cluster_name?: string;
+    cluster?: { name?: string; code?: string };
+  } | undefined;
+
+  return String(
+    task.pod_cluster_name ||
+      task.cluster_name ||
+      clusterRecord?.name ||
+      clusterRecord?.code ||
+      podRecord?.pod_cluster_name ||
+      podRecord?.cluster_name ||
+      podRecord?.cluster?.name ||
+      podRecord?.cluster?.code ||
+      '',
+  ).trim();
 }
 
 function taskBookingWindow(task: CleaningTask) {
@@ -148,7 +142,7 @@ export default function TaskDetailTab({
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [podName, setPodName] = useState<string | null>(null);
-  const [bookingName, setBookingName] = useState<string | null>(null);
+  const [clusterName, setClusterName] = useState<string | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
@@ -164,7 +158,6 @@ export default function TaskDetailTab({
   const [incidentSeverity, setIncidentSeverity] = useState<IncidentSeverity>('MEDIUM');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
   const taskStatus = String(task?.status || '').toUpperCase();
@@ -300,10 +293,9 @@ export default function TaskDetailTab({
       setPhotos(photosData);
       setIncidents(incidentsData);
       setPodName(taskPodDisplayName(taskData) || null);
-      setBookingName(taskBookingDisplayName(taskData) || null);
+      setClusterName(taskClusterDisplayName(taskData) || null);
 
       const podId = String(taskData.pod_id || '').trim();
-      const bookingId = String(taskData.booking_id || '').trim();
 
       if (podId) {
         try {
@@ -311,15 +303,6 @@ export default function TaskDetailTab({
           setPodName(String(pod.name || pod.code || '').trim() || null);
         } catch {
           // Keep existing pod name resolved from task payload.
-        }
-      }
-
-      if (bookingId) {
-        try {
-          const booking = await getBookingById(token, bookingId);
-          setBookingName(String(booking.order_id || booking.id || '').trim() || null);
-        } catch {
-          // Keep existing booking name resolved from task payload.
         }
       }
 
@@ -345,24 +328,15 @@ export default function TaskDetailTab({
   const handleAction = async (action: CleanerTaskAction) => {
     if (!task || !taskId) return;
 
-    if (action === 'reject') {
-      const validation = validateRejectionReason(rejectionReason);
-      if (!validation.valid) {
-        Alert.alert('Lỗi', validation.error || 'Lý do từ chối không hợp lệ');
-        return;
-      }
-    }
-
     setActionLoading(true);
     setError(null);
     onErrorChange?.(null);
 
     try {
-      const payload = taskActionPayload(action, rejectionReason);
+      const payload = taskActionPayload(action, '');
       const updated = await updateCleaningTask(token, taskId, payload);
 
       setTask(updated);
-      setRejectionReason('');
       onTaskUpdated?.(updated);
       onErrorChange?.(null);
 
@@ -476,19 +450,47 @@ export default function TaskDetailTab({
 
   const canAccept = task.status === 'ASSIGNED' || task.status === 'NOTIFIED';
   const canStart = task.status === 'ACCEPTED' || task.status === 'ARRIVED';
-  const canComplete = task.status === 'IN_PROGRESS';
-  const canReject = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED'].includes(String(task.status || ''));
-  const progress = progressStepState(task.status);
   const bookingWindow = taskBookingWindow(task);
+  const displayPodName = podName || taskPodDisplayName(task) || 'Pod tieu chuan - A03U';
+  const displayClusterName = clusterName || taskClusterDisplayName(task) || 'Cum Pod A - Khu vuc Ga Quoc noi T1';
+
+  const handleStartCleaning = async () => {
+    if (canAccept) {
+      await handleAction('accept');
+      return;
+    }
+
+    if (canStart) {
+      await handleAction('start');
+      return;
+    }
+  };
+
+  const actionButtonLabel = canAccept
+    ? 'START CLEANING'
+    : canStart
+      ? 'START CLEANING'
+      : taskStatus === 'IN_PROGRESS'
+        ? 'CLEANING IN PROGRESS'
+        : 'CLEANING COMPLETED';
+
+  const actionHintText = canAccept
+    ? 'Nhan viec de bat dau quy trinh don dep.'
+    : canStart
+      ? 'San sang bat dau don dep cho task nay.'
+      : taskStatus === 'IN_PROGRESS'
+        ? 'Task dang duoc thuc hien. Ban co the cap nhat anh tai day.'
+        : 'Task da hoan tat hoac khong kha dung de bat dau.';
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={[styles.title, { color: palette.text }]}>Chi tiết Task</Text>
-          <Pressable onPress={onClose} style={styles.closeButton}>
-            <Text style={[styles.closeButtonText, { color: palette.text }]}>✕</Text>
+          <Pressable onPress={onClose} style={styles.backButton}>
+            <MaterialIcons name="arrow-back" size={24} color={palette.text} />
           </Pressable>
+          <Text style={[styles.title, { color: palette.text }]}>Chi tiết Task</Text>
+          <View style={styles.headerSpacer} />
         </View>
 
         {error && (
@@ -500,29 +502,61 @@ export default function TaskDetailTab({
         {/* Task Info */}
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
           <Text style={[styles.sectionTitle, { color: palette.text }]}>Thông tin task</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>Trạng thái: {task.status}</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>Pod: {podName || '-'}</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking: {bookingName || '-'}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Source: {String(task.request_source || '-')}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Due: {formatDateTime(task.due_at || undefined)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking Start: {formatDateTime(bookingWindow.start_time)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking End: {formatDateTime(bookingWindow.end_time)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Started (thuc te): {formatDateTime(task.start_time || undefined)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Completed (thuc te): {formatDateTime(task.end_time || undefined)}
-          </Text>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="meeting-room" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Tên pod:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>{displayPodName}</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="apartment" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Khu vực:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>{displayClusterName}</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="local-offer" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Trạng thái:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>{task.status || 'ASSIGNED'}</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="event" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Ngày làm việc:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>
+              {formatDateTime(task.due_at || bookingWindow.end_time || '2026-04-01T23:30:00.000Z')}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="schedule" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Bắt đầu dự kiến:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>
+              {formatDateTime(bookingWindow.start_time || '2026-04-01T22:30:00.000Z')}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="schedule" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Kết thúc dự kiến:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>
+              {formatDateTime(bookingWindow.end_time || task.due_at || '2026-04-01T23:30:00.000Z')}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="play-circle-outline" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Bắt đầu thực tế:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>
+              {formatDateTime(task.start_time || '2026-04-01T22:35:00.000Z')}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="check-circle-outline" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Kết thúc thực tế:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>
+              {formatDateTime(task.end_time || '2026-04-01T23:10:00.000Z')}
+            </Text>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="label-outline" size={17} color={palette.neutral500} />
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Nguồn yêu cầu:</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>{String(task.request_source || 'AUTO_AFTER_CHECKOUT')}</Text>
+          </View>
         </View>
 
         {/* Incidents Section */}
@@ -573,131 +607,31 @@ export default function TaskDetailTab({
           </View>
         )}
 
-        {/* Actions */}
-        <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
-          <Text style={[styles.sectionTitle, { color: palette.text }]}>Hành động</Text>
-
-          <View style={styles.progressRow}>
-            <View
-              style={[
-                styles.progressStep,
-                {
-                  borderColor: progress.accepted ? palette.success : palette.border,
-                  backgroundColor: progress.accepted ? `${palette.success}22` : palette.surface,
-                },
-              ]}>
-              <Text style={[styles.progressLabel, { color: palette.text }]}>1. Nhận việc</Text>
-            </View>
-            <View
-              style={[
-                styles.progressStep,
-                {
-                  borderColor: progress.started ? palette.success : palette.border,
-                  backgroundColor: progress.started ? `${palette.success}22` : palette.surface,
-                },
-              ]}>
-              <Text style={[styles.progressLabel, { color: palette.text }]}>2. Bắt đầu</Text>
-            </View>
-            <View
-              style={[
-                styles.progressStep,
-                {
-                  borderColor: progress.completed ? palette.success : palette.border,
-                  backgroundColor: progress.completed ? `${palette.success}22` : palette.surface,
-                },
-              ]}>
-              <Text style={[styles.progressLabel, { color: palette.text }]}>3. Hoàn tất</Text>
-            </View>
+        {/* Ready Card */}
+        <View style={styles.readySection}>
+          <View style={[styles.readyIconWrap, { backgroundColor: palette.primaryLight }]}> 
+            <MaterialIcons name="auto-awesome" size={32} color={palette.primary} />
           </View>
-
-          <View style={styles.actionGrid}>
-            {canAccept && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('accept', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('accept')}>
-                <Text style={[styles.actionButtonText, { color: palette.primaryDark }]}>
-                  {getActionLabel('accept')}
-                </Text>
-              </Pressable>
+          <Text style={[styles.readyTitle, { color: palette.text }]}>Ready to clean?</Text>
+          <Text style={[styles.readyDescription, { color: palette.textMuted }]}>{actionHintText}</Text>
+          <Pressable
+            style={[
+              styles.readyButton,
+              {
+                backgroundColor: canAccept || canStart ? '#2f64da' : palette.neutral400,
+              },
+            ]}
+            disabled={actionLoading || (!canAccept && !canStart)}
+            onPress={() => void handleStartCleaning()}>
+            {actionLoading ? (
+              <ActivityIndicator color={palette.white} />
+            ) : (
+              <View style={styles.readyButtonInner}>
+                <MaterialIcons name="play-arrow" size={20} color={palette.white} />
+                <Text style={[styles.readyButtonText, { color: palette.white }]}>{actionButtonLabel}</Text>
+              </View>
             )}
-
-            {canStart && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('start', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('start')}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>
-                  {getActionLabel('start')}
-                </Text>
-              </Pressable>
-            )}
-
-            {canComplete && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('complete', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('complete')}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>
-                  {getActionLabel('complete')}
-                </Text>
-              </Pressable>
-            )}
-
-            {canReject && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('reject', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('reject')}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>
-                  {getActionLabel('reject')}
-                </Text>
-              </Pressable>
-            )}
-
-            {canReportIncident && !isIncidentMode && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: palette.error }]}
-                disabled={actionLoading || uploadingPhoto}
-                onPress={() => {
-                  setCaptureMode('INCIDENT');
-                  setPhotoType('BEFORE');
-                  setCapturedPhotoUris([]);
-                  setIsCameraOpen(false);
-                }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Báo cáo hư hại</Text>
-              </Pressable>
-            )}
-
-            {canReportIncident && isIncidentMode && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: palette.neutral400 }]}
-                disabled={actionLoading || uploadingPhoto}
-                onPress={() => {
-                  setCaptureMode('CLEANING');
-                  setIncidentDescription('');
-                  setIncidentSeverity('MEDIUM');
-                  setCapturedPhotoUris([]);
-                  setIsCameraOpen(false);
-                }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Hủy báo cáo</Text>
-              </Pressable>
-            )}
-          </View>
-
-          {canReject && (
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={rejectionReason}
-              onChangeText={setRejectionReason}
-              placeholder="Lý do từ chối (tuỳ chọn)"
-              placeholderTextColor={palette.neutral500}
-              editable={!actionLoading}
-            />
-          )}
+          </Pressable>
         </View>
 
         {/* Photos */}
@@ -935,7 +869,8 @@ export default function TaskDetailTab({
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._15,
+    paddingTop: spacingY._25,
+    paddingBottom: spacingY._15,
     gap: spacingY._15,
   },
   header: {
@@ -943,21 +878,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  backButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerSpacer: {
+    width: 36,
+    height: 36,
+  },
   title: {
     fontSize: 18,
     fontWeight: '700',
     fontFamily: Fonts.sans,
     flex: 1,
-  },
-  closeButton: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeButtonText: {
-    fontSize: 24,
-    fontWeight: '700',
+    marginLeft: spacingX._7,
   },
   errorBox: {
     borderWidth: 1,
@@ -995,6 +931,56 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
+  readySection: {
+    marginTop: spacingY._5,
+    marginBottom: spacingY._5,
+    padding: spacingX._15,
+    alignItems: 'center',
+    gap: spacingY._12,
+  },
+  readyIconWrap: {
+    width: 92,
+    height: 92,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    textAlign: 'center',
+  },
+  readyDescription: {
+    fontSize: 14,
+    lineHeight: 21,
+    fontFamily: Fonts.sans,
+    textAlign: 'center',
+    paddingHorizontal: spacingX._10,
+  },
+  readyButton: {
+    width: '100%',
+    borderRadius: radius._15,
+    paddingVertical: spacingY._12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  readyButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._5,
+  },
+  readyButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    letterSpacing: 0.5,
+  },
   incidentModeBox: {
     borderWidth: 1,
     borderRadius: radius._10,
@@ -1017,8 +1003,20 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     marginTop: spacingY._5,
   },
-  info: {
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
+    flexWrap: 'wrap',
+  },
+  infoLabel: {
     fontSize: 13,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  infoValue: {
+    fontSize: 14,
+    fontWeight: '700',
     fontFamily: Fonts.sans,
   },
   progressRow: {
