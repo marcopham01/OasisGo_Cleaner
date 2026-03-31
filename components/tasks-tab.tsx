@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Animated,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getBookingById, getMyCleaningTasks, getPodById } from '@/services/cleaner-dashboard.service';
 import type { CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
-import { getErrorMessage, validateDateRange } from '@/utils/validation';
+import {
+  CLEANING_REQUEST_SOURCES,
+  CLEANING_TASK_STATUSES,
+} from '@/types/cleaner-dashboard';
+import { getErrorMessage } from '@/utils/validation';
 
 type BookingTimeWindow = {
   start_time?: string;
@@ -23,7 +32,6 @@ interface TasksTabProps {
   token: string;
   isDark: boolean;
   palette: typeof Colors.light;
-  onSelectTask: (task: CleaningTask) => void;
   onLoadingChange?: (loading: boolean) => void;
   onErrorChange?: (error: string | null) => void;
 }
@@ -65,6 +73,27 @@ function taskPodDisplayName(task: CleaningTask) {
   return String(task.pod_name || podRecord?.name || task.pod_code || podRecord?.code || '').trim();
 }
 
+function taskClusterDisplayName(task: CleaningTask) {
+  const clusterRecord = task.cluster as { name?: string; code?: string } | undefined;
+  const podRecord = task.pod as {
+    pod_cluster_name?: string;
+    cluster_name?: string;
+    cluster?: { name?: string; code?: string };
+  } | undefined;
+
+  return String(
+    task.pod_cluster_name ||
+    task.cluster_name ||
+      clusterRecord?.name ||
+      clusterRecord?.code ||
+      podRecord?.pod_cluster_name ||
+      podRecord?.cluster_name ||
+      podRecord?.cluster?.name ||
+      podRecord?.cluster?.code ||
+      '',
+  ).trim();
+}
+
 function taskBookingDisplayName(task: CleaningTask) {
   const bookingRecord = task.booking as { order_id?: string; id?: string } | undefined;
   return String(task.booking_order_id || bookingRecord?.order_id || bookingRecord?.id || '').trim();
@@ -93,73 +122,110 @@ function taskBookingWindow(task: CleaningTask, bookingTimeMap: Record<string, Bo
   };
 }
 
+const ACTIVE_STATUSES = new Set(['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS']);
+
+function statusBadgeBackground(status: string, isDark: boolean) {
+  const normalized = status.toUpperCase();
+  if (normalized === 'IN_PROGRESS') return isDark ? '#1d4ed8' : '#dbeafe';
+  if (normalized === 'ASSIGNED' || normalized === 'NOTIFIED') return isDark ? '#92400e' : '#fef3c7';
+  if (normalized === 'DONE') return isDark ? '#065f46' : '#d1fae5';
+  if (normalized === 'CANCELLED' || normalized === 'MISSED') return isDark ? '#881337' : '#ffe4e6';
+  return isDark ? '#334155' : '#e2e8f0';
+}
+
+function statusBadgeText(status: string, isDark: boolean) {
+  const normalized = status.toUpperCase();
+  if (normalized === 'IN_PROGRESS') return isDark ? '#bfdbfe' : '#1d4ed8';
+  if (normalized === 'ASSIGNED' || normalized === 'NOTIFIED') return isDark ? '#fcd34d' : '#b45309';
+  if (normalized === 'DONE') return isDark ? '#6ee7b7' : '#047857';
+  if (normalized === 'CANCELLED' || normalized === 'MISSED') return isDark ? '#fda4af' : '#be123c';
+  return isDark ? '#cbd5e1' : '#475569';
+}
+
+function statusLabel(status: string) {
+  return status.replace(/_/g, ' ');
+}
+
 export default function TasksTab({
   token,
   isDark,
   palette,
-  onSelectTask,
   onLoadingChange,
   onErrorChange,
 }: TasksTabProps) {
+  const router = useRouter();
   const [tasks, setTasks] = useState<CleaningTask[]>([]);
   const [podNameMap, setPodNameMap] = useState<Record<string, string>>({});
+  const [podClusterNameMap, setPodClusterNameMap] = useState<Record<string, string>>({});
   const [bookingNameMap, setBookingNameMap] = useState<Record<string, string>>({});
   const [bookingTimeMap, setBookingTimeMap] = useState<Record<string, BookingTimeWindow>>({});
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Filter state
-  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('');
-  const [dueFromFilter, setDueFromFilter] = useState('');
-  const [dueToFilter, setDueToFilter] = useState('');
-  const [shiftAssignmentIdFilter, setShiftAssignmentIdFilter] = useState('');
-  const [podIdFilter, setPodIdFilter] = useState('');
-  const [bookingIdFilter, setBookingIdFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
+  const [sourceFilter, setSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
+  const [sortFilter, setSortFilter] = useState<'newest' | 'oldest'>('newest');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
+  const [draftStatusFilter, setDraftStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
+  const [draftSourceFilter, setDraftSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
+  const [draftSortFilter, setDraftSortFilter] = useState<'newest' | 'oldest'>('newest');
+  const searchAnimation = useRef(new Animated.Value(0)).current;
 
-  const filteredTasks = useMemo(() => {
+  const filteredTasks = useMemo<CleaningTask[]>(() => {
     const search = searchQuery.trim().toLowerCase();
-    if (!search) {
-      return tasks;
-    }
+    const bySearch = tasks.filter((task) => {
+      if (!search) return true;
 
-    return tasks.filter(
-      (task) =>
-        String(podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || '')
-          .toLowerCase()
-          .includes(search) ||
-        String(bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '')
-          .toLowerCase()
-          .includes(search) ||
+      const podDisplay = String(
+        podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || '',
+      ).toLowerCase();
+      const bookingDisplay = String(
+        bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '',
+      ).toLowerCase();
+      const clusterDisplay = String(
+        podClusterNameMap[String(task.pod_id || '')] || taskClusterDisplayName(task) || '',
+      ).toLowerCase();
+
+      return (
+        podDisplay.includes(search) ||
+        clusterDisplay.includes(search) ||
+        bookingDisplay.includes(search) ||
         String(task.pod_id || '').toLowerCase().includes(search) ||
-        String(task.booking_id || '').toLowerCase().includes(search),
-    );
-  }, [tasks, searchQuery, podNameMap, bookingNameMap]);
+        String(task.booking_id || '').toLowerCase().includes(search) ||
+        String(task.status || '').toLowerCase().includes(search)
+      );
+    });
+
+    return [...bySearch].sort((a, b) => {
+      const aTime = new Date(String(a.due_at || a.created_at || '')).getTime() || 0;
+      const bTime = new Date(String(b.due_at || b.created_at || '')).getTime() || 0;
+      return sortFilter === 'newest' ? bTime - aTime : aTime - bTime;
+    });
+  }, [tasks, searchQuery, sortFilter, podNameMap, podClusterNameMap, bookingNameMap]);
+
+  const activeCount = useMemo(() => {
+    return tasks.filter((task) => ACTIVE_STATUSES.has(String(task.status || '').toUpperCase())).length;
+  }, [tasks]);
+
+  const assignedCount = useMemo(() => {
+    return tasks.filter((task) => {
+      const status = String(task.status || '').toUpperCase();
+      return status === 'ASSIGNED' || status === 'NOTIFIED';
+    }).length;
+  }, [tasks]);
 
   const loadTasks = useCallback(async () => {
-    const dateValidation = validateDateRange(dueFromFilter.trim(), dueToFilter.trim());
-    if (!dateValidation.valid) {
-      const msg = dateValidation.error || 'Khoảng thời gian không hợp lệ';
-      setError(msg);
-      onErrorChange?.(msg);
-      return;
-    }
-
     setLoading(true);
     setError(null);
     onLoadingChange?.(true);
 
     try {
       const data = await getMyCleaningTasks(token, {
-        status: statusFilter.trim().toUpperCase() as CleaningTaskStatus,
-        request_source: sourceFilter.trim().toUpperCase() as CleaningRequestSource,
-        due_from: dueFromFilter.trim(),
-        due_to: dueToFilter.trim(),
-        shift_assignment_id: shiftAssignmentIdFilter.trim(),
-        pod_id: podIdFilter.trim(),
-        booking_id: bookingIdFilter.trim(),
+        status: statusFilter === 'ALL' ? undefined : statusFilter,
+        request_source: sourceFilter === 'ALL' ? undefined : sourceFilter,
       });
 
       setTasks(data);
@@ -181,11 +247,6 @@ export default function TasksTab({
     token,
     statusFilter,
     sourceFilter,
-    dueFromFilter,
-    dueToFilter,
-    shiftAssignmentIdFilter,
-    podIdFilter,
-    bookingIdFilter,
     onLoadingChange,
     onErrorChange,
   ]);
@@ -193,6 +254,14 @@ export default function TasksTab({
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  useEffect(() => {
+    Animated.timing(searchAnimation, {
+      toValue: isSearchOpen ? 1 : 0,
+      duration: 220,
+      useNativeDriver: false,
+    }).start();
+  }, [isSearchOpen, searchAnimation]);
 
   useEffect(() => {
     let isMounted = true;
@@ -206,6 +275,11 @@ export default function TasksTab({
       const initialPodMap = Object.fromEntries(
         tasks
           .map((task) => [String(task.pod_id || '').trim(), taskPodDisplayName(task)] as const)
+          .filter(([id, label]) => Boolean(id && label)),
+      );
+      const initialClusterMap = Object.fromEntries(
+        tasks
+          .map((task) => [String(task.pod_id || '').trim(), taskClusterDisplayName(task)] as const)
           .filter(([id, label]) => Boolean(id && label)),
       );
       const initialBookingMap = Object.fromEntries(
@@ -237,6 +311,7 @@ export default function TasksTab({
 
       if (isMounted) {
         setPodNameMap(initialPodMap);
+        setPodClusterNameMap(initialClusterMap);
         setBookingNameMap(initialBookingMap);
         setBookingTimeMap(initialBookingTimeMap);
       }
@@ -244,6 +319,7 @@ export default function TasksTab({
       if (podIds.length === 0 && bookingIds.length === 0) {
         if (isMounted) {
           setPodNameMap(initialPodMap);
+          setPodClusterNameMap(initialClusterMap);
           setBookingNameMap(initialBookingMap);
           setBookingTimeMap(initialBookingTimeMap);
         }
@@ -256,9 +332,27 @@ export default function TasksTab({
             podIds.map(async (podId) => {
               try {
                 const pod = await getPodById(token, podId);
-                return [podId, String(pod.name || pod.code || '').trim()] as const;
+                const podRecord = pod as {
+                  name?: string;
+                  code?: string;
+                  cluster_name?: string;
+                  cluster?: { name?: string; code?: string };
+                };
+
+                return [
+                  podId,
+                  {
+                    podName: String(podRecord.name || podRecord.code || '').trim(),
+                    clusterName: String(
+                      podRecord.cluster_name ||
+                        podRecord.cluster?.name ||
+                        podRecord.cluster?.code ||
+                        '',
+                    ).trim(),
+                  },
+                ] as const;
               } catch {
-                return [podId, ''] as const;
+                return [podId, { podName: '', clusterName: '' }] as const;
               }
             }),
           ),
@@ -283,7 +377,14 @@ export default function TasksTab({
 
         if (!isMounted) return;
 
-        setPodNameMap({ ...initialPodMap, ...Object.fromEntries(pods) });
+        setPodNameMap({
+          ...initialPodMap,
+          ...Object.fromEntries(pods.map(([id, pod]) => [id, pod.podName])),
+        });
+        setPodClusterNameMap({
+          ...initialClusterMap,
+          ...Object.fromEntries(pods.map(([id, pod]) => [id, pod.clusterName])),
+        });
         setBookingNameMap({
           ...initialBookingMap,
           ...Object.fromEntries(bookings.map(([id, booking]) => [id, booking.label])),
@@ -303,6 +404,7 @@ export default function TasksTab({
       } catch {
         if (!isMounted) return;
         setPodNameMap(initialPodMap);
+        setPodClusterNameMap(initialClusterMap);
         setBookingNameMap(initialBookingMap);
         setBookingTimeMap(initialBookingTimeMap);
       }
@@ -315,140 +417,126 @@ export default function TasksTab({
     };
   }, [tasks, token]);
 
-  const resetFilters = () => {
-    setStatusFilter('');
-    setSourceFilter('');
-    setDueFromFilter('');
-    setDueToFilter('');
-    setShiftAssignmentIdFilter('');
-    setPodIdFilter('');
-    setBookingIdFilter('');
-    setSearchQuery('');
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadTasks();
+    setRefreshing(false);
   };
 
+  const openFilterModal = () => {
+    setDraftStatusFilter(statusFilter);
+    setDraftSourceFilter(sourceFilter);
+    setDraftSortFilter(sortFilter);
+    setIsFilterModalOpen(true);
+  };
+
+  const applyFilterModal = () => {
+    setStatusFilter(draftStatusFilter);
+    setSourceFilter(draftSourceFilter);
+    setSortFilter(draftSortFilter);
+    setIsFilterModalOpen(false);
+  };
+
+  const resetFilterModal = () => {
+    setDraftStatusFilter('ALL');
+    setDraftSourceFilter('ALL');
+    setDraftSortFilter('newest');
+  };
+
+  const searchContainerHeight = searchAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 52],
+  });
+
+  const searchContainerOpacity = searchAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+  });
+
+  const searchContainerTranslateY = searchAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-10, 0],
+  });
+
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: palette.background }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}>
       <View style={styles.container}>
-        <Text style={[styles.title, { color: palette.text }]}>Danh sách task của tôi</Text>
-
-        {/* Search */}
-        <TextInput
+        <View
           style={[
-            styles.input,
-            { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-          ]}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Tìm kiếm task theo tên pod/booking..."
-          placeholderTextColor={palette.neutral500}
-          autoCapitalize="none"
-        />
-
-        {/* Advanced Filter Toggle */}
-        <Pressable
-          style={[styles.filterToggle, { backgroundColor: palette.primaryDark }]}
-          onPress={() => setShowAdvancedFilter(!showAdvancedFilter)}>
-          <Text style={[styles.filterToggleText, { color: palette.white }]}>
-            {showAdvancedFilter ? 'Ẩn bộ lọc' : 'Hiển thị bộ lọc nâng cao'}
-          </Text>
-        </Pressable>
-
-        {/* Advanced Filters */}
-        {showAdvancedFilter && (
-          <View style={[styles.filterBox, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={statusFilter}
-              onChangeText={setStatusFilter}
-              placeholder="Status (ASSIGNED, ACCEPTED, IN_PROGRESS...)"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="characters"
-            />
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={sourceFilter}
-              onChangeText={setSourceFilter}
-              placeholder="Source (USER_REQUEST, AUTO_AFTER_CHECKOUT...)"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="characters"
-            />
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={dueFromFilter}
-              onChangeText={setDueFromFilter}
-              placeholder="Due from (ISO date-time)"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="none"
-            />
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={dueToFilter}
-              onChangeText={setDueToFilter}
-              placeholder="Due to (ISO date-time)"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="none"
-            />
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={shiftAssignmentIdFilter}
-              onChangeText={setShiftAssignmentIdFilter}
-              placeholder="Shift assignment ID"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="none"
-            />
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={podIdFilter}
-              onChangeText={setPodIdFilter}
-              placeholder="Pod ID"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="none"
-            />
-            <TextInput
-              style={[
-                styles.input,
-                { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
-              ]}
-              value={bookingIdFilter}
-              onChangeText={setBookingIdFilter}
-              placeholder="Booking ID"
-              placeholderTextColor={palette.neutral500}
-              autoCapitalize="none"
-            />
-
-            <View style={styles.filterActions}>
-              <Pressable
-                style={[styles.filterButton, { backgroundColor: palette.primary }]}
-                disabled={loading}
-                onPress={() => void loadTasks()}>
-                <Text style={[styles.filterButtonText, { color: palette.white }]}>Lọc</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.filterButton, { backgroundColor: palette.neutral400 }]}
-                onPress={resetFilters}>
-                <Text style={[styles.filterButtonText, { color: palette.white }]}>Xóa</Text>
-              </Pressable>
+            styles.summaryCard,
+            { backgroundColor: palette.primaryDark, borderColor: palette.primary },
+          ]}>
+          <View style={styles.summaryRow}>
+            <View>
+              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ASSIGNED</Text>
+              <Text style={[styles.summaryValue, { color: palette.white }]}>{assignedCount} Pods</Text>
+            </View>
+            <View style={styles.summaryRight}>
+              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ACTIVE</Text>
+              <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>{activeCount}</Text>
             </View>
           </View>
-        )}
+
+          <Text style={[styles.title, { color: palette.white }]}>My task</Text>
+          <Text style={[styles.subtitle, { color: palette.primaryLight }]}>Quản lý task theo trạng thái và nguồn yêu cầu</Text>
+        </View>
+
+        <View style={styles.actionsRow}>
+          <Pressable
+            style={[styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            onPress={() => setIsSearchOpen((prev) => !prev)}>
+            <MaterialIcons
+              name={isSearchOpen ? 'close' : 'search'}
+              size={20}
+              color={palette.text}
+            />
+            <Text style={[styles.iconButtonText, { color: palette.text }]}>Search</Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            onPress={openFilterModal}>
+            <MaterialIcons name="tune" size={20} color={palette.text} />
+            <Text style={[styles.iconButtonText, { color: palette.text }]}>Filter</Text>
+          </Pressable>
+        </View>
+
+        <Animated.View
+          style={[
+            styles.searchAnimatedWrap,
+            {
+              height: searchContainerHeight,
+              opacity: searchContainerOpacity,
+              transform: [{ translateY: searchContainerTranslateY }],
+            },
+          ]}
+          pointerEvents={isSearchOpen ? 'auto' : 'none'}>
+          <TextInput
+            style={[
+              styles.input,
+              { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface },
+            ]}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Tìm task theo pod, booking, trạng thái..."
+            placeholderTextColor={palette.neutral500}
+            autoCapitalize="none"
+          />
+        </Animated.View>
+
+        <View style={styles.activeFilterRow}>
+          <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
+            Status: {statusFilter === 'ALL' ? 'Tất cả' : statusLabel(statusFilter)}
+          </Text>
+          <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
+            Source: {sourceFilter === 'ALL' ? 'Tất cả' : sourceFilter.replace(/_/g, ' ')}
+          </Text>
+          <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
+            Sort: {sortFilter === 'newest' ? 'Mới nhất' : 'Cũ nhất'}
+          </Text>
+        </View>
 
         {error && (
           <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error }]}>
@@ -469,50 +557,159 @@ export default function TasksTab({
             return (
               <Pressable
                 key={key}
-                onPress={() => onSelectTask(task)}
+                onPress={() => router.push({ pathname: '/task/[id]', params: { id: key } })}
                 style={[
                   styles.card,
-                  { backgroundColor: palette.surface, borderColor: palette.border },
+                  { backgroundColor: palette.card, borderColor: palette.border },
                 ]}>
-                <View style={styles.cardHeader}>
-                  <Text style={[styles.cardTitle, { color: palette.text }]}>Task dọn dẹp</Text>
-                  <Text style={[styles.status, { color: statusColor(status, isDark) }]}>{status}</Text>
-                </View>
+                <View style={styles.cardContentRow}>
+                  <View style={styles.cardMainContent}>
+                    <View style={styles.cardHeader}>
+                      <View style={styles.cardTitleWrap}>
+                        <Text style={[styles.cardTitle, { color: palette.primaryDark }]}> 
+                          {podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || 'Pod Example'}
+                        </Text>
+                        <View
+                          style={[
+                            styles.statusBadge,
+                            { backgroundColor: statusBadgeBackground(status, isDark) },
+                          ]}>
+                          <Text style={[styles.statusBadgeText, { color: statusBadgeText(status, isDark) }]}>
+                            {statusLabel(status)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
 
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Pod: {podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || '-'}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Booking:{' '}
-                  {bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '-'}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Source: {String(task.request_source || '-')}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Due: {formatDateTime(task.due_at || undefined)}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Booking Start: {formatDateTime(bookingWindow.start_time)}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Booking End: {formatDateTime(bookingWindow.end_time)}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Start (thuc te): {formatDateTime(task.start_time || undefined)}
-                </Text>
-                <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  End (thuc te): {formatDateTime(task.end_time || undefined)}
-                </Text>
+                    <View style={styles.metaBlock}>
+                      <View style={styles.metaLine}>
+                        <MaterialIcons name="apartment" size={16} color={palette.neutral500} />
+                        <Text style={[styles.meta, { color: palette.textMuted }]}> 
+                          {podClusterNameMap[String(task.pod_id || '')] || taskClusterDisplayName(task) || 'Cluster Example'}
+                        </Text>
+                      </View>
+                      <View style={styles.metaLine}>
+                        <MaterialIcons name="local-offer" size={16} color={palette.neutral500} />
+                        <Text style={[styles.meta, { color: palette.textMuted }]}>
+                          {String(task.request_source || '-')}
+                        </Text>
+                      </View>
+                      <View style={styles.metaLine}>
+                        <MaterialIcons name="schedule" size={16} color={palette.neutral500} />
+                        <Text style={[styles.meta, { color: palette.textMuted }]}> 
+                          Due {formatDateTime(task.due_at || bookingWindow.end_time)}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
 
-                <View style={styles.footer}>
-                  <Text style={[styles.clickHint, { color: palette.primary }]}>Nhấn để xem chi tiết</Text>
+                  <View style={[styles.arrowButton, { backgroundColor: palette.neutral200 }]}> 
+                    <MaterialIcons name="arrow-forward" size={18} color={palette.neutral500} />
+                  </View>
                 </View>
               </Pressable>
             );
           })
         )}
       </View>
+
+      <Modal visible={isFilterModalOpen} transparent animationType="fade" onRequestClose={() => setIsFilterModalOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: palette.text }]}>Bộ lọc task</Text>
+              <Pressable onPress={() => setIsFilterModalOpen(false)}>
+                <MaterialIcons name="close" size={20} color={palette.textMuted} />
+              </Pressable>
+            </View>
+
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Status</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {(['ALL', ...CLEANING_TASK_STATUSES] as const).map((status) => {
+                const active = draftStatusFilter === status;
+                return (
+                  <Pressable
+                    key={status}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: active ? palette.primary : palette.surface,
+                        borderColor: active ? palette.primary : palette.border,
+                      },
+                    ]}
+                    onPress={() => setDraftStatusFilter(status)}>
+                    <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
+                      {status === 'ALL' ? 'Tất cả' : statusLabel(status)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Request Source</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {(['ALL', ...CLEANING_REQUEST_SOURCES] as const).map((source) => {
+                const active = draftSourceFilter === source;
+                return (
+                  <Pressable
+                    key={source}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: active ? palette.primary : palette.surface,
+                        borderColor: active ? palette.primary : palette.border,
+                      },
+                    ]}
+                    onPress={() => setDraftSourceFilter(source)}>
+                    <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
+                      {source === 'ALL' ? 'Tất cả' : source.replace(/_/g, ' ')}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Sắp xếp</Text>
+            <View style={styles.sortRow}>
+              <Pressable
+                style={[
+                  styles.sortButton,
+                  {
+                    backgroundColor: draftSortFilter === 'newest' ? palette.primary : palette.surface,
+                    borderColor: draftSortFilter === 'newest' ? palette.primary : palette.border,
+                  },
+                ]}
+                onPress={() => setDraftSortFilter('newest')}>
+                <Text style={[styles.sortButtonText, { color: draftSortFilter === 'newest' ? palette.white : palette.text }]}>Mới nhất</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.sortButton,
+                  {
+                    backgroundColor: draftSortFilter === 'oldest' ? palette.primary : palette.surface,
+                    borderColor: draftSortFilter === 'oldest' ? palette.primary : palette.border,
+                  },
+                ]}
+                onPress={() => setDraftSortFilter('oldest')}>
+                <Text style={[styles.sortButtonText, { color: draftSortFilter === 'oldest' ? palette.white : palette.text }]}>Cũ nhất</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.modalActionRow}>
+              <Pressable
+                style={[styles.modalButton, { backgroundColor: palette.neutral300 }]}
+                onPress={resetFilterModal}>
+                <Text style={[styles.modalButtonText, { color: palette.neutral800 }]}>Reset</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalButton, { backgroundColor: palette.primary }]}
+                onPress={applyFilterModal}>
+                <Text style={[styles.modalButtonText, { color: palette.white }]}>Áp dụng</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -523,49 +720,163 @@ const styles = StyleSheet.create({
     paddingVertical: spacingY._15,
     gap: spacingY._12,
   },
-  title: {
-    fontSize: 18,
+  summaryCard: {
+    borderWidth: 1,
+    borderRadius: radius._20,
+    padding: spacingX._15,
+    gap: spacingY._7,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  summaryRight: {
+    alignItems: 'flex-end',
+  },
+  summaryLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    letterSpacing: 0.6,
+  },
+  summaryValue: {
+    fontSize: 34,
+    lineHeight: 38,
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
+  summaryActive: {
+    fontSize: 34,
+    lineHeight: 38,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  subtitle: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: spacingX._10,
+  },
+  iconButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacingX._7,
+    borderWidth: 1,
+    borderRadius: radius._12,
+    paddingVertical: spacingY._10,
+    flex: 1,
+  },
+  iconButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  searchAnimatedWrap: {
+    overflow: 'hidden',
+  },
   input: {
     borderWidth: 1,
-    borderRadius: radius._10,
+    borderRadius: radius._12,
     paddingHorizontal: spacingX._12,
     paddingVertical: spacingY._10,
     fontSize: 14,
     fontFamily: Fonts.sans,
   },
-  filterToggle: {
-    borderRadius: radius._10,
-    paddingVertical: spacingY._12,
-    alignItems: 'center',
-    justifyContent: 'center',
+  filterGroup: {
+    gap: spacingY._7,
   },
-  filterToggleText: {
-    fontSize: 14,
+  activeFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacingX._10,
+  },
+  activeFilterText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+  filterLabel: {
+    fontSize: 12,
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
-  filterBox: {
-    borderWidth: 1,
-    borderRadius: radius._12,
-    padding: spacingX._12,
-    gap: spacingY._10,
+  filterRow: {
+    gap: spacingX._7,
+    paddingRight: spacingX._10,
   },
-  filterActions: {
+  filterChip: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._7,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  sortRow: {
     flexDirection: 'row',
     gap: spacingX._10,
   },
-  filterButton: {
+  sortButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    borderWidth: 1,
+    paddingVertical: spacingY._10,
+    alignItems: 'center',
+  },
+  sortButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: spacingX._20,
+  },
+  modalCard: {
+    borderWidth: 1,
+    borderRadius: radius._15,
+    padding: spacingX._15,
+    gap: spacingY._10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    gap: spacingX._10,
+    marginTop: spacingY._5,
+  },
+  modalButton: {
     flex: 1,
     borderRadius: radius._10,
     paddingVertical: spacingY._10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  filterButtonText: {
+  modalButtonText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     fontFamily: Fonts.sans,
   },
   loader: {
@@ -588,37 +899,63 @@ const styles = StyleSheet.create({
   },
   card: {
     borderWidth: 1,
-    borderRadius: radius._12,
-    padding: spacingX._12,
-    gap: spacingY._5,
+    borderRadius: radius._15,
+    padding: spacingX._15,
+  },
+  cardContentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._12,
+  },
+  cardMainContent: {
+    flex: 1,
+    gap: spacingY._10,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacingX._10,
+    gap: spacingX._7,
   },
-  cardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
+  cardTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
     flex: 1,
   },
-  status: {
-    fontSize: 12,
+  cardTitle: {
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: '700',
-    fontFamily: Fonts.mono,
+    fontFamily: Fonts.sans,
+  },
+  statusBadge: {
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._7,
+    paddingVertical: spacingY._5,
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  arrowButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  metaBlock: {
+    gap: spacingY._5,
+  },
+  metaLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
   },
   meta: {
     fontSize: 13,
     fontFamily: Fonts.sans,
-  },
-  footer: {
-    marginTop: spacingY._7,
-  },
-  clickHint: {
-    fontSize: 12,
-    fontFamily: Fonts.sans,
-    fontStyle: 'italic',
   },
 });
