@@ -1,6 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -89,6 +88,14 @@ function getActionLabel(action: CleanerTaskAction): string {
 }
 
 const INCIDENT_SEVERITY_OPTIONS: IncidentSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+const CLEANING_CHECKLIST_ITEMS = [
+  'Change bed linens & pillowcases',
+  'Sanitize control panel & buttons',
+  'Wipe down ventilation vents',
+  'Check for left-behind items',
+  'Vacuum floor mat',
+  'Spray air freshener',
+];
 
 function shouldHidePermissionMessage(message: string) {
   return message.toLowerCase().includes('không có quyền');
@@ -145,7 +152,6 @@ export default function TaskDetailTab({
   const [clusterName, setClusterName] = useState<string | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -157,6 +163,7 @@ export default function TaskDetailTab({
   const [incidentDescription, setIncidentDescription] = useState('');
   const [incidentSeverity, setIncidentSeverity] = useState<IncidentSeverity>('MEDIUM');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [completedChecklistItems, setCompletedChecklistItems] = useState<string[]>([]);
 
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -215,47 +222,14 @@ export default function TaskDetailTab({
     }
   };
 
-  const pickPhotoFromLibrary = async () => {
-    if (!task || !canCaptureNewPhotos) {
-      Alert.alert(
-        'Chưa thể thêm ảnh',
-        isIncidentMode
-          ? 'Chỉ có thể báo cáo hư hại khi task đang ở trạng thái IN_PROGRESS.'
-          : 'Bạn cần bấm "Bắt đầu dọn" trước khi thêm ảnh task.',
-      );
-      return;
-    }
-
-    if (!libraryPermission?.granted) {
-      const permissionResult = await requestLibraryPermission();
-      if (!permissionResult.granted) {
-        Alert.alert('Không thể mở thư viện', 'Vui lòng cấp quyền thư viện để chọn ảnh.');
-        return;
-      }
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.75,
-      allowsEditing: false,
-      selectionLimit: 1,
-    });
-
-    if (result.canceled || !result.assets?.length) {
-      return;
-    }
-
-    const selectedUri = result.assets[0]?.uri;
-    if (!selectedUri) {
-      Alert.alert('Lỗi', 'Không đọc được ảnh đã chọn.');
-      return;
-    }
-
-    setCapturedPhotoUris((prev) => [...prev, selectedUri]);
-  };
-
   const removeCapturedPhoto = (indexToRemove: number) => {
     setCapturedPhotoUris((prev) => prev.filter((_, index) => index !== indexToRemove));
+  };
+
+  const toggleChecklistItem = (item: string) => {
+    setCompletedChecklistItems((prev) =>
+      prev.includes(item) ? prev.filter((current) => current !== item) : [...prev, item],
+    );
   };
 
   useEffect(() => {
@@ -450,9 +424,12 @@ export default function TaskDetailTab({
 
   const canAccept = task.status === 'ASSIGNED' || task.status === 'NOTIFIED';
   const canStart = task.status === 'ACCEPTED' || task.status === 'ARRIVED';
+  const hasStartedCleaning = taskStatus === 'IN_PROGRESS' || taskStatus === 'DONE';
+  const showReadyAction = !hasStartedCleaning;
   const bookingWindow = taskBookingWindow(task);
   const displayPodName = podName || taskPodDisplayName(task) || 'Pod tieu chuan - A03U';
   const displayClusterName = clusterName || taskClusterDisplayName(task) || 'Cum Pod A - Khu vuc Ga Quoc noi T1';
+  const requiredAfterPhotos = photos.filter((photo) => String(photo.type || '').toUpperCase() === 'AFTER');
 
   const handleStartCleaning = async () => {
     if (canAccept) {
@@ -608,38 +585,78 @@ export default function TaskDetailTab({
         )}
 
         {/* Ready Card */}
-        <View style={styles.readySection}>
-          <View style={[styles.readyIconWrap, { backgroundColor: palette.primaryLight }]}> 
-            <MaterialIcons name="auto-awesome" size={32} color={palette.primary} />
+        {showReadyAction && (
+          <View style={styles.readySection}>
+            <View style={[styles.readyIconWrap, { backgroundColor: palette.primaryLight }]}> 
+              <MaterialIcons name="auto-awesome" size={32} color={palette.primary} />
+            </View>
+            <Text style={[styles.readyTitle, { color: palette.text }]}>Ready to clean?</Text>
+            <Text style={[styles.readyDescription, { color: palette.textMuted }]}>{actionHintText}</Text>
+            <Pressable
+              style={[
+                styles.readyButton,
+                {
+                  backgroundColor: canAccept || canStart ? '#2f64da' : palette.neutral400,
+                },
+              ]}
+              disabled={actionLoading || (!canAccept && !canStart)}
+              onPress={() => void handleStartCleaning()}>
+              {actionLoading ? (
+                <ActivityIndicator color={palette.white} />
+              ) : (
+                <View style={styles.readyButtonInner}>
+                  <MaterialIcons name="play-arrow" size={20} color={palette.white} />
+                  <Text style={[styles.readyButtonText, { color: palette.white }]}>{actionButtonLabel}</Text>
+                </View>
+              )}
+            </Pressable>
           </View>
-          <Text style={[styles.readyTitle, { color: palette.text }]}>Ready to clean?</Text>
-          <Text style={[styles.readyDescription, { color: palette.textMuted }]}>{actionHintText}</Text>
-          <Pressable
-            style={[
-              styles.readyButton,
-              {
-                backgroundColor: canAccept || canStart ? '#2f64da' : palette.neutral400,
-              },
-            ]}
-            disabled={actionLoading || (!canAccept && !canStart)}
-            onPress={() => void handleStartCleaning()}>
-            {actionLoading ? (
-              <ActivityIndicator color={palette.white} />
-            ) : (
-              <View style={styles.readyButtonInner}>
-                <MaterialIcons name="play-arrow" size={20} color={palette.white} />
-                <Text style={[styles.readyButtonText, { color: palette.white }]}>{actionButtonLabel}</Text>
-              </View>
-            )}
-          </Pressable>
-        </View>
+        )}
+
+        {/* Cleaning Checklist */}
+        {hasStartedCleaning && (
+          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
+            <View style={styles.checklistHeader}>
+              <MaterialIcons name="check-box" size={20} color={palette.primary} />
+              <Text style={[styles.sectionTitle, { color: palette.text }]}>Cleaning Checklist</Text>
+            </View>
+            {CLEANING_CHECKLIST_ITEMS.map((item) => {
+              const isCompleted = completedChecklistItems.includes(item);
+              return (
+                <Pressable
+                  key={item}
+                  style={[styles.checklistItem, { borderTopColor: palette.border }]}
+                  onPress={() => toggleChecklistItem(item)}>
+                  <View
+                    style={[
+                      styles.checkIconWrap,
+                      {
+                        backgroundColor: isCompleted ? '#3d7ce8' : 'transparent',
+                        borderColor: isCompleted ? '#3d7ce8' : '#b9c7da',
+                      },
+                    ]}>
+                    {isCompleted && <MaterialIcons name="check" size={14} color={palette.white} />}
+                  </View>
+                  <Text
+                    style={[
+                      styles.checklistText,
+                      {
+                        color: isCompleted ? palette.textMuted : palette.text,
+                        textDecorationLine: isCompleted ? 'line-through' : 'none',
+                      },
+                    ]}>
+                    {item}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
 
         {/* Photos */}
         {canAccessPhotoFlow ? (
           <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            <Text style={[styles.sectionTitle, { color: palette.text }]}>
-              Ảnh BEFORE/AFTER ({photos.length})
-            </Text>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>Required Photos</Text>
 
             {isIncidentMode && (
               <View style={[styles.incidentModeBox, { backgroundColor: `${palette.error}14`, borderColor: palette.error }]}>
@@ -650,29 +667,9 @@ export default function TaskDetailTab({
               </View>
             )}
 
-            {photos.length === 0 ? (
-              <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh</Text>
-            ) : (
-              photos.map((photo) => (
-                <View
-                  key={String(photo.id || Math.random())}
-                  style={[styles.photoItem, { borderColor: palette.border }]}>
-                  <View style={styles.photoHeader}>
-                    <Text style={[styles.photoType, { color: palette.text }]}>{photo.type}</Text>
-                  </View>
-                  <Text
-                    style={[styles.photoUrl, { color: palette.textMuted }]}
-                    numberOfLines={2}>
-                    {photo.photo_url}
-                  </Text>
-                  <Image source={{ uri: photo.photo_url }} style={styles.photoPreview} resizeMode="contain" />
-                </View>
-              ))
-            )}
-
             {canCaptureNewPhotos ? (
               <>
-                <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp ảnh mới</Text>
+                <Text style={[styles.subsectionTitle, { color: palette.text }]}>After Clean</Text>
 
                 {isIncidentMode ? (
                   <>
@@ -724,67 +721,43 @@ export default function TaskDetailTab({
                     </View>
                   </>
                 ) : (
-                  <View style={styles.photoTypeSelector}>
+                  <View style={styles.requiredPhotosRow}>
                     <Pressable
-                      style={[
-                        styles.typeButton,
-                        photoType === 'BEFORE'
-                          ? { backgroundColor: palette.primary }
-                          : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
-                      ]}
-                      onPress={() => {
-                        setPhotoType('BEFORE');
-                        if (!isCameraOpen) {
-                          void openCamera();
-                        }
-                      }}>
-                      <Text
-                        style={[
-                          styles.typeButtonText,
-                          { color: photoType === 'BEFORE' ? palette.white : palette.text },
-                        ]}>
-                        BEFORE
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      style={[
-                        styles.typeButton,
-                        photoType === 'AFTER'
-                          ? { backgroundColor: palette.primary }
-                          : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1 },
-                      ]}
+                      style={[styles.requiredCaptureTile, { borderColor: '#c4d2e5', backgroundColor: '#f8fbff' }]}
+                      disabled={uploadingPhoto}
                       onPress={() => {
                         setPhotoType('AFTER');
-                        if (!isCameraOpen) {
-                          void openCamera();
-                        }
+                        void openCamera();
                       }}>
-                      <Text
-                        style={[
-                          styles.typeButtonText,
-                          { color: photoType === 'AFTER' ? palette.white : palette.text },
-                        ]}>
-                        AFTER
-                      </Text>
+                      <MaterialIcons name="photo-camera" size={26} color="#8aa0bc" />
+                      <Text style={styles.requiredCaptureLabel}>After Clean</Text>
                     </Pressable>
+
+                    {requiredAfterPhotos.map((photo) => (
+                      <View key={String(photo.id || Math.random())} style={styles.requiredThumbWrap}>
+                        <Image
+                          source={{ uri: String(photo.photo_url || '') }}
+                          style={styles.requiredThumb}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.requiredDoneIcon}>
+                          <MaterialIcons name="check-circle" size={20} color="#22c55e" />
+                        </View>
+                      </View>
+                    ))}
+
+                    {capturedPhotoUris.map((uri, index) => (
+                      <View key={`${uri}_${index}`} style={styles.requiredThumbWrap}>
+                        <Image source={{ uri }} style={styles.requiredThumb} resizeMode="cover" />
+                        <Pressable
+                          style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
+                          onPress={() => removeCapturedPhoto(index)}>
+                          <MaterialIcons name="close" size={14} color={palette.white} />
+                        </Pressable>
+                      </View>
+                    ))}
                   </View>
                 )}
-
-                <View style={styles.sourceActionRow}>
-                  <Pressable
-                    style={[styles.sourceButton, { backgroundColor: palette.primary }]}
-                    disabled={uploadingPhoto}
-                    onPress={() => void openCamera()}>
-                    <Text style={[styles.sourceButtonText, { color: palette.white }]}>Chụp ảnh</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.sourceButton, { backgroundColor: palette.secondary }]}
-                    disabled={uploadingPhoto}
-                    onPress={() => void pickPhotoFromLibrary()}>
-                    <Text style={[styles.sourceButtonText, { color: palette.primaryDark }]}>Chọn từ máy</Text>
-                  </Pressable>
-                </View>
 
                 {isCameraOpen ? (
                   <View style={styles.cameraBox}>
@@ -811,22 +784,8 @@ export default function TaskDetailTab({
                   <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa mở camera</Text>
                 )}
 
-                {capturedPhotoUris.length > 0 ? (
-                  <View style={styles.capturedBox}>
-                    <Text style={[styles.capturedTitle, { color: palette.text }]}>Ảnh chờ lưu ({capturedPhotoUris.length})</Text>
-                    {capturedPhotoUris.map((uri, index) => (
-                      <View key={`${uri}_${index}`} style={styles.pendingPhotoItem}>
-                        <Image source={{ uri }} style={styles.capturedImage} resizeMode="contain" />
-                        <Pressable
-                          style={[styles.removePhotoButton, { backgroundColor: palette.error }]}
-                          onPress={() => removeCapturedPhoto(index)}>
-                          <Text style={[styles.removePhotoText, { color: palette.white }]}>Xóa ảnh này</Text>
-                        </Pressable>
-                      </View>
-                    ))}
-                  </View>
-                ) : (
-                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa chụp ảnh mới</Text>
+                {capturedPhotoUris.length === 0 && requiredAfterPhotos.length === 0 && (
+                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh After Clean</Text>
                 )}
 
                 <Pressable
@@ -840,7 +799,7 @@ export default function TaskDetailTab({
                     <ActivityIndicator color={palette.white} />
                   ) : (
                     <Text style={[styles.uploadButtonText, { color: palette.white }]}>
-                      {isIncidentMode ? 'Gửi báo cáo hư hại' : 'Lưu tất cả ảnh vào task'}
+                      {isIncidentMode ? 'Gửi báo cáo hư hại' : 'Lưu ảnh After Clean'}
                     </Text>
                   )}
                 </Pressable>
@@ -981,6 +940,34 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     letterSpacing: 0.5,
   },
+  checklistHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
+  },
+  checklistItem: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._10,
+    borderTopWidth: 1,
+    paddingHorizontal: spacingX._3,
+  },
+  checkIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checklistText: {
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '500',
+    fontFamily: Fonts.sans,
+  },
   incidentModeBox: {
     borderWidth: 1,
     borderRadius: radius._10,
@@ -1086,6 +1073,56 @@ const styles = StyleSheet.create({
   photoTypeSelector: {
     flexDirection: 'row',
     gap: spacingX._7,
+  },
+  requiredPhotosRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacingX._10,
+  },
+  requiredCaptureTile: {
+    width: 96,
+    height: 96,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderRadius: radius._10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacingY._5,
+  },
+  requiredCaptureLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#8aa0bc',
+    fontFamily: Fonts.sans,
+  },
+  requiredThumbWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: radius._10,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#dbe3ef',
+  },
+  requiredThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  requiredDoneIcon: {
+    position: 'absolute',
+    right: 4,
+    bottom: 4,
+    backgroundColor: '#ffffffd6',
+    borderRadius: radius.full,
+  },
+  requiredRemoveIcon: {
+    position: 'absolute',
+    right: 4,
+    top: 4,
+    width: 20,
+    height: 20,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   typeButton: {
     flex: 1,
