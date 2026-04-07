@@ -77,7 +77,7 @@ function statusColor(status: string | undefined, isDark: boolean) {
 }
 
 function shouldHidePermissionMessage(message: string) {
-  return message.toLowerCase().includes('khong co quyen') || message.toLowerCase().includes('không có quyền');
+  return message.toLowerCase().includes('không có quyền');
 }
 
 export default function LostFoundTab({ token, isDark, palette, onErrorChange }: LostFoundTabProps) {
@@ -131,16 +131,16 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   }, [taskOptions, createMode, cleaningTaskId, podId]);
 
   const selectedTaskLabel = useMemo(() => {
-    if (!cleaningTaskId) return 'Chưa chọn cleaning task';
+    if (!cleaningTaskId) return 'Chưa chọn nhiệm vụ dọn dẹp';
 
     const matchedTask = taskOptions.find((task) => taskId(task) === cleaningTaskId);
     if (!matchedTask) return cleaningTaskId;
 
-    return `Task ${cleaningTaskId} • Pod ${String(matchedTask.pod_id || '-')}`;
+    return `Nhiệm vụ ${cleaningTaskId} • Pod ${String(matchedTask.pod_id || '-')}`;
   }, [taskOptions, cleaningTaskId]);
 
   const selectedPodLabel = podId || 'Chưa chọn pod';
-  const selectedBookingLabel = bookingId || 'Không gắn booking';
+  const selectedBookingLabel = bookingId || 'Không gắn đặt chỗ';
 
   const filteredItems = useMemo(() => {
     const search = searchQuery.trim().toLowerCase();
@@ -237,7 +237,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
     }
 
     if (createMode === 'TASK' && !normalizedCleaningTaskId) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng chọn cleaning task từ danh sách.');
+      Alert.alert('Thiếu thông tin', 'Vui lòng chọn nhiệm vụ dọn dẹp từ danh sách.');
       return;
     }
 
@@ -274,7 +274,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
       setShowBookingList(false);
 
       onErrorChange?.(null);
-      Alert.alert('Thành công', 'Đã tạo mục lost & found mới.');
+      Alert.alert('Thành công', 'Đã tạo mục đồ thất lạc mới.');
     } catch (err) {
       const msg = getErrorMessage(err);
       if (shouldHidePermissionMessage(msg)) {
@@ -292,7 +292,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   const handleUpdateStatus = async (item: LostFoundItem, nextStatus: LostFoundStatus) => {
     const id = itemId(item);
     if (!id) {
-      Alert.alert('Lỗi', 'Không xác định được ID item.');
+      Alert.alert('Lỗi', 'Không xác định được ID vật phẩm.');
       return;
     }
 
@@ -329,7 +329,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
       <View style={styles.container}>
-        <Text style={[styles.title, { color: palette.text }]}>Lost & Found</Text>
+        <Text style={[styles.title, { color: palette.text }]}>Đồ thất lạc</Text>
 
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
           <Text style={[styles.sectionTitle, { color: palette.text }]}>Tạo mục mới</Text>
@@ -403,7 +403,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                   setShowPodList(false);
                   setShowBookingList(false);
                 }}>
-                <Text style={[styles.selectorTriggerText, { color: palette.text }]}>Cleaning task: {selectedTaskLabel}</Text>
+                <Text style={[styles.selectorTriggerText, { color: palette.text }]}>Nhiệm vụ: {selectedTaskLabel}</Text>
                 <Text style={[styles.selectorHint, { color: palette.textMuted }]}>{showTaskList ? 'Ẩn danh sách' : 'Mở danh sách'}</Text>
               </Pressable>
 
@@ -412,7 +412,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                   {loadingOptions ? (
                     <ActivityIndicator color={palette.primary} />
                   ) : taskOptions.length === 0 ? (
-                    <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có task để chọn.</Text>
+                    <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có nhiệm vụ để chọn.</Text>
                   ) : (
                     taskOptions.map((task) => {
                       const id = taskId(task);
@@ -434,9 +434,9 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                             setBookingId(String(task.booking_id || '').trim());
                             setShowTaskList(false);
                           }}>
-                          <Text style={[styles.selectorItemTitle, { color: palette.text }]}>Task {id}</Text>
+                          <Text style={[styles.selectorItemTitle, { color: palette.text }]}>Nhiệm vụ {id}</Text>
                           <Text style={[styles.selectorItemMeta, { color: palette.textMuted }]}>
-                            Pod: {String(task.pod_id || '-')} • Booking: {String(task.booking_id || '-')}
+                            Pod: {String(task.pod_id || '-')} • Đặt chỗ: {String(task.booking_id || '-')}
                           </Text>
                         </Pressable>
                       );
@@ -499,7 +499,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                 setShowTaskList(false);
                 setShowPodList(false);
               }}>
-              <Text style={[styles.selectorTriggerText, { color: palette.text }]}>Booking: {selectedBookingLabel}</Text>
+              <Text style={[styles.selectorTriggerText, { color: palette.text }]}>Đặt chỗ: {selectedBookingLabel}</Text>
               <Text style={[styles.selectorHint, { color: palette.textMuted }]}>{showBookingList ? 'Ẩn danh sách' : 'Mở danh sách'}</Text>
             </Pressable>
 
@@ -511,7 +511,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                     setBookingId('');
                     setShowBookingList(false);
                   }}>
-                  <Text style={[styles.selectorItemTitle, { color: palette.text }]}>Không gắn booking</Text>
+                  <Text style={[styles.selectorItemTitle, { color: palette.text }]}>Không gắn đặt chỗ</Text>
                 </Pressable>
                 {bookingOptions.map((bookingOption) => (
                   <Pressable
@@ -527,7 +527,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                       setBookingId(bookingOption);
                       setShowBookingList(false);
                     }}>
-                    <Text style={[styles.selectorItemTitle, { color: palette.text }]}>Booking {bookingOption}</Text>
+                    <Text style={[styles.selectorItemTitle, { color: palette.text }]}>Đặt chỗ {bookingOption}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -550,7 +550,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             {creating ? (
               <ActivityIndicator color={palette.white} />
             ) : (
-              <Text style={[styles.primaryButtonText, { color: palette.white }]}>Tạo lost & found</Text>
+              <Text style={[styles.primaryButtonText, { color: palette.white }]}>Tạo đồ thất lạc</Text>
             )}
           </Pressable>
         </View>
@@ -562,7 +562,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             style={[styles.input, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
             value={searchQuery}
             onChangeText={setSearchQuery}
-            placeholder="Tìm theo tên đồ, mô tả, pod/task/booking"
+            placeholder="Tìm theo tên đồ, mô tả, pod/nhiệm vụ/đặt chỗ"
             placeholderTextColor={palette.neutral500}
           />
 
@@ -570,7 +570,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             style={[styles.input, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
             value={statusFilter}
             onChangeText={setStatusFilter}
-            placeholder={`Status (${LOST_FOUND_STATUSES.join(', ')})`}
+            placeholder={`Trạng thái (${LOST_FOUND_STATUSES.join(', ')})`}
             placeholderTextColor={palette.neutral500}
             autoCapitalize="characters"
           />
@@ -579,7 +579,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             style={[styles.input, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
             value={cleaningTaskFilter}
             onChangeText={setCleaningTaskFilter}
-            placeholder="Filter cleaning_task_id"
+            placeholder="Lọc theo cleaning_task_id"
             placeholderTextColor={palette.neutral500}
             autoCapitalize="none"
           />
@@ -588,7 +588,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             style={[styles.input, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
             value={podFilter}
             onChangeText={setPodFilter}
-            placeholder="Filter pod_id"
+            placeholder="Lọc theo pod_id"
             placeholderTextColor={palette.neutral500}
             autoCapitalize="none"
           />
@@ -597,7 +597,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             style={[styles.input, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
             value={bookingFilter}
             onChangeText={setBookingFilter}
-            placeholder="Filter booking_id"
+            placeholder="Lọc theo booking_id"
             placeholderTextColor={palette.neutral500}
             autoCapitalize="none"
           />
@@ -623,7 +623,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
         )}
 
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
-          <Text style={[styles.sectionTitle, { color: palette.text }]}>Danh sách item ({filteredItems.length})</Text>
+          <Text style={[styles.sectionTitle, { color: palette.text }]}>Danh sách vật phẩm ({filteredItems.length})</Text>
 
           {loading ? (
             <ActivityIndicator color={palette.primary} />
@@ -647,12 +647,12 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                   </View>
 
                   <Text style={[styles.meta, { color: palette.textMuted }]}>Mô tả: {String(item.description || '-')}</Text>
-                  <Text style={[styles.meta, { color: palette.textMuted }]}>Task: {String(item.cleaning_task_id || '-')}</Text>
+                  <Text style={[styles.meta, { color: palette.textMuted }]}>Nhiệm vụ: {String(item.cleaning_task_id || '-')}</Text>
                   <Text style={[styles.meta, { color: palette.textMuted }]}>Pod: {String(item.pod_id || '-')}</Text>
-                  <Text style={[styles.meta, { color: palette.textMuted }]}>Booking: {String(item.booking_id || '-')}</Text>
-                  <Text style={[styles.meta, { color: palette.textMuted }]}>Found at: {formatDateTime(item.found_at)}</Text>
-                  <Text style={[styles.meta, { color: palette.textMuted }]}>Created: {formatDateTime(item.created_at)}</Text>
-                  <Text style={[styles.meta, { color: palette.textMuted }]}>Claimed at: {formatDateTime(item.claimed_at)}</Text>
+                  <Text style={[styles.meta, { color: palette.textMuted }]}>Đặt chỗ: {String(item.booking_id || '-')}</Text>
+                  <Text style={[styles.meta, { color: palette.textMuted }]}>Thời điểm nhặt được: {formatDateTime(item.found_at)}</Text>
+                  <Text style={[styles.meta, { color: palette.textMuted }]}>Tạo lúc: {formatDateTime(item.created_at)}</Text>
+                  <Text style={[styles.meta, { color: palette.textMuted }]}>Nhận lại lúc: {formatDateTime(item.claimed_at)}</Text>
 
                   {nextStatuses.length > 0 && (
                     <View style={styles.statusActions}>

@@ -21,9 +21,9 @@ export default function ProfileScreen() {
             borderColor: palette.border,
           },
         ]}>
-        <Text style={[styles.title, { color: palette.text }]}>Profile</Text>
+        <Text style={[styles.title, { color: palette.text }]}>Tài khoản</Text>
         <Text style={[styles.name, { color: palette.text }]}>{user?.name || 'Cleaner'}</Text>
-        <Text style={[styles.meta, { color: palette.textMuted }]}>{user?.email || 'No email'}</Text>
+        <Text style={[styles.meta, { color: palette.textMuted }]}>{user?.email || 'Chưa có email'}</Text>
       </View>
 
       <Pressable
@@ -31,7 +31,7 @@ export default function ProfileScreen() {
           void signOut();
         }}
         style={[styles.signOutButton, { backgroundColor: palette.primaryDark }]}>
-        <Text style={[styles.signOutText, { color: palette.white }]}>Dang xuat</Text>
+        <Text style={[styles.signOutText, { color: palette.white }]}>Đăng xuất</Text>
       </Pressable>
     </ScrollView>
   );

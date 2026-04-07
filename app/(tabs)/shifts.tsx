@@ -1,14 +1,11 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
-import TaskDetailTab from '@/components/task-detail-tab';
-import { Colors, Fonts, spacingX } from '@/constants/theme';
+import ShiftsTab from '@/components/shifts-tab';
+import { Colors, Fonts, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-export default function TaskDetailScreen() {
-  const { id } = useLocalSearchParams<{ id?: string }>();
-  const router = useRouter();
+export default function ShiftsScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const { token } = useAuth();
@@ -22,19 +19,10 @@ export default function TaskDetailScreen() {
   }
 
   return (
-    <TaskDetailTab
-      token={token}
-      taskId={String(id || '') || null}
-      isDark={theme === 'dark'}
-      palette={palette}
-      onClose={() => {
-        if (router.canGoBack()) {
-          router.back();
-        } else {
-          router.replace('/(tabs)');
-        }
-      }}
-    />
+    <View style={[styles.container, { backgroundColor: palette.background }]}>
+      <Text style={[styles.screenTitle, { color: palette.text }]}>Ca làm việc</Text>
+      <ShiftsTab token={token} isDark={theme === 'dark'} palette={palette} />
+    </View>
   );
 }
 
@@ -47,7 +35,18 @@ const styles = StyleSheet.create({
   },
   centerText: {
     fontSize: 16,
-    fontWeight: '600',
     fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+  container: {
+    flex: 1,
+    paddingTop: spacingY._10,
+  },
+  screenTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    paddingHorizontal: spacingX._20,
+    paddingBottom: spacingY._5,
   },
 });

@@ -66,31 +66,99 @@ export function validateDateRange(
 
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
-    const msg = error.message;
-    // Map common backend error messages to Vietnamese
-    if (msg.includes('404')) {
-      return 'Không tìm thấy dữ liệu';
-    }
-    if (msg.includes('401') || msg.includes('Unauthorized')) {
-      return 'Phiên làm việc đã hết hạn, vui lòng đăng nhập lại';
-    }
-    if (msg.includes('403') || msg.includes('Forbidden')) {
-      return 'Bạn không có quyền thực hiện hành động này';
-    }
-    if (msg.includes('Network') || msg.includes('Failed to fetch')) {
-      return 'Lỗi kết nối, vui lòng kiểm tra internet';
-    }
-    if (msg.includes('timeout')) {
-      return 'Yêu cầu quá lâu, vui lòng thử lại';
-    }
-    return msg;
+    return normalizeBackendMessage(error.message);
   }
 
   if (typeof error === 'string') {
-    return error;
+    return normalizeBackendMessage(error);
   }
 
   return 'Có lỗi xảy ra, vui lòng thử lại';
+}
+
+const EXACT_MESSAGE_MAP: Record<string, string> = {
+  'Khong xac dinh duoc dia chi socket. Vui long cau hinh EXPO_PUBLIC_API_URL hoac EXPO_PUBLIC_SOCKET_URL.':
+    'Không xác định được địa chỉ socket. Vui lòng cấu hình EXPO_PUBLIC_API_URL hoặc EXPO_PUBLIC_SOCKET_URL.',
+  'Danh dau thong bao da doc that bai': 'Đánh dấu thông báo đã đọc thất bại',
+};
+
+export function normalizeBackendMessage(rawMessage: string): string {
+  const message = String(rawMessage || '').trim();
+  if (!message) {
+    return 'Có lỗi xảy ra, vui lòng thử lại';
+  }
+
+  if (EXACT_MESSAGE_MAP[message]) {
+    return EXACT_MESSAGE_MAP[message];
+  }
+
+  const lower = message.toLowerCase();
+
+  if (message.includes('404') || lower.includes('not found')) {
+    return 'Không tìm thấy dữ liệu';
+  }
+
+  if (
+    message.includes('401') ||
+    lower.includes('unauthorized') ||
+    lower.includes('token expired') ||
+    lower.includes('jwt expired') ||
+    lower.includes('invalid token')
+  ) {
+    return 'Phiên làm việc đã hết hạn, vui lòng đăng nhập lại';
+  }
+
+  if (
+    message.includes('403') ||
+    lower.includes('forbidden') ||
+    lower.includes('permission denied') ||
+    lower.includes('not allowed') ||
+    lower.includes('khong co quyen')
+  ) {
+    return 'Bạn không có quyền thực hiện hành động này';
+  }
+
+  if (
+    lower.includes('must be checked_in at this location before handling task') ||
+    (lower.includes('checked_in') && lower.includes('before handling task'))
+  ) {
+    return 'Bạn phải CHECK-IN tại địa điểm này trước khi xử lý nhiệm vụ';
+  }
+
+  if (
+    lower.includes('network') ||
+    lower.includes('failed to fetch') ||
+    lower.includes('econnaborted') ||
+    lower.includes('timeout') ||
+    lower.includes('socket hang up')
+  ) {
+    return 'Lỗi kết nối, vui lòng kiểm tra internet và thử lại';
+  }
+
+  if (
+    message.includes('500') ||
+    lower.includes('internal server error') ||
+    lower.includes('service unavailable')
+  ) {
+    return 'Hệ thống đang bận, vui lòng thử lại sau';
+  }
+
+  if (lower === 'socket error') {
+    return 'Lỗi kết nối thời gian thực';
+  }
+
+  return message
+    .replace(/khong/gi, 'không')
+    .replace(/duoc/gi, 'được')
+    .replace(/vui long/gi, 'vui lòng')
+    .replace(/dang nhap/gi, 'đăng nhập')
+    .replace(/that bai/gi, 'thất bại')
+    .replace(/thanh cong/gi, 'thành công')
+    .replace(/xac dinh/gi, 'xác định')
+    .replace(/dia chi/gi, 'địa chỉ')
+    .replace(/thong bao/gi, 'thông báo')
+    .replace(/da doc/gi, 'đã đọc')
+    .replace(/khong the/gi, 'không thể');
 }
 
 export function isNetworkError(error: unknown): boolean {

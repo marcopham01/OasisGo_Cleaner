@@ -21,7 +21,7 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <Text style={[styles.screenTitle, { color: palette.text }]}>My task</Text>
+      <Text style={[styles.screenTitle, { color: palette.text }]}>Nhiệm vụ của tôi</Text>
       <TasksTab token={token} isDark={theme === 'dark'} palette={palette} />
     </View>
   );

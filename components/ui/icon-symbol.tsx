@@ -17,6 +17,8 @@ const MAPPING = {
   'house.fill': 'home',
   'paperplane.fill': 'send',
   'list.bullet.rectangle.fill': 'view-list',
+  'calendar.badge.clock': 'schedule',
+  'clock.badge.checkmark': 'fact-check',
   'clock.arrow.circlepath': 'history',
   'person.crop.circle.fill': 'person',
   'chevron.left.forwardslash.chevron.right': 'code',

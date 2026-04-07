@@ -122,7 +122,86 @@ function taskBookingWindow(task: CleaningTask, bookingTimeMap: Record<string, Bo
   };
 }
 
+function taskLocationDisplayName(task: CleaningTask) {
+  return String(task.location_name || '').trim();
+}
+
+function resolvedPodLabel(task: CleaningTask, podNameMap: Record<string, string>) {
+  const podId = String(task.pod_id || '').trim();
+  const value = String(podNameMap[podId] || taskPodDisplayName(task) || '').trim();
+  if (value) return value;
+  if (podId) return `Pod ${podId}`;
+  return 'Pod chưa xác định';
+}
+
+function resolvedClusterOrLocationLabel(
+  task: CleaningTask,
+  podClusterNameMap: Record<string, string>,
+) {
+  const podId = String(task.pod_id || '').trim();
+  const clusterName = String(
+    podClusterNameMap[podId] || taskClusterDisplayName(task) || taskLocationDisplayName(task) || '',
+  ).trim();
+  if (clusterName) return clusterName;
+
+  const locationId = String(task.location_id || '').trim();
+  if (locationId) return `Vị trí ${locationId}`;
+  return 'Chưa có cụm/vị trí';
+}
+
+function resolvedBookingLabel(task: CleaningTask, bookingNameMap: Record<string, string>) {
+  const bookingId = String(task.booking_id || '').trim();
+  const value = String(
+    bookingNameMap[bookingId] ||
+      taskBookingDisplayName(task) ||
+      task.booking_guest_name ||
+      '',
+  ).trim();
+
+  if (value) return value;
+  if (bookingId) return `Booking ${bookingId}`;
+  return 'Không có booking';
+}
+
+function resolvedDueText(task: CleaningTask, bookingWindow: BookingTimeWindow) {
+  return String(
+    task.due_at ||
+    bookingWindow.end_time ||
+    task.booking_end_time ||
+    task.assigned_at ||
+    task.created_at ||
+    ''
+  );
+}
+
 const ACTIVE_STATUSES = new Set(['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS']);
+const TASKS_PAGE_SIZE = 8;
+
+function dateKey(value?: string) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function resolveTaskDateTime(task: CleaningTask) {
+  return String(
+    task.due_at ||
+      task.booking_end_time ||
+      task.booking_start_time ||
+      task.assigned_at ||
+      task.created_at ||
+      '',
+  ).trim();
+}
+
+function isTaskToday(task: CleaningTask) {
+  return dateKey(resolveTaskDateTime(task)) === dateKey(new Date().toISOString());
+}
 
 function statusBadgeBackground(status: string, isDark: boolean) {
   const normalized = status.toUpperCase();
@@ -172,6 +251,7 @@ export default function TasksTab({
   const [draftStatusFilter, setDraftStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
   const [draftSourceFilter, setDraftSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
   const [draftSortFilter, setDraftSortFilter] = useState<'newest' | 'oldest'>('newest');
+  const [currentPage, setCurrentPage] = useState(1);
   const searchAnimation = useRef(new Animated.Value(0)).current;
 
   const filteredTasks = useMemo<CleaningTask[]>(() => {
@@ -186,13 +266,20 @@ export default function TasksTab({
         bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '',
       ).toLowerCase();
       const clusterDisplay = String(
-        podClusterNameMap[String(task.pod_id || '')] || taskClusterDisplayName(task) || '',
+        podClusterNameMap[String(task.pod_id || '')] ||
+          taskClusterDisplayName(task) ||
+          taskLocationDisplayName(task) ||
+          '',
       ).toLowerCase();
+      const bookingGuestDisplay = String(task.booking_guest_name || '').toLowerCase();
+      const locationDisplay = String(task.location_name || '').toLowerCase();
 
       return (
         podDisplay.includes(search) ||
         clusterDisplay.includes(search) ||
         bookingDisplay.includes(search) ||
+        bookingGuestDisplay.includes(search) ||
+        locationDisplay.includes(search) ||
         String(task.pod_id || '').toLowerCase().includes(search) ||
         String(task.booking_id || '').toLowerCase().includes(search) ||
         String(task.status || '').toLowerCase().includes(search)
@@ -200,11 +287,32 @@ export default function TasksTab({
     });
 
     return [...bySearch].sort((a, b) => {
-      const aTime = new Date(String(a.due_at || a.created_at || '')).getTime() || 0;
-      const bTime = new Date(String(b.due_at || b.created_at || '')).getTime() || 0;
+      const aIsToday = isTaskToday(a);
+      const bIsToday = isTaskToday(b);
+
+      if (aIsToday !== bIsToday) {
+        return aIsToday ? -1 : 1;
+      }
+
+      const aTime = new Date(resolveTaskDateTime(a)).getTime() || 0;
+      const bTime = new Date(resolveTaskDateTime(b)).getTime() || 0;
       return sortFilter === 'newest' ? bTime - aTime : aTime - bTime;
     });
   }, [tasks, searchQuery, sortFilter, podNameMap, podClusterNameMap, bookingNameMap]);
+
+  const todayTaskCount = useMemo(() => {
+    return filteredTasks.filter((task) => isTaskToday(task)).length;
+  }, [filteredTasks]);
+
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredTasks.length / TASKS_PAGE_SIZE));
+  }, [filteredTasks.length]);
+
+  const pagedTasks = useMemo(() => {
+    const safePage = Math.max(1, Math.min(currentPage, totalPages));
+    const start = (safePage - 1) * TASKS_PAGE_SIZE;
+    return filteredTasks.slice(start, start + TASKS_PAGE_SIZE);
+  }, [currentPage, filteredTasks, totalPages]);
 
   const activeCount = useMemo(() => {
     return tasks.filter((task) => ACTIVE_STATUSES.has(String(task.status || '').toUpperCase())).length;
@@ -262,6 +370,16 @@ export default function TasksTab({
       useNativeDriver: false,
     }).start();
   }, [isSearchOpen, searchAnimation]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, sourceFilter, sortFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   useEffect(() => {
     let isMounted = true;
@@ -332,6 +450,11 @@ export default function TasksTab({
             podIds.map(async (podId) => {
               try {
                 const pod = await getPodById(token, podId);
+
+                if (!pod) {
+                  return [podId, { podName: '', clusterName: '' }] as const;
+                }
+
                 const podRecord = pod as {
                   name?: string;
                   code?: string;
@@ -470,16 +593,16 @@ export default function TasksTab({
           ]}>
           <View style={styles.summaryRow}>
             <View>
-              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ASSIGNED</Text>
-              <Text style={[styles.summaryValue, { color: palette.white }]}>{assignedCount} Pods</Text>
+              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐÃ PHÂN CÔNG</Text>
+              <Text style={[styles.summaryValue, { color: palette.white }]}>{assignedCount} Pod</Text>
             </View>
             <View style={styles.summaryRight}>
-              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ACTIVE</Text>
+              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐANG HOẠT ĐỘNG</Text>
               <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>{activeCount}</Text>
             </View>
           </View>
 
-          <Text style={[styles.title, { color: palette.white }]}>My task</Text>
+          <Text style={[styles.title, { color: palette.white }]}>Nhiệm vụ của tôi</Text>
           <Text style={[styles.subtitle, { color: palette.primaryLight }]}>Quản lý task theo trạng thái và nguồn yêu cầu</Text>
         </View>
 
@@ -492,14 +615,14 @@ export default function TasksTab({
               size={20}
               color={palette.text}
             />
-            <Text style={[styles.iconButtonText, { color: palette.text }]}>Search</Text>
+            <Text style={[styles.iconButtonText, { color: palette.text }]}>Tìm kiếm</Text>
           </Pressable>
 
           <Pressable
             style={[styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
             onPress={openFilterModal}>
             <MaterialIcons name="tune" size={20} color={palette.text} />
-            <Text style={[styles.iconButtonText, { color: palette.text }]}>Filter</Text>
+            <Text style={[styles.iconButtonText, { color: palette.text }]}>Bộ lọc</Text>
           </Pressable>
         </View>
 
@@ -510,9 +633,10 @@ export default function TasksTab({
               height: searchContainerHeight,
               opacity: searchContainerOpacity,
               transform: [{ translateY: searchContainerTranslateY }],
+              pointerEvents: isSearchOpen ? 'auto' : 'none',
             },
           ]}
-          pointerEvents={isSearchOpen ? 'auto' : 'none'}>
+          >
           <TextInput
             style={[
               styles.input,
@@ -520,7 +644,7 @@ export default function TasksTab({
             ]}
             value={searchQuery}
             onChangeText={setSearchQuery}
-            placeholder="Tìm task theo pod, booking, trạng thái..."
+            placeholder="Tìm nhiệm vụ theo pod, booking, trạng thái..."
             placeholderTextColor={palette.neutral500}
             autoCapitalize="none"
           />
@@ -528,14 +652,19 @@ export default function TasksTab({
 
         <View style={styles.activeFilterRow}>
           <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
-            Status: {statusFilter === 'ALL' ? 'Tất cả' : statusLabel(statusFilter)}
+            Trạng thái: {statusFilter === 'ALL' ? 'Tất cả' : statusLabel(statusFilter)}
           </Text>
           <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
-            Source: {sourceFilter === 'ALL' ? 'Tất cả' : sourceFilter.replace(/_/g, ' ')}
+            Nguồn: {sourceFilter === 'ALL' ? 'Tất cả' : sourceFilter.replace(/_/g, ' ')}
           </Text>
           <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
-            Sort: {sortFilter === 'newest' ? 'Mới nhất' : 'Cũ nhất'}
+            Sắp xếp: {sortFilter === 'newest' ? 'Mới nhất' : 'Cũ nhất'}
           </Text>
+        </View>
+
+        <View style={styles.paginationSummaryRow}>
+          <Text style={[styles.paginationSummaryText, { color: palette.textMuted }]}>Tổng: {filteredTasks.length} task</Text>
+          <Text style={[styles.paginationSummaryText, { color: palette.primary }]}>Hôm nay: {todayTaskCount}</Text>
         </View>
 
         {error && (
@@ -549,10 +678,14 @@ export default function TasksTab({
         ) : filteredTasks.length === 0 ? (
           <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có task nào.</Text>
         ) : (
-          filteredTasks.map((task) => {
+          pagedTasks.map((task) => {
             const status = String(task.status || 'UNKNOWN');
             const key = taskId(task);
             const bookingWindow = taskBookingWindow(task, bookingTimeMap);
+            const podLabel = resolvedPodLabel(task, podNameMap);
+            const clusterOrLocationLabel = resolvedClusterOrLocationLabel(task, podClusterNameMap);
+            const bookingLabel = resolvedBookingLabel(task, bookingNameMap);
+            const dueText = resolvedDueText(task, bookingWindow);
 
             return (
               <Pressable
@@ -567,7 +700,7 @@ export default function TasksTab({
                     <View style={styles.cardHeader}>
                       <View style={styles.cardTitleWrap}>
                         <Text style={[styles.cardTitle, { color: palette.primaryDark }]}> 
-                          {podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || 'Pod Example'}
+                          {podLabel}
                         </Text>
                         <View
                           style={[
@@ -585,7 +718,13 @@ export default function TasksTab({
                       <View style={styles.metaLine}>
                         <MaterialIcons name="apartment" size={16} color={palette.neutral500} />
                         <Text style={[styles.meta, { color: palette.textMuted }]}> 
-                          {podClusterNameMap[String(task.pod_id || '')] || taskClusterDisplayName(task) || 'Cluster Example'}
+                          {clusterOrLocationLabel}
+                        </Text>
+                      </View>
+                      <View style={styles.metaLine}>
+                        <MaterialIcons name="event-note" size={16} color={palette.neutral500} />
+                        <Text style={[styles.meta, { color: palette.textMuted }]}>
+                          {bookingLabel}
                         </Text>
                       </View>
                       <View style={styles.metaLine}>
@@ -597,7 +736,7 @@ export default function TasksTab({
                       <View style={styles.metaLine}>
                         <MaterialIcons name="schedule" size={16} color={palette.neutral500} />
                         <Text style={[styles.meta, { color: palette.textMuted }]}> 
-                          Due {formatDateTime(task.due_at || bookingWindow.end_time)}
+                          Hạn chót: {formatDateTime(dueText)}
                         </Text>
                       </View>
                     </View>
@@ -611,6 +750,44 @@ export default function TasksTab({
             );
           })
         )}
+
+        {!loading && filteredTasks.length > 0 ? (
+          <View style={styles.paginationRow}>
+            <Pressable
+              style={[
+                styles.pageButton,
+                {
+                  backgroundColor: currentPage <= 1 ? palette.neutral300 : palette.surface,
+                  borderColor: palette.border,
+                },
+              ]}
+              disabled={currentPage <= 1}
+              onPress={() => setCurrentPage((prev) => Math.max(1, prev - 1))}>
+              <Text style={[styles.pageButtonText, { color: currentPage <= 1 ? palette.textMuted : palette.text }]}>Trang trước</Text>
+            </Pressable>
+
+            <Text style={[styles.pageText, { color: palette.text }]}>Trang {Math.min(currentPage, totalPages)}/{totalPages}</Text>
+
+            <Pressable
+              style={[
+                styles.pageButton,
+                {
+                  backgroundColor: currentPage >= totalPages ? palette.neutral300 : palette.surface,
+                  borderColor: palette.border,
+                },
+              ]}
+              disabled={currentPage >= totalPages}
+              onPress={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}>
+              <Text
+                style={[
+                  styles.pageButtonText,
+                  { color: currentPage >= totalPages ? palette.textMuted : palette.text },
+                ]}>
+                Trang sau
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <Modal visible={isFilterModalOpen} transparent animationType="fade" onRequestClose={() => setIsFilterModalOpen(false)}>
@@ -623,7 +800,7 @@ export default function TasksTab({
               </Pressable>
             </View>
 
-            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Status</Text>
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Trạng thái</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
               {(['ALL', ...CLEANING_TASK_STATUSES] as const).map((status) => {
                 const active = draftStatusFilter === status;
@@ -646,7 +823,7 @@ export default function TasksTab({
               })}
             </ScrollView>
 
-            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Request Source</Text>
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Nguồn yêu cầu</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
               {(['ALL', ...CLEANING_REQUEST_SOURCES] as const).map((source) => {
                 const active = draftSourceFilter === source;
@@ -699,7 +876,7 @@ export default function TasksTab({
               <Pressable
                 style={[styles.modalButton, { backgroundColor: palette.neutral300 }]}
                 onPress={resetFilterModal}>
-                <Text style={[styles.modalButtonText, { color: palette.neutral800 }]}>Reset</Text>
+                <Text style={[styles.modalButtonText, { color: palette.neutral800 }]}>Đặt lại</Text>
               </Pressable>
               <Pressable
                 style={[styles.modalButton, { backgroundColor: palette.primary }]}
@@ -804,6 +981,16 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     fontWeight: '600',
   },
+  paginationSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  paginationSummaryText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
   filterLabel: {
     fontSize: 12,
     fontWeight: '600',
@@ -896,6 +1083,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: Fonts.sans,
     paddingVertical: spacingY._15,
+  },
+  paginationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacingX._10,
+    marginTop: spacingY._5,
+  },
+  pageButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingVertical: spacingY._10,
+    alignItems: 'center',
+  },
+  pageButtonText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
+  },
+  pageText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
   },
   card: {
     borderWidth: 1,

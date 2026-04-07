@@ -23,7 +23,135 @@ export type ShiftAssignmentStatus = 'ASSIGNED' | 'CHECKED_IN' | 'COMPLETED' | 'A
 export type CleaningPhotoType = 'BEFORE' | 'AFTER';
 export type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type IncidentStatus = 'PENDING' | 'INVESTIGATING' | 'RESOLVED' | 'CLOSED';
+export type IncidentType = 'OPERATIONAL' | 'DAMAGE_REPORT';
+export type DamageType = 'BROKEN' | 'SCRATCHED' | 'LOST' | 'STAINED';
 export type LostFoundStatus = 'FOUND' | 'STORED' | 'CLAIMED' | 'DISPOSED';
+
+export const CLEANER_NOTIFICATION_TYPES = [
+  'BOOKING',
+  'PAYMENT',
+  'PROMOTION',
+  'SYSTEM',
+  'IDENTITY',
+  'CLEANING',
+  'SHIFT',
+  'INVENTORY',
+  'SUPPORT',
+  'INCIDENT',
+] as const;
+
+export type CleanerNotificationType = (typeof CLEANER_NOTIFICATION_TYPES)[number];
+
+export const CLEANER_NOTIFICATION_EVENT_CODES = [
+  'BOOKING_CANCELLED',
+  'BOOKING_CHECKIN',
+  'BOOKING_CHECKOUT',
+  'BOOKING_AUTO_CHECKIN',
+  'BOOKING_AUTO_CHECKOUT',
+  'BOOKING_NO_SHOW',
+  'BOOKING_REMINDER',
+  'PAYMENT_SUCCESS',
+  'PAYMENT_PENDING_REMAINING',
+  'PAYMENT_REFUND_SUCCESS',
+  'PROMOTION_BROADCAST',
+  'SYSTEM_TEST',
+  'SYSTEM_GENERAL',
+  'IDENTITY_VERIFIED',
+  'CLEANING_TASK_ASSIGNED',
+  'CLEANING_TASK_SLA_REMINDER',
+  'CLEANING_TASK_CANCELLED_NO_SHOW',
+  'SUPPORT_CLEANING_REQUEST',
+  'SHIFT_ASSIGNED',
+  'SHIFT_START_REMINDER',
+  'INVENTORY_CHECKOUT_CONFIRMED',
+  'INCIDENT_REPORTED',
+  'INCIDENT_RESOLVED',
+  'POD_AUTO_MIGRATION_ALERT',
+  'BOOKING_AUTO_MIGRATED',
+  'SUPPORT_ESCALATED',
+  'SUPPORT_ROOM_CHANGED',
+] as const;
+
+export type CleanerNotificationEventCode = (typeof CLEANER_NOTIFICATION_EVENT_CODES)[number];
+
+export const CLEANER_NOTIFICATION_DELIVERY_STATUSES = [
+  'PENDING',
+  'SENT',
+  'FAILED',
+  'SKIPPED_NO_TOKEN',
+] as const;
+
+export type CleanerNotificationDeliveryStatus =
+  (typeof CLEANER_NOTIFICATION_DELIVERY_STATUSES)[number];
+
+export interface CleanerNotification {
+  id?: string;
+  _id?: string;
+  user_id?: string;
+  title: string;
+  message: string;
+  type?: CleanerNotificationType | string;
+  event_code?: CleanerNotificationEventCode | string;
+  delivery_status?: CleanerNotificationDeliveryStatus | string;
+  is_read?: boolean;
+  read_at?: string | null;
+  data?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+  sent_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface CleanerNotificationQuery {
+  page?: number;
+  limit?: number;
+  is_read?: boolean;
+  type?: CleanerNotificationType | string;
+  event_code?: CleanerNotificationEventCode | string;
+}
+
+export interface CleanerNotificationListResponse {
+  data: CleanerNotification[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
+}
+
+export interface CleanerUnreadCountResponse {
+  unread_count: number;
+}
+
+export interface CleanerMarkAllReadResponse {
+  matched_count: number;
+  modified_count: number;
+}
+
+export interface CleanerRealtimeNotification {
+  user_id?: string;
+  sent_at?: string;
+  event?: CleanerNotificationEventCode | string;
+  payload?: {
+    title?: string;
+    message?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface IncidentDamagedItem {
+  incident_id?: string;
+  item_id: string;
+  item_name_snapshot?: string | null;
+  unit_cost_snapshot?: number | null;
+  quantity_damaged?: number;
+  total_damage_cost?: number | null;
+  damage_type?: DamageType | string;
+  note?: string | null;
+  [key: string]: unknown;
+}
 
 export interface ShiftInfo {
   id?: string;
@@ -65,6 +193,38 @@ export interface StaffShiftAssignmentQuery {
   from_date?: string;
   to_date?: string;
   status?: string;
+}
+
+export type StaffAttendanceAction = 'CHECKIN' | 'CHECKOUT';
+
+export interface StaffAttendanceLog {
+  id?: string;
+  _id?: string;
+  staff_id?: string;
+  shift_assignment_id?: string;
+  action?: StaffAttendanceAction | string;
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface StaffAttendanceLogQuery {
+  action?: StaffAttendanceAction | string;
+  from_date?: string;
+  to_date?: string;
+  shift_assignment_id?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface StaffAttendanceLogListResponse {
+  data: StaffAttendanceLog[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  } | null;
 }
 
 export interface StaffWorkRoster {
@@ -173,6 +333,16 @@ export interface Incident {
   description: string;
   severity?: IncidentSeverity | string;
   status?: IncidentStatus | string;
+  incident_type?: IncidentType | string;
+  damaged_items?: IncidentDamagedItem[];
+  item_id?: string | null;
+  item_name_snapshot?: string | null;
+  unit_cost_snapshot?: number | null;
+  quantity_affected?: number | null;
+  estimated_item_value?: number | null;
+  estimated_service_fee?: number | null;
+  estimated_total_value?: number | null;
+  pricing_source?: string | null;
   has_lost_found?: boolean;
   photo_urls?: string[];
   created_at?: string;
@@ -180,11 +350,115 @@ export interface Incident {
   [key: string]: unknown;
 }
 
-export interface CreateIncidentFromCleaningTaskPayload {
+export interface CreateOperationalIncidentPayload {
   cleaning_task_id: string;
   description: string;
   severity?: IncidentSeverity;
   local_uris: string[];
+}
+
+export interface CreateIncidentFromCleaningTaskPayload extends CreateOperationalIncidentPayload {}
+
+/**
+ * Deprecated: Use CreateOperationalIncidentPayload instead.
+ * Kept for backward compatibility.
+ */
+
+export interface DamageReportItem {
+  id?: string;
+  name?: string;
+  unit_cost?: number;
+  is_active?: boolean;
+  [key: string]: unknown;
+}
+
+export interface CreateDamageReportPayload {
+  cleaning_task_id?: string;
+  pod_id?: string;
+  booking_id?: string;
+  description: string;
+  damaged_items?: Array<{
+    item_id: string;
+    quantity_damaged?: number;
+    damage_type?: DamageType;
+    note?: string;
+  }>;
+  // Legacy fallback fields supported by backend.
+  item_id?: string;
+  quantity_damaged?: number;
+  quantity_affected?: number;
+  damage_type?: DamageType;
+  note?: string;
+  estimated_service_fee?: number;
+  severity?: IncidentSeverity;
+  local_uris: string[];
+}
+
+export interface DamageReportResponse {
+  report_id?: string;
+  incident_type?: 'DAMAGE_REPORT' | string;
+  status?: IncidentStatus | string;
+  severity?: IncidentSeverity | string;
+  description?: string;
+  context?: {
+    pod_id?: string | null;
+    pod_name?: string | null;
+    booking_id?: string | null;
+    cleaning_task_id?: string | null;
+    reported_by?: string | null;
+    user_id?: string | null;
+    user_name?: string | null;
+    cleaner_name?: string | null;
+    [key: string]: unknown;
+  };
+  item?: {
+    item_id?: string | null;
+    item_name_snapshot?: string | null;
+    unit_cost_snapshot?: number | null;
+    quantity_affected?: number | null;
+    [key: string]: unknown;
+  };
+  damaged_items?: IncidentDamagedItem[];
+  pricing?: {
+    estimated_item_value?: number;
+    estimated_service_fee?: number;
+    estimated_total_value?: number;
+    currency?: string;
+    pricing_source?: string | null;
+    [key: string]: unknown;
+  };
+  photo_urls?: string[];
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface IncidentQuery {
+  pod_id?: string;
+  pod_ids?: string;
+  cleaning_task_id?: string;
+  booking_id?: string;
+  reported_by?: string;
+  incident_type?: IncidentType | string;
+  item_id?: string;
+  severity?: IncidentSeverity | string;
+  status?: IncidentStatus | string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface PaginationInfo {
+  current_page: number;
+  total_pages: number;
+  total_items: number;
+  items_per_page: number;
+}
+
+export interface DamageReportListResponse {
+  items: DamageReportResponse[];
+  pagination: PaginationInfo | null;
 }
 
 export interface LostFoundItem {
@@ -245,6 +519,30 @@ export interface BookingDetails {
   status?: string;
   cleaner_access_allowed?: boolean;
   checkin_state?: string;
+  [key: string]: unknown;
+}
+
+export interface CleanerOnlineKey {
+  id?: string;
+  booking_id?: string;
+  pod_id?: string;
+  user_id?: string;
+  key_type?: string;
+  key_token?: string;
+  valid_from?: string;
+  valid_to?: string;
+  is_revoked?: boolean;
+  role?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface MyCleanerKeyByBookingData {
+  booking_id?: string;
+  booking_status?: string;
+  booking_checkin_state?: string;
+  online_key?: CleanerOnlineKey;
   [key: string]: unknown;
 }
 

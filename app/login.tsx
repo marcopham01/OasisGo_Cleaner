@@ -81,10 +81,17 @@ export default function LoginScreen() {
           {
             backgroundColor: palette.card,
             borderColor: palette.border,
-            shadowColor: palette.black,
+            ...Platform.select({
+              web: {
+                boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.08)',
+              },
+              default: {
+                shadowColor: palette.black,
+              },
+            }),
           },
         ]}>
-        <Text style={[styles.title, { color: palette.primary }]}>Cleaner Login</Text>
+        <Text style={[styles.title, { color: palette.primary }]}>Đăng nhập Cleaner</Text>
         <Text style={[styles.subtitle, { color: palette.textMuted }]}>Chỉ tài khoản có role Cleaner mới được phép đăng nhập ứng dụng.</Text>
 
         <View style={styles.formGroup}>
@@ -109,7 +116,7 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.formGroup}>
-          <Text style={[styles.label, { color: palette.text }]}>Password</Text>
+          <Text style={[styles.label, { color: palette.text }]}>Mật khẩu</Text>
           <TextInput
             secureTextEntry
             placeholder="Nhập mật khẩu"
@@ -158,9 +165,16 @@ const styles = StyleSheet.create({
     borderRadius: radius._17,
     borderWidth: 1,
     padding: spacingX._20,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.08)',
+      },
+      default: {
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.08,
+        shadowRadius: 20,
+      },
+    }),
     elevation: 4,
   },
   title: {

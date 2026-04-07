@@ -15,20 +15,26 @@ import {
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
+    checkinBookingWithCleanerKey,
     createCleaningPhoto,
-    createIncidentFromCleaningTask,
+    createDamageReport,
+    createOperationalIncident,
     getBookingById,
     getCleaningPhotos,
     getCleaningTaskById,
+    getDamageReportItems,
     getIncidentsByCleaningTaskId,
+    getMyCleanerKeyByBookingId,
     getPodById,
     updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import type {
+    CleanerOnlineKey,
     CleanerTaskAction,
     CleaningPhoto,
     CleaningPhotoType,
     CleaningTask,
+    DamageReportItem,
     Incident,
     IncidentSeverity,
 } from '@/types/cleaner-dashboard';
@@ -44,6 +50,11 @@ interface TaskDetailTabProps {
   onErrorChange?: (error: string | null) => void;
 }
 
+type BookingTimeWindow = {
+  start_time?: string;
+  end_time?: string;
+};
+
 function formatDateTime(dateText?: string) {
   if (!dateText) return '-';
   const parsed = new Date(dateText);
@@ -56,6 +67,24 @@ function formatDateTime(dateText?: string) {
         hour: '2-digit',
         minute: '2-digit',
       });
+}
+
+function formatVnd(value?: number | null) {
+  if (!Number.isFinite(value)) return '-';
+  return new Intl.NumberFormat('vi-VN').format(Number(value)) + ' VND';
+}
+
+function parsePositiveInteger(value: string, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function parseNonNegativeAmount(value: string, fallback = 0) {
+  const normalized = value.replace(/[^\d]/g, '');
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
 }
 
 function taskActionPayload(action: CleanerTaskAction, rejectionReason: string) {
@@ -71,7 +100,7 @@ function taskActionPayload(action: CleanerTaskAction, rejectionReason: string) {
     case 'reject':
       return {
         status: 'CANCELLED' as const,
-        rejection_reason: rejectionReason.trim() || 'Cleaner rejected task',
+        rejection_reason: rejectionReason.trim() || 'Cleaner từ chối nhiệm vụ',
       };
     default:
       return {};
@@ -116,6 +145,36 @@ function shouldHidePermissionMessage(message: string) {
   return message.toLowerCase().includes('không có quyền');
 }
 
+function resolveStartActionError(err: any) {
+  const status = err?.response?.status || err?.statusCode;
+
+  if (status === 401) {
+    return {
+      title: 'Chưa đăng nhập',
+      message: 'Vui lòng đăng nhập lại để tiếp tục.',
+    };
+  }
+
+  if (status === 403) {
+    return {
+      title: 'Không có quyền',
+      message: 'Chủ nhân phòng chưa cho phép truy cập làm vệ sinh hoặc chưa tới giờ làm vệ sinh.',
+    };
+  }
+
+  if (status === 404) {
+    return {
+      title: 'Không tìm thấy booking/key',
+      message: 'Không tìm thấy booking hoặc bạn chưa được cấp cleaner key cho booking này.',
+    };
+  }
+
+  return {
+    title: 'Lỗi',
+    message: getErrorMessage(err),
+  };
+}
+
 function taskPodDisplayName(task: CleaningTask) {
   const podRecord = task.pod as { name?: string; code?: string } | undefined;
   return String(task.pod_name || podRecord?.name || task.pod_code || podRecord?.code || '').trim();
@@ -135,6 +194,104 @@ function taskBookingWindow(task: CleaningTask) {
   };
 }
 
+function normalizeId(value: unknown): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+
+  const lower = normalized.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') {
+    return '';
+  }
+
+  return normalized;
+}
+
+function maskKeyToken(keyToken?: string) {
+  const token = String(keyToken || '').trim();
+  if (!token) return '-';
+  if (token.length <= 10) return token;
+  return `${token.slice(0, 4)}...${token.slice(-4)}`;
+}
+
+function resolveOnlineKeyValidation(key: CleanerOnlineKey | null) {
+  if (!key?.key_token) {
+    return { status: 'MISSING', label: 'Chưa có key', detail: 'Chưa được cấp online key cho booking này.' };
+  }
+
+  if (key.is_revoked) {
+    return { status: 'REVOKED', label: 'Đã thu hồi', detail: 'Online key đã bị thu hồi.' };
+  }
+
+  const nowTime = Date.now();
+  const fromTime = key.valid_from ? new Date(key.valid_from).getTime() : Number.NaN;
+  const toTime = key.valid_to ? new Date(key.valid_to).getTime() : Number.NaN;
+
+  if (Number.isFinite(fromTime) && fromTime > nowTime) {
+    return { status: 'NOT_YET_VALID', label: 'Chưa tới hiệu lực', detail: 'Bạn chưa thể dùng key trước thời gian hiệu lực.' };
+  }
+
+  if (Number.isFinite(toTime) && toTime < nowTime) {
+    return { status: 'EXPIRED', label: 'Hết hạn', detail: 'Online key đã hết hạn.' };
+  }
+
+  return { status: 'VALID', label: 'Hợp lệ', detail: 'Online key đang trong thời gian hiệu lực.' };
+}
+
+function resolveOnlineKeyValidationWithAccess(
+  key: CleanerOnlineKey | null,
+  accessState: 'UNKNOWN' | 'OK' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'NOT_FOUND' | 'NO_BOOKING' | 'ERROR',
+) {
+  if (accessState === 'NO_BOOKING') {
+    return {
+      status: 'NO_BOOKING',
+      label: 'Không có booking',
+      detail: 'Task này không gắn booking nên không có online key.',
+    };
+  }
+
+  if (accessState === 'FORBIDDEN') {
+    return {
+      status: 'FORBIDDEN',
+      label: 'Chưa được phép xem',
+      detail: 'Bạn chưa được phép xem online key của booking này.',
+    };
+  }
+
+  if (accessState === 'UNAUTHORIZED') {
+    return {
+      status: 'UNAUTHORIZED',
+      label: 'Chưa đăng nhập',
+      detail: 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.',
+    };
+  }
+
+  if (accessState === 'NOT_FOUND') {
+    return {
+      status: 'NOT_FOUND',
+      label: 'Không tìm thấy booking/key',
+      detail: 'Không tìm thấy booking hoặc chưa được cấp online key.',
+    };
+  }
+
+  if (accessState === 'ERROR') {
+    return {
+      status: 'ERROR',
+      label: 'Lỗi tải key',
+      detail: 'Không thể tải thông tin online key lúc này.',
+    };
+  }
+
+  return resolveOnlineKeyValidation(key);
+}
+
+function resolveOnlineKeyAccessState(err: any) {
+  const status = err?.response?.status || err?.statusCode;
+  if (status === 401) return 'UNAUTHORIZED' as const;
+  if (status === 403) return 'FORBIDDEN' as const;
+  if (status === 404) return 'NOT_FOUND' as const;
+  return 'ERROR' as const;
+}
+
 export default function TaskDetailTab({
   token,
   taskId,
@@ -147,28 +304,47 @@ export default function TaskDetailTab({
   const [task, setTask] = useState<CleaningTask | null>(null);
   const [photos, setPhotos] = useState<CleaningPhoto[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [damageItems, setDamageItems] = useState<DamageReportItem[]>([]);
   const [podName, setPodName] = useState<string | null>(null);
   const [bookingName, setBookingName] = useState<string | null>(null);
+  const [bookingWindowOverride, setBookingWindowOverride] = useState<BookingTimeWindow | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastCleanerKey, setLastCleanerKey] = useState<CleanerOnlineKey | null>(null);
+  const [onlineKeyNotice, setOnlineKeyNotice] = useState<string | null>(null);
+  const [onlineKeyAccessState, setOnlineKeyAccessState] = useState<
+    'UNKNOWN' | 'OK' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'NOT_FOUND' | 'NO_BOOKING' | 'ERROR'
+  >('UNKNOWN');
 
   const [capturedPhotoUris, setCapturedPhotoUris] = useState<string[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [photoType, setPhotoType] = useState<CleaningPhotoType>('BEFORE');
-  const [captureMode, setCaptureMode] = useState<'CLEANING' | 'INCIDENT'>('CLEANING');
-  const [incidentDescription, setIncidentDescription] = useState('');
-  const [incidentSeverity, setIncidentSeverity] = useState<IncidentSeverity>('MEDIUM');
+  const [captureMode, setCaptureMode] = useState<'CLEANING' | 'OPERATIONAL_INCIDENT' | 'DAMAGE_REPORT'>('CLEANING');
+  
+  // Operational Incident State (báo cáo sự cố chung)
+  const [operationalIncidentDescription, setOperationalIncidentDescription] = useState('');
+  const [operationalIncidentSeverity, setOperationalIncidentSeverity] = useState<IncidentSeverity>('MEDIUM');
+  
+  // Damage Report State (báo cáo hư hại vật tư)
+  const [damageDescription, setDamageDescription] = useState('');
+  const [damageSeverity, setDamageSeverity] = useState<IncidentSeverity>('MEDIUM');
+  const [damageItemId, setDamageItemId] = useState('');
+  const [damageQuantityText, setDamageQuantityText] = useState('1');
+  const [damageServiceFeeText, setDamageServiceFeeText] = useState('0');
+  
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
   const taskStatus = String(task?.status || '').toUpperCase();
-  const isIncidentMode = captureMode === 'INCIDENT';
+  const isOperationalMode = captureMode === 'OPERATIONAL_INCIDENT';
+  const isDamageReportMode = captureMode === 'DAMAGE_REPORT';
+  const isIncidentMode = isOperationalMode || isDamageReportMode;
   const canReportIncident = taskStatus === 'IN_PROGRESS';
   const canAccessPhotoFlow =
     taskStatus === 'ACCEPTED' ||
@@ -178,14 +354,20 @@ export default function TaskDetailTab({
   const canCaptureCleaningPhotos = canAccessPhotoFlow && taskStatus !== 'DONE' && !isIncidentMode;
   const canCaptureIncidentPhotos = isIncidentMode && canReportIncident;
   const canCaptureNewPhotos = canCaptureCleaningPhotos || canCaptureIncidentPhotos;
+  const selectedDamageItem = damageItems.find((item) => String(item.id || '') === damageItemId) || null;
+  const damageQuantity = parsePositiveInteger(damageQuantityText, 1);
+  const damageServiceFee = parseNonNegativeAmount(damageServiceFeeText, 0);
+  const selectedUnitCost = Number(selectedDamageItem?.unit_cost) || 0;
+  const previewItemValue = selectedUnitCost * damageQuantity;
+  const previewPenaltyValue = previewItemValue + damageServiceFee;
 
   const openCamera = async () => {
     if (!task || !canCaptureNewPhotos) {
       Alert.alert(
         'Chưa thể chụp ảnh',
         isIncidentMode
-          ? 'Chỉ có thể báo cáo hư hại khi task đang ở trạng thái IN_PROGRESS.'
-          : 'Bạn cần bấm "Bắt đầu dọn" trước khi chụp ảnh task.',
+          ? 'Chỉ có thể báo cáo hư hại khi nhiệm vụ đang ở trạng thái IN_PROGRESS.'
+          : 'Bạn cần bấm "Bắt đầu dọn" trước khi chụp ảnh nhiệm vụ.',
       );
       return;
     }
@@ -227,8 +409,8 @@ export default function TaskDetailTab({
       Alert.alert(
         'Chưa thể thêm ảnh',
         isIncidentMode
-          ? 'Chỉ có thể báo cáo hư hại khi task đang ở trạng thái IN_PROGRESS.'
-          : 'Bạn cần bấm "Bắt đầu dọn" trước khi thêm ảnh task.',
+          ? 'Chỉ có thể báo cáo hư hại khi nhiệm vụ đang ở trạng thái IN_PROGRESS.'
+          : 'Bạn cần bấm "Bắt đầu dọn" trước khi thêm ảnh nhiệm vụ.',
       );
       return;
     }
@@ -275,8 +457,13 @@ export default function TaskDetailTab({
   useEffect(() => {
     if (!canReportIncident && isIncidentMode) {
       setCaptureMode('CLEANING');
-      setIncidentDescription('');
-      setIncidentSeverity('MEDIUM');
+      setOperationalIncidentDescription('');
+      setOperationalIncidentSeverity('MEDIUM');
+      setDamageDescription('');
+      setDamageSeverity('MEDIUM');
+      setDamageItemId('');
+      setDamageQuantityText('1');
+      setDamageServiceFeeText('0');
       setCapturedPhotoUris([]);
       setIsCameraOpen(false);
     }
@@ -301,14 +488,30 @@ export default function TaskDetailTab({
       setIncidents(incidentsData);
       setPodName(taskPodDisplayName(taskData) || null);
       setBookingName(taskBookingDisplayName(taskData) || null);
+      setBookingWindowOverride(taskBookingWindow(taskData));
+      setLastCleanerKey(null);
+      setOnlineKeyNotice(null);
+      setOnlineKeyAccessState('UNKNOWN');
+
+      if (damageItems.length === 0) {
+        try {
+          const items = await getDamageReportItems(token);
+          setDamageItems(items.filter((item) => String(item.id || '').trim()));
+        } catch {
+          // Keep UI usable even if item list endpoint is unavailable.
+          setDamageItems([]);
+        }
+      }
 
       const podId = String(taskData.pod_id || '').trim();
-      const bookingId = String(taskData.booking_id || '').trim();
+      const bookingId = normalizeId(taskData.booking_id);
 
       if (podId) {
         try {
           const pod = await getPodById(token, podId);
-          setPodName(String(pod.name || pod.code || '').trim() || null);
+          if (pod) {
+            setPodName(String(pod.name || pod.code || '').trim() || null);
+          }
         } catch {
           // Keep existing pod name resolved from task payload.
         }
@@ -318,9 +521,38 @@ export default function TaskDetailTab({
         try {
           const booking = await getBookingById(token, bookingId);
           setBookingName(String(booking.order_id || booking.id || '').trim() || null);
+          setBookingWindowOverride((prev) => {
+            const nextStart = String(booking.start_time || '').trim();
+            const nextEnd = String(booking.end_time || '').trim();
+
+            return {
+              start_time: nextStart || prev?.start_time,
+              end_time: nextEnd || prev?.end_time,
+            };
+          });
         } catch {
           // Keep existing booking name resolved from task payload.
         }
+
+        try {
+          const cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
+          const resolvedKey = cleanerKeyResult.online_key || null;
+          setLastCleanerKey(resolvedKey);
+          setOnlineKeyAccessState('OK');
+
+          if (!resolvedKey?.key_token) {
+            setOnlineKeyNotice('Chưa được cấp online key cho booking này.');
+          }
+        } catch (err: any) {
+          setLastCleanerKey(null);
+          setOnlineKeyAccessState(resolveOnlineKeyAccessState(err));
+          setOnlineKeyNotice(resolveStartActionError(err).message);
+        }
+      } else {
+        setBookingWindowOverride(null);
+        setLastCleanerKey(null);
+        setOnlineKeyAccessState('NO_BOOKING');
+        setOnlineKeyNotice('Task này không có booking nên không có online key.');
       }
 
       onErrorChange?.(null);
@@ -336,7 +568,7 @@ export default function TaskDetailTab({
     } finally {
       setLoading(false);
     }
-  }, [taskId, token, onErrorChange]);
+  }, [taskId, token, onErrorChange, damageItems.length]);
 
   useEffect(() => {
     loadDetail();
@@ -358,6 +590,51 @@ export default function TaskDetailTab({
     onErrorChange?.(null);
 
     try {
+      if (action === 'start') {
+        const bookingId = normalizeId(task.booking_id);
+
+        if (bookingId) {
+          try {
+            const cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
+            const keyToken = String(cleanerKeyResult.online_key?.key_token || '').trim();
+
+            if (!keyToken) {
+              setLastCleanerKey(cleanerKeyResult.online_key || null);
+              setOnlineKeyAccessState('OK');
+              setOnlineKeyNotice('Chưa được cấp online key cho booking này.');
+              Alert.alert('Không tìm thấy key', 'Bạn chưa được cấp cleaner key cho booking này. Hãy liên hệ quản lý hoặc thử lại sau.');
+              setActionLoading(false);
+              return;
+            }
+
+            try {
+              await checkinBookingWithCleanerKey(token, keyToken);
+              setLastCleanerKey(cleanerKeyResult.online_key || null);
+              setOnlineKeyAccessState('OK');
+              setOnlineKeyNotice(null);
+            } catch (err: any) {
+              const errorInfo = resolveStartActionError(err);
+              setError(errorInfo.message);
+              onErrorChange?.(errorInfo.message);
+              setOnlineKeyAccessState(resolveOnlineKeyAccessState(err));
+              setOnlineKeyNotice(errorInfo.message);
+              Alert.alert(errorInfo.title, errorInfo.message);
+              setActionLoading(false);
+              return;
+            }
+          } catch (err: any) {
+            const errorInfo = resolveStartActionError(err);
+            setError(errorInfo.message);
+            onErrorChange?.(errorInfo.message);
+            setOnlineKeyAccessState(resolveOnlineKeyAccessState(err));
+            setOnlineKeyNotice(errorInfo.message);
+            Alert.alert(errorInfo.title, errorInfo.message);
+            setActionLoading(false);
+            return;
+          }
+        }
+      }
+
       const payload = taskActionPayload(action, rejectionReason);
       const updated = await updateCleaningTask(token, taskId, payload);
 
@@ -369,13 +646,9 @@ export default function TaskDetailTab({
       Alert.alert('Thành công', `${getActionLabel(action)} thành công`);
     } catch (err) {
       const msg = getErrorMessage(err);
-      if (shouldHidePermissionMessage(msg)) {
-        setError(null);
-        onErrorChange?.(null);
-      } else {
-        setError(msg);
-        onErrorChange?.(msg);
-      }
+      setError(msg);
+      onErrorChange?.(msg);
+      Alert.alert('Lỗi', msg);
     } finally {
       setActionLoading(false);
     }
@@ -387,43 +660,92 @@ export default function TaskDetailTab({
       return;
     }
 
-    const normalizedIncidentDescription = incidentDescription.trim();
-    if (isIncidentMode && !normalizedIncidentDescription) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập mô tả hư hại trước khi gửi báo cáo.');
-      return;
-    }
-
     setUploadingPhoto(true);
     setError(null);
     onErrorChange?.(null);
 
     try {
-      if (isIncidentMode) {
-        await createIncidentFromCleaningTask(token, {
+      if (isOperationalMode) {
+        // OPERATIONAL INCIDENT: báo cáo sự cố chung
+        const normalizedDescription = operationalIncidentDescription.trim();
+        if (!normalizedDescription) {
+          Alert.alert('Thiếu thông tin', 'Vui lòng nhập mô tả sự cố trước khi gửi báo cáo.');
+          setUploadingPhoto(false);
+          return;
+        }
+
+        await createOperationalIncident(token, {
           cleaning_task_id: taskId,
-          description: normalizedIncidentDescription,
-          severity: incidentSeverity,
+          description: normalizedDescription,
+          severity: operationalIncidentSeverity,
           local_uris: capturedPhotoUris,
         });
 
+        const updatedIncidents = await getIncidentsByCleaningTaskId(token, taskId);
+        setIncidents(updatedIncidents);
+
         setCapturedPhotoUris([]);
-        setIncidentDescription('');
-        setIncidentSeverity('MEDIUM');
+        setOperationalIncidentDescription('');
+        setOperationalIncidentSeverity('MEDIUM');
         setCaptureMode('CLEANING');
         setIsCameraOpen(false);
         onErrorChange?.(null);
 
-        Alert.alert('Thành công', 'Đã gửi báo cáo hư hại cho task này.');
+        Alert.alert('Thành công', 'Đã gửi báo cáo sự cố cho nhiệm vụ này.');
+      } else if (isDamageReportMode) {
+        // DAMAGE REPORT: báo cáo hư hại vật tư có tính tiền
+        const normalizedDescription = damageDescription.trim();
+        if (!normalizedDescription) {
+          Alert.alert('Thiếu thông tin', 'Vui lòng nhập mô tả hư hại trước khi gửi báo cáo.');
+          setUploadingPhoto(false);
+          return;
+        }
+
+        const normalizedDamageItemId = damageItemId.trim();
+        if (!normalizedDamageItemId) {
+          Alert.alert('Thiếu thông tin', 'Vui lòng chọn món đồ bị hư hại.');
+          setUploadingPhoto(false);
+          return;
+        }
+
+        await createDamageReport(token, {
+          cleaning_task_id: taskId,
+          description: normalizedDescription,
+          damaged_items: [
+            {
+              item_id: normalizedDamageItemId,
+              quantity_damaged: damageQuantity,
+              damage_type: 'BROKEN',
+            },
+          ],
+          estimated_service_fee: damageServiceFee,
+          severity: damageSeverity,
+          local_uris: capturedPhotoUris,
+        });
+
+        const updatedIncidents = await getIncidentsByCleaningTaskId(token, taskId);
+        setIncidents(updatedIncidents);
+
+        setCapturedPhotoUris([]);
+        setDamageDescription('');
+        setDamageSeverity('MEDIUM');
+        setDamageItemId('');
+        setDamageQuantityText('1');
+        setDamageServiceFeeText('0');
+        setCaptureMode('CLEANING');
+        setIsCameraOpen(false);
+        onErrorChange?.(null);
+
+        Alert.alert('Thành công', 'Đã gửi báo cáo hư hại cho nhiệm vụ này.');
       } else {
-        await Promise.all(
-          capturedPhotoUris.map((uri) =>
-            createCleaningPhoto(token, {
-              cleaning_task_id: taskId,
-              local_uri: uri,
-              type: photoType,
-            }),
-          ),
-        );
+        // CLEANING PHOTOS: lưu ảnh BEFORE/AFTER
+        for (const uri of capturedPhotoUris) {
+          await createCleaningPhoto(token, {
+            cleaning_task_id: taskId,
+            local_uri: uri,
+            type: photoType,
+          });
+        }
 
         setCapturedPhotoUris([]);
         const updated = await getCleaningPhotos(token, taskId);
@@ -479,13 +801,22 @@ export default function TaskDetailTab({
   const canComplete = task.status === 'IN_PROGRESS';
   const canReject = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED'].includes(String(task.status || ''));
   const progress = progressStepState(task.status);
-  const bookingWindow = taskBookingWindow(task);
+  const bookingWindow = bookingWindowOverride || taskBookingWindow(task);
+  const onlineKeyValidation = resolveOnlineKeyValidationWithAccess(lastCleanerKey, onlineKeyAccessState);
+  const onlineKeyStatusColor =
+    onlineKeyValidation.status === 'VALID'
+      ? palette.success
+      : onlineKeyValidation.status === 'NOT_YET_VALID'
+        ? '#d97706'
+        : onlineKeyValidation.status === 'MISSING' || onlineKeyValidation.status === 'NO_BOOKING'
+          ? palette.textMuted
+          : palette.error;
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={[styles.title, { color: palette.text }]}>Chi tiết Task</Text>
+          <Text style={[styles.title, { color: palette.text }]}>Chi tiết nhiệm vụ</Text>
           <Pressable onPress={onClose} style={styles.closeButton}>
             <Text style={[styles.closeButtonText, { color: palette.text }]}>✕</Text>
           </Pressable>
@@ -503,32 +834,57 @@ export default function TaskDetailTab({
           <Text style={[styles.info, { color: palette.textMuted }]}>Trạng thái: {task.status}</Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>Pod: {podName || '-'}</Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking: {bookingName || '-'}
+            Đặt chỗ: {bookingName || '-'}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Source: {String(task.request_source || '-')}
+            Nguồn yêu cầu: {String(task.request_source || '-')}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Due: {formatDateTime(task.due_at || undefined)}
+            Hạn chót: {formatDateTime(task.due_at || undefined)}
           </Text>
           <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking Start: {formatDateTime(bookingWindow.start_time)}
+            Thời gian ở của khách: {`${formatDateTime(bookingWindow.start_time)} - ${formatDateTime(bookingWindow.end_time)}`}
           </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Booking End: {formatDateTime(bookingWindow.end_time)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Started (thuc te): {formatDateTime(task.start_time || undefined)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Completed (thuc te): {formatDateTime(task.end_time || undefined)}
-          </Text>
+        </View>
+
+        <View style={[styles.section, styles.onlineKeySection, { backgroundColor: palette.card, borderColor: palette.border }]}>
+          <View style={styles.onlineKeyHeaderRow}>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>Online key</Text>
+            <View style={[styles.onlineKeyBadge, { backgroundColor: `${onlineKeyStatusColor}22`, borderColor: onlineKeyStatusColor }]}>
+              <Text style={[styles.onlineKeyBadgeText, { color: onlineKeyStatusColor }]}>{onlineKeyValidation.label}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.onlineKeyCodeBox, { borderColor: palette.border, backgroundColor: palette.surface }]}>
+            <Text style={[styles.onlineKeyCodeLabel, { color: palette.textMuted }]}>Mã key</Text>
+            <Text style={[styles.onlineKeyCodeText, { color: palette.text }]}>{maskKeyToken(lastCleanerKey?.key_token)}</Text>
+          </View>
+
+          <View style={styles.onlineKeyMetaGrid}>
+            <View style={[styles.onlineKeyMetaCard, { borderColor: palette.border, backgroundColor: palette.surface }]}>
+              <Text style={[styles.onlineKeyMetaLabel, { color: palette.textMuted }]}>Hiệu lực từ</Text>
+              <Text style={[styles.onlineKeyMetaValue, { color: palette.text }]}>{formatDateTime(lastCleanerKey?.valid_from)}</Text>
+            </View>
+            <View style={[styles.onlineKeyMetaCard, { borderColor: palette.border, backgroundColor: palette.surface }]}>
+              <Text style={[styles.onlineKeyMetaLabel, { color: palette.textMuted }]}>Hiệu lực đến</Text>
+              <Text style={[styles.onlineKeyMetaValue, { color: palette.text }]}>{formatDateTime(lastCleanerKey?.valid_to)}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.onlineKeyValidationBox, { borderColor: palette.border, backgroundColor: palette.surface }]}>
+            <Text style={[styles.onlineKeyValidationLabel, { color: palette.textMuted }]}>Xác thực</Text>
+            <Text style={[styles.onlineKeyValidationValue, { color: palette.text }]}>{onlineKeyValidation.detail}</Text>
+          </View>
+
+          {onlineKeyNotice ? (
+            <Text style={[styles.onlineKeyNotice, { color: palette.error }]}>{onlineKeyNotice}</Text>
+          ) : null}
         </View>
 
         {/* Incidents Section */}
         {incidents.length > 0 && (
           <View style={[styles.section, { backgroundColor: `${palette.error}12`, borderColor: palette.error }]}>
-            <Text style={[styles.sectionTitle, { color: palette.error }]}>Báo cáo hư hại ({incidents.length})</Text>
+            <Text style={[styles.sectionTitle, { color: palette.error }]}>Báo cáo ({incidents.length})</Text>
             {incidents.map((incident) => {
               const severityColor = {
                 LOW: palette.success,
@@ -537,14 +893,27 @@ export default function TaskDetailTab({
                 CRITICAL: palette.error,
               }[String(incident.severity || 'MEDIUM')] || palette.textMuted;
 
+              const incidentTypeLabel = incident.incident_type === 'DAMAGE_REPORT' ? 'Hư hại vật tư' : 'Sự cố chung';
+              const incidentTypeColor =
+                incident.incident_type === 'DAMAGE_REPORT' ? palette.error : palette.secondary;
+
               return (
                 <View
                   key={String(incident.id || Math.random())}
                   style={[styles.incidentItem, { borderColor: severityColor }]}>
                   <View style={styles.incidentHeader}>
-                    <Text style={[styles.incidentSeverity, { color: severityColor }]}>
-                      {String(incident.severity || 'MEDIUM')}
-                    </Text>
+                    <View>
+                      <Text style={[styles.incidentSeverity, { color: severityColor }]}>
+                        {String(incident.severity || 'MEDIUM')}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.incidentStatus,
+                          { color: incidentTypeColor, fontSize: 11, marginTop: 2 },
+                        ]}>
+                        {incidentTypeLabel}
+                      </Text>
+                    </View>
                     <Text style={[styles.incidentStatus, { color: palette.textMuted }]}>
                       {String(incident.status || 'PENDING')}
                     </Text>
@@ -552,6 +921,32 @@ export default function TaskDetailTab({
                   <Text style={[styles.incidentDescription, { color: palette.text }]}>
                     {String(incident.description || '-')}
                   </Text>
+                  {incident.item_name_snapshot || incident.estimated_total_value !== undefined ? (
+                    <View
+                      style={[
+                        styles.incidentPricingBox,
+                        { backgroundColor: palette.surface, borderColor: palette.border },
+                      ]}>
+                      <Text style={[styles.incidentPricingText, { color: palette.text }]}>
+                        Món đồ: {String(incident.item_name_snapshot || incident.item_id || '-')}
+                      </Text>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}> 
+                        Giá gốc snapshot: {formatVnd(incident.unit_cost_snapshot as number | null | undefined)}
+                      </Text>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}> 
+                        Số lượng: {Number(incident.quantity_affected) || 1}
+                      </Text>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}> 
+                        Giá trị vật tư: {formatVnd(incident.estimated_item_value as number | null | undefined)}
+                      </Text>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}> 
+                        Phí dịch vụ: {formatVnd(incident.estimated_service_fee as number | null | undefined)}
+                      </Text>
+                      <Text style={[styles.incidentPricingTotal, { color: palette.error }]}>
+                        Penalty ước tính: {formatVnd(incident.estimated_total_value as number | null | undefined)}
+                      </Text>
+                    </View>
+                  ) : null}
                   {incident.photo_urls && incident.photo_urls.length > 0 && (
                     <ScrollView horizontal style={styles.incidentPhotosScroll}>
                       {incident.photo_urls.map((photoUrl, idx) => (
@@ -655,28 +1050,82 @@ export default function TaskDetailTab({
               </Pressable>
             )}
 
-            {canReportIncident && !isIncidentMode && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: palette.error }]}
-                disabled={actionLoading || uploadingPhoto}
-                onPress={() => {
-                  setCaptureMode('INCIDENT');
-                  setPhotoType('BEFORE');
-                  setCapturedPhotoUris([]);
-                  setIsCameraOpen(false);
-                }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Báo cáo hư hại</Text>
-              </Pressable>
+            {!isIncidentMode && (
+              <>
+                {/* Báo cáo sự cố chung (OPERATIONAL) */}
+                <Pressable
+                  style={[
+                    styles.actionButton,
+                    { backgroundColor: canReportIncident ? palette.secondary : palette.neutral400 },
+                  ]}
+                  disabled={actionLoading || uploadingPhoto || !canReportIncident}
+                  onPress={() => {
+                    if (!canReportIncident) {
+                      Alert.alert(
+                        'Chưa thể báo cáo',
+                        'Báo cáo sự cố sẽ mở khi nhiệm vụ ở trạng thái IN_PROGRESS.',
+                      );
+                      return;
+                    }
+
+                    setCaptureMode('OPERATIONAL_INCIDENT');
+                    setOperationalIncidentDescription('');
+                    setOperationalIncidentSeverity('MEDIUM');
+                    setPhotoType('BEFORE');
+                    setCapturedPhotoUris([]);
+                    setIsCameraOpen(false);
+                  }}>
+                  <Text style={[styles.actionButtonText, { color: palette.white }]}>
+                    {canReportIncident ? 'Báo cáo sự cố' : 'Báo cáo sự cố (chờ IN_PROGRESS)'}
+                  </Text>
+                </Pressable>
+
+                {/* Báo cáo hư hại vật tư (DAMAGE_REPORT) */}
+                <Pressable
+                  style={[
+                    styles.actionButton,
+                    { backgroundColor: canReportIncident ? palette.error : palette.neutral400 },
+                  ]}
+                  disabled={actionLoading || uploadingPhoto || !canReportIncident}
+                  onPress={() => {
+                    if (!canReportIncident) {
+                      Alert.alert(
+                        'Chưa thể báo cáo',
+                        'Báo cáo hư hại sẽ mở khi nhiệm vụ ở trạng thái IN_PROGRESS.',
+                      );
+                      return;
+                    }
+
+                    setCaptureMode('DAMAGE_REPORT');
+                    setDamageDescription('');
+                    setDamageSeverity('MEDIUM');
+                    setDamageItemId('');
+                    setDamageQuantityText('1');
+                    setDamageServiceFeeText('0');
+                    setPhotoType('BEFORE');
+                    setCapturedPhotoUris([]);
+                    setIsCameraOpen(false);
+                  }}>
+                  <Text style={[styles.actionButtonText, { color: palette.white }]}>
+                    {canReportIncident ? 'Báo cáo hư hại' : 'Báo cáo hư hại (chờ IN_PROGRESS)'}
+                  </Text>
+                </Pressable>
+              </>
             )}
 
-            {canReportIncident && isIncidentMode && (
+            {isIncidentMode && (
               <Pressable
                 style={[styles.actionButton, { backgroundColor: palette.neutral400 }]}
                 disabled={actionLoading || uploadingPhoto}
                 onPress={() => {
                   setCaptureMode('CLEANING');
-                  setIncidentDescription('');
-                  setIncidentSeverity('MEDIUM');
+                  setOperationalIncidentDescription('');
+                  setOperationalIncidentSeverity('MEDIUM');
+                  setDamageDescription('');
+                  setDamageSeverity('MEDIUM');
+                  setDamageItemId('');
+                  setDamageQuantityText('1');
+                  setDamageServiceFeeText('0');
                   setCapturedPhotoUris([]);
                   setIsCameraOpen(false);
                 }}>
@@ -684,6 +1133,12 @@ export default function TaskDetailTab({
               </Pressable>
             )}
           </View>
+
+          {!canReportIncident && !isIncidentMode && (
+            <Text style={[styles.info, { color: palette.textMuted }]}>
+              Luồng báo cáo hư hại chỉ khả dụng sau khi bấm "Bắt đầu dọn" (task chuyển IN_PROGRESS).
+            </Text>
+          )}
 
           {canReject && (
             <TextInput
@@ -707,11 +1162,20 @@ export default function TaskDetailTab({
               Ảnh BEFORE/AFTER ({photos.length})
             </Text>
 
-            {isIncidentMode && (
-              <View style={[styles.incidentModeBox, { backgroundColor: `${palette.error}14`, borderColor: palette.error }]}>
-                <Text style={[styles.incidentModeTitle, { color: palette.error }]}>Chế độ báo cáo hư hại</Text>
+            {isOperationalMode && (
+              <View style={[styles.incidentModeBox, { backgroundColor: `${palette.secondary}14`, borderColor: palette.secondary }]}>
+                <Text style={[styles.incidentModeTitle, { color: palette.secondary }]}>Chế độ báo cáo sự cố chung</Text>
                 <Text style={[styles.incidentModeText, { color: palette.textMuted }]}>
-                  Ảnh mới sẽ được gửi vào Incident, không lưu vào bộ ảnh cleaning BEFORE/AFTER.
+                  Ảnh mới sẽ được gửi vào Incident (OPERATIONAL), không lưu vào bộ ảnh cleaning BEFORE/AFTER.
+                </Text>
+              </View>
+            )}
+
+            {isDamageReportMode && (
+              <View style={[styles.incidentModeBox, { backgroundColor: `${palette.error}14`, borderColor: palette.error }]}>
+                <Text style={[styles.incidentModeTitle, { color: palette.error }]}>Chế độ báo cáo hư hại vật tư</Text>
+                <Text style={[styles.incidentModeText, { color: palette.textMuted }]}>
+                  Ảnh mới sẽ được gửi vào Incident (DAMAGE_REPORT) với snapshot giá, không lưu vào bộ ảnh cleaning BEFORE/AFTER.
                 </Text>
               </View>
             )}
@@ -740,7 +1204,7 @@ export default function TaskDetailTab({
               <>
                 <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp ảnh mới</Text>
 
-                {isIncidentMode ? (
+                {isOperationalMode ? (
                   <>
                     <TextInput
                       style={[
@@ -753,16 +1217,189 @@ export default function TaskDetailTab({
                           textAlignVertical: 'top',
                         },
                       ]}
-                      value={incidentDescription}
-                      onChangeText={setIncidentDescription}
-                      placeholder="Mô tả hư hại (bắt buộc)"
+                      value={operationalIncidentDescription}
+                      onChangeText={setOperationalIncidentDescription}
+                      placeholder="Mô tả sự cố (bắt buộc)"
                       placeholderTextColor={palette.neutral500}
                       multiline
                     />
 
                     <View style={styles.photoTypeSelector}>
+                      <Text style={[styles.subsectionTitle, { color: palette.text }]}>Mức độ nghiêm trọng</Text>
                       {INCIDENT_SEVERITY_OPTIONS.map((severity) => {
-                        const selected = incidentSeverity === severity;
+                        const selected = operationalIncidentSeverity === severity;
+                        return (
+                          <Pressable
+                            key={severity}
+                            style={[
+                              styles.typeButton,
+                              selected
+                                ? { backgroundColor: palette.secondary }
+                                : {
+                                    backgroundColor: palette.surface,
+                                    borderColor: palette.border,
+                                    borderWidth: 1,
+                                  },
+                            ]}
+                            onPress={() => setOperationalIncidentSeverity(severity)}>
+                            <Text
+                              style={[
+                                styles.typeButtonText,
+                                { color: selected ? palette.white : palette.text },
+                              ]}>
+                              {severity}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : isDamageReportMode ? (
+                  <>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        {
+                          borderColor: palette.border,
+                          color: palette.text,
+                          backgroundColor: palette.surface,
+                          minHeight: 86,
+                          textAlignVertical: 'top',
+                        },
+                      ]}
+                      value={damageDescription}
+                      onChangeText={setDamageDescription}
+                      placeholder="Mô tả hư hại (bắt buộc)"
+                      placeholderTextColor={palette.neutral500}
+                      multiline
+                    />
+
+                    {damageItems.length > 0 ? (
+                      <>
+                        <Text style={[styles.subsectionTitle, { color: palette.text }]}>Món đồ hư hại</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                          <View style={styles.damageItemRow}>
+                            {damageItems.map((item) => {
+                              const itemId = String(item.id || '').trim();
+                              if (!itemId) return null;
+
+                              const selected = damageItemId === itemId;
+                              return (
+                                <Pressable
+                                  key={itemId}
+                                  style={[
+                                    styles.damageItemChip,
+                                    selected
+                                      ? { backgroundColor: palette.error }
+                                      : {
+                                          backgroundColor: palette.surface,
+                                          borderColor: palette.border,
+                                          borderWidth: 1,
+                                        },
+                                  ]}
+                                  onPress={() => setDamageItemId(itemId)}>
+                                  <Text
+                                    style={[
+                                      styles.damageItemName,
+                                      { color: selected ? palette.white : palette.text },
+                                    ]}
+                                    numberOfLines={1}>
+                                    {String(item.name || itemId)}
+                                  </Text>
+                                  <Text
+                                    style={[
+                                      styles.damageItemCost,
+                                      { color: selected ? palette.white : palette.textMuted },
+                                    ]}>
+                                    {formatVnd(Number(item.unit_cost) || 0)}
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                        </ScrollView>
+                      </>
+                    ) : (
+                      <TextInput
+                        style={[
+                          styles.input,
+                          {
+                            borderColor: palette.border,
+                            color: palette.text,
+                            backgroundColor: palette.surface,
+                          },
+                        ]}
+                        value={damageItemId}
+                        onChangeText={setDamageItemId}
+                        placeholder="Nhập item_id bị hư hại"
+                        placeholderTextColor={palette.neutral500}
+                      />
+                    )}
+
+                    <View style={styles.damageNumericRow}>
+                      <View style={styles.damageNumericCol}>
+                        <Text style={[styles.damageInputLabel, { color: palette.textMuted }]}>Số lượng</Text>
+                        <TextInput
+                          style={[
+                            styles.input,
+                            styles.damageInput,
+                            {
+                              borderColor: palette.border,
+                              color: palette.text,
+                              backgroundColor: palette.surface,
+                            },
+                          ]}
+                          value={damageQuantityText}
+                          onChangeText={setDamageQuantityText}
+                          keyboardType="number-pad"
+                          placeholder="1"
+                          placeholderTextColor={palette.neutral500}
+                        />
+                      </View>
+                      <View style={styles.damageNumericCol}>
+                        <Text style={[styles.damageInputLabel, { color: palette.textMuted }]}>Phí dịch vụ (VND)</Text>
+                        <TextInput
+                          style={[
+                            styles.input,
+                            styles.damageInput,
+                            {
+                              borderColor: palette.border,
+                              color: palette.text,
+                              backgroundColor: palette.surface,
+                            },
+                          ]}
+                          value={damageServiceFeeText}
+                          onChangeText={setDamageServiceFeeText}
+                          keyboardType="number-pad"
+                          placeholder="0"
+                          placeholderTextColor={palette.neutral500}
+                        />
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.incidentPricingBox,
+                        { backgroundColor: palette.surface, borderColor: palette.border },
+                      ]}>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}>
+                        Giá gốc snapshot: {formatVnd(selectedUnitCost)}
+                      </Text>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}>
+                        Giá trị vật tư: {formatVnd(previewItemValue)}
+                      </Text>
+                      <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}>
+                        Phí dịch vụ: {formatVnd(damageServiceFee)}
+                      </Text>
+                      <Text style={[styles.incidentPricingTotal, { color: palette.error }]}>
+                        Penalty dự kiến: {formatVnd(previewPenaltyValue)}
+                      </Text>
+                    </View>
+
+                    <View style={styles.photoTypeSelector}>
+                      <Text style={[styles.subsectionTitle, { color: palette.text }]}>Mức độ nghiêm trọng</Text>
+                      {INCIDENT_SEVERITY_OPTIONS.map((severity) => {
+                        const selected = damageSeverity === severity;
                         return (
                           <Pressable
                             key={severity}
@@ -776,7 +1413,7 @@ export default function TaskDetailTab({
                                     borderWidth: 1,
                                   },
                             ]}
-                            onPress={() => setIncidentSeverity(severity)}>
+                            onPress={() => setDamageSeverity(severity)}>
                             <Text
                               style={[
                                 styles.typeButtonText,
@@ -898,7 +1535,13 @@ export default function TaskDetailTab({
                 <Pressable
                   style={[
                     styles.uploadButton,
-                    { backgroundColor: isIncidentMode ? palette.error : palette.success },
+                    {
+                      backgroundColor: isOperationalMode
+                        ? palette.secondary
+                        : isDamageReportMode
+                          ? palette.error
+                          : palette.success,
+                    },
                   ]}
                   disabled={uploadingPhoto || capturedPhotoUris.length === 0}
                   onPress={() => void handleUploadPhoto()}>
@@ -906,7 +1549,11 @@ export default function TaskDetailTab({
                     <ActivityIndicator color={palette.white} />
                   ) : (
                     <Text style={[styles.uploadButtonText, { color: palette.white }]}>
-                      {isIncidentMode ? 'Gửi báo cáo hư hại' : 'Lưu tất cả ảnh vào task'}
+                      {isOperationalMode
+                        ? 'Gửi báo cáo sự cố'
+                        : isDamageReportMode
+                          ? 'Gửi báo cáo hư hại'
+                          : 'Lưu tất cả ảnh vào nhiệm vụ'}
                     </Text>
                   )}
                 </Pressable>
@@ -914,8 +1561,8 @@ export default function TaskDetailTab({
             ) : (
               <Text style={[styles.emptyText, { color: palette.textMuted }]}>
                 {isIncidentMode
-                  ? 'Chế độ báo cáo hư hại chỉ khả dụng khi task ở trạng thái IN_PROGRESS.'
-                  : 'Task đã hoàn tất, không thể chụp hoặc thêm ảnh mới.'}
+                  ? 'Chế độ báo cáo hư hại chỉ khả dụng khi nhiệm vụ ở trạng thái IN_PROGRESS.'
+                  : 'Nhiệm vụ đã hoàn tất, không thể chụp hoặc thêm ảnh mới.'}
               </Text>
             )}
           </View>
@@ -923,7 +1570,7 @@ export default function TaskDetailTab({
           <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>Ảnh BEFORE/AFTER</Text>
             <Text style={[styles.emptyText, { color: palette.textMuted }]}>
-              Ảnh chỉ hiển thị và chụp được sau khi task chuyển sang bước {'"Bắt đầu dọn"'}.
+              Ảnh chỉ hiển thị và chụp được sau khi nhiệm vụ chuyển sang bước {'"Bắt đầu dọn"'}.
             </Text>
           </View>
         )}
@@ -989,6 +1636,92 @@ const styles = StyleSheet.create({
     borderRadius: radius._12,
     padding: spacingX._12,
     gap: spacingY._10,
+  },
+  onlineKeySection: {
+    gap: spacingY._7,
+  },
+  onlineKeyHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacingX._10,
+  },
+  onlineKeyBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._5,
+  },
+  onlineKeyBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  onlineKeyCodeBox: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    gap: spacingY._5,
+  },
+  onlineKeyCodeLabel: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  onlineKeyCodeText: {
+    fontSize: 16,
+    fontFamily: Fonts.mono,
+    fontWeight: '700',
+  },
+  onlineKeyMetaGrid: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+  },
+  onlineKeyMetaCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    gap: spacingY._5,
+  },
+  onlineKeyMetaLabel: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+  onlineKeyMetaValue: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
+  },
+  onlineKeyValidationBox: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    gap: spacingY._5,
+  },
+  onlineKeyValidationLabel: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  onlineKeyValidationValue: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+  onlineKeyNotice: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
   },
   sectionTitle: {
     fontSize: 16,
@@ -1211,6 +1944,22 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     lineHeight: 18,
   },
+  incidentPricingBox: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    gap: spacingY._5,
+  },
+  incidentPricingText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+  },
+  incidentPricingTotal: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
+  },
   incidentPhotosScroll: {
     gap: spacingX._7,
   },
@@ -1223,6 +1972,41 @@ const styles = StyleSheet.create({
   incidentTime: {
     fontSize: 11,
     fontFamily: Fonts.sans,
+  },
+  damageItemRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+  },
+  damageItemChip: {
+    minWidth: 150,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    gap: spacingY._5,
+  },
+  damageItemName: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  damageItemCost: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+  },
+  damageNumericRow: {
+    flexDirection: 'row',
+    gap: spacingX._10,
+  },
+  damageNumericCol: {
+    flex: 1,
+    gap: spacingY._5,
+  },
+  damageInputLabel: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+  },
+  damageInput: {
+    minHeight: 44,
   },
 });
 

@@ -2,6 +2,7 @@ import { AxiosError } from 'axios';
 
 import { apiClient } from '@/services/api';
 import type { AuthResponse, LoginRequest } from '@/types/auth';
+import { normalizeBackendMessage } from '@/utils/validation';
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -20,7 +21,7 @@ export async function loginWithEmail(payload: LoginRequest): Promise<AuthRespons
     const body = response.data;
 
     if (!body.success || !body.data) {
-      throw new Error(body.message || 'Đăng nhập thất bại');
+      throw new Error(normalizeBackendMessage(body.message || 'Đăng nhập thất bại'));
     }
 
     return body.data;
@@ -28,6 +29,6 @@ export async function loginWithEmail(payload: LoginRequest): Promise<AuthRespons
     const axiosError = error as AxiosError<{ message?: string }>;
     const serverMessage = axiosError.response?.data?.message;
 
-    throw new Error(serverMessage || 'Không thể kết nối server, vui lòng thử lại.');
+    throw new Error(normalizeBackendMessage(serverMessage || 'Không thể kết nối server, vui lòng thử lại.'));
   }
 }
