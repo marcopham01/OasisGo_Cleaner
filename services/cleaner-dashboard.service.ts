@@ -39,7 +39,7 @@ import type {
     UpdateCleaningPhotoPayload,
     UpdateCleaningTaskPayload,
 } from '@/types/cleaner-dashboard';
-  import { normalizeBackendMessage } from '@/utils/validation';
+import { normalizeBackendMessage } from '@/utils/validation';
 
 type ApiEnvelope<T> = {
   success?: boolean;

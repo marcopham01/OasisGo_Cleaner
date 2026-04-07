@@ -824,8 +824,9 @@ export default function TaskDetailTab({
   const canComplete = taskStatus === 'IN_PROGRESS';
   const canReject = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED'].includes(taskStatus);
   const hasStartedCleaning = taskStatus === 'IN_PROGRESS' || taskStatus === 'DONE';
+  const needsAssignment = !['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'DONE'].includes(taskStatus);
   const progress = progressStepState(taskStatus);
-  const showReadyAction = !hasStartedCleaning;
+  const showReadyAction = canAccept || canStart;
   const bookingWindow = bookingWindowOverride || taskBookingWindow(task);
   const onlineKeyValidation = resolveOnlineKeyValidationWithAccess(lastCleanerKey, onlineKeyAccessState);
   const onlineKeyStatusColor =
@@ -853,20 +854,22 @@ export default function TaskDetailTab({
   };
 
   const actionButtonLabel = canAccept
-    ? 'START CLEANING'
+    ? 'CHẤP NHẬN NHIỆM VỤ'
     : canStart
-      ? 'START CLEANING'
+      ? 'BẮT ĐẦU DỌN'
       : taskStatus === 'IN_PROGRESS'
-        ? 'CLEANING IN PROGRESS'
-        : 'CLEANING COMPLETED';
+        ? 'ĐANG DỌN DẸP'
+        : 'ĐÃ HOÀN TẤT';
+
+  const readyTitleText = canAccept ? 'Sẵn sàng nhận nhiệm vụ?' : 'Sẵn sàng dọn phòng?';
 
   const actionHintText = canAccept
-    ? 'Nhan viec de bat dau quy trinh don dep.'
+    ? 'Nhận việc để bắt đầu quy trình dọn dẹp.'
     : canStart
-      ? 'San sang bat dau don dep cho task nay.'
+      ? 'Sẵn sàng bắt đầu dọn dẹp cho task này.'
       : taskStatus === 'IN_PROGRESS'
-        ? 'Task dang duoc thuc hien. Ban co the cap nhat anh tai day.'
-        : 'Task da hoan tat hoac khong kha dung de bat dau.';
+        ? 'Task đang được thực hiện. Bạn có thể cập nhật ảnh tại đây.'
+        : 'Task đã hoàn tất hoặc không khả dụng để bắt đầu.';
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
@@ -943,20 +946,6 @@ export default function TaskDetailTab({
             <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Nguồn yêu cầu:</Text>
             <Text style={[styles.infoValue, { color: palette.text }]}>{String(task.request_source || 'AUTO_AFTER_CHECKOUT')}</Text>
           </View>
-          <Text style={[styles.info, { color: palette.textMuted }]}>Trạng thái: {task.status}</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>Pod: {podName || '-'}</Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Đặt chỗ: {bookingName || '-'}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Nguồn yêu cầu: {String(task.request_source || '-')}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Hạn chót: {formatDateTime(task.due_at || undefined)}
-          </Text>
-          <Text style={[styles.info, { color: palette.textMuted }]}>
-            Thời gian ở của khách: {`${formatDateTime(bookingWindow.start_time)} - ${formatDateTime(bookingWindow.end_time)}`}
-          </Text>
         </View>
 
         <View style={[styles.section, styles.onlineKeySection, { backgroundColor: palette.card, borderColor: palette.border }]}>
@@ -1086,7 +1075,7 @@ export default function TaskDetailTab({
             <View style={[styles.readyIconWrap, { backgroundColor: palette.primaryLight }]}> 
               <MaterialIcons name="auto-awesome" size={32} color={palette.primary} />
             </View>
-            <Text style={[styles.readyTitle, { color: palette.text }]}>Ready to clean?</Text>
+            <Text style={[styles.readyTitle, { color: palette.text }]}>{readyTitleText}</Text>
             <Text style={[styles.readyDescription, { color: palette.textMuted }]}>{actionHintText}</Text>
             <Pressable
               style={[
@@ -1106,6 +1095,14 @@ export default function TaskDetailTab({
                 </View>
               )}
             </Pressable>
+          </View>
+        )}
+
+        {needsAssignment && (
+          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
+            <Text style={[styles.emptyText, { color: palette.textMuted }]}>
+              Task này chưa được phân công cho bạn. Vui lòng yêu cầu phân công trước khi bắt đầu dọn dẹp.
+            </Text>
           </View>
         )}
 
