@@ -4,40 +4,42 @@ import { Platform } from 'react-native';
 
 import { apiClient } from '@/services/api';
 import type {
-    BookingDetails,
-    CleanerMarkAllReadResponse,
-    CleanerNotification,
-    CleanerNotificationListResponse,
-    CleanerNotificationQuery,
-    CleanerUnreadCountResponse,
-    CleaningPhoto,
-    CleaningPhotoType,
-    CleaningTask,
-    CleaningTaskQuery,
-    CreateCleaningPhotoUploadPayload,
-    CreateDamageReportPayload,
-    CreateIncidentFromCleaningTaskPayload,
-    CreateLostFoundItemPayload,
-    DamageReportItem,
-    DamageReportListResponse,
-    DamageReportResponse,
-    Incident,
-    IncidentQuery,
-    IncidentStatus,
-    LostFoundItem,
-    LostFoundQuery,
-    LostFoundStatus,
-    MyCleanerKeyByBookingData,
-    PodDetails,
-    StaffAttendanceLog,
-    StaffAttendanceLogListResponse,
-    StaffAttendanceLogQuery,
-    StaffShiftAssignment,
-    StaffShiftAssignmentQuery,
-    StaffWorkRoster,
-    StaffWorkRosterQuery,
-    UpdateCleaningPhotoPayload,
-    UpdateCleaningTaskPayload,
+  BookingDetails,
+  CleanerMarkAllReadResponse,
+  CleanerNotification,
+  CleanerNotificationListResponse,
+  CleanerNotificationQuery,
+  CleanerUnreadCountResponse,
+  CleaningPhoto,
+  CleaningPhotoType,
+  CleaningTask,
+  CleaningTaskQuery,
+  CreateCleaningPhotoUploadPayload,
+  CreateDamageReportPayload,
+  CreateIncidentFromCleaningTaskPayload,
+  CreateLostFoundItemPayload,
+  DamageReportItem,
+  DamageServiceCatalogItem,
+  DamageReportListResponse,
+  DamageReportResponse,
+  Incident,
+  IncidentQuery,
+  IncidentStatus,
+  LostFoundItem,
+  LostFoundQuery,
+  LostFoundStatus,
+  MyCleanerKeyByBookingData,
+  MyCleanerKeyByTaskData,
+  PodDetails,
+  StaffAttendanceLog,
+  StaffAttendanceLogListResponse,
+  StaffAttendanceLogQuery,
+  StaffShiftAssignment,
+  StaffShiftAssignmentQuery,
+  StaffWorkRoster,
+  StaffWorkRosterQuery,
+  UpdateCleaningPhotoPayload,
+  UpdateCleaningTaskPayload,
 } from '@/types/cleaner-dashboard';
 import { normalizeBackendMessage } from '@/utils/validation';
 
@@ -304,9 +306,38 @@ async function toUploadFile(uri: string) {
 
 async function buildIncidentFormData(payload: CreateIncidentFromCleaningTaskPayload) {
   const formData = new FormData();
-  formData.append('cleaning_task_id', payload.cleaning_task_id);
+  const normalizedTaskId = String(payload.cleaning_task_id || '').trim();
+  const normalizedPodId = String(payload.pod_id || '').trim();
+  const normalizedBookingId = String(payload.booking_id || '').trim();
+
+  if (!normalizedTaskId && !normalizedPodId) {
+    throw new Error('Thiếu ngữ cảnh báo cáo. Vui lòng chọn task hoặc pod để gửi incident.');
+  }
+
+  if (normalizedTaskId) {
+    formData.append('cleaning_task_id', normalizedTaskId);
+  }
+  if (normalizedPodId) {
+    formData.append('pod_id', normalizedPodId);
+  }
+  if (normalizedBookingId) {
+    formData.append('booking_id', normalizedBookingId);
+  }
+
   formData.append('description', payload.description);
   formData.append('severity', payload.severity || 'MEDIUM');
+  // Canonical backend contract requires `details` with at least one line.
+  formData.append(
+    'details',
+    JSON.stringify([
+      {
+        type: 'SERVICE',
+        name_snapshot: 'Operational incident',
+        unit_cost_snapshot: 0,
+        quantity: 1,
+      },
+    ]),
+  );
 
   const validUris = payload.local_uris.filter(Boolean);
   for (let i = 0; i < validUris.length; i += 1) {
@@ -320,6 +351,7 @@ async function buildIncidentFormData(payload: CreateIncidentFromCleaningTaskPayl
 
 async function buildDamageReportFormData(payload: CreateDamageReportPayload) {
   const formData = new FormData();
+  let hasDetails = false;
 
   if (payload.cleaning_task_id) {
     formData.append('cleaning_task_id', payload.cleaning_task_id);
@@ -337,27 +369,44 @@ async function buildDamageReportFormData(payload: CreateDamageReportPayload) {
   formData.append('severity', payload.severity || 'MEDIUM');
   formData.append('estimated_service_fee', String(payload.estimated_service_fee ?? 0));
 
-  if (Array.isArray(payload.damaged_items) && payload.damaged_items.length > 0) {
-    formData.append('damaged_items', JSON.stringify(payload.damaged_items));
-  } else {
-    // Backward-compatible fallback accepted by backend.
-    if (payload.item_id) {
-      formData.append('item_id', payload.item_id);
-    }
+  const normalizedDetails = Array.isArray(payload.details)
+    ? payload.details.filter((entry) => entry && typeof entry === 'object')
+    : [];
 
-    if (payload.quantity_damaged !== undefined) {
-      formData.append('quantity_damaged', String(payload.quantity_damaged));
-    } else {
-      formData.append('quantity_affected', String(payload.quantity_affected ?? 1));
-    }
+  if (normalizedDetails.length > 0) {
+    formData.append('details', JSON.stringify(normalizedDetails));
+    hasDetails = true;
+  } else if (Array.isArray(payload.damaged_items) && payload.damaged_items.length > 0) {
+    const mappedLegacyDetails = payload.damaged_items
+      .filter((item) => String(item.item_id || '').trim())
+      .map((item) => ({
+        type: 'ITEM',
+        item_id: String(item.item_id || '').trim(),
+        quantity: Number(item.quantity_damaged ?? 1) || 1,
+        note: item.note ? String(item.note).trim() : undefined,
+      }));
 
-    if (payload.damage_type) {
-      formData.append('damage_type', payload.damage_type);
+    if (mappedLegacyDetails.length > 0) {
+      formData.append('details', JSON.stringify(mappedLegacyDetails));
+      hasDetails = true;
     }
+  } else if (payload.item_id) {
+    formData.append(
+      'details',
+      JSON.stringify([
+        {
+          type: 'ITEM',
+          item_id: String(payload.item_id).trim(),
+          quantity: Number(payload.quantity_damaged ?? payload.quantity_affected ?? 1) || 1,
+          note: payload.note ? String(payload.note).trim() : undefined,
+        },
+      ]),
+    );
+    hasDetails = true;
+  }
 
-    if (payload.note) {
-      formData.append('note', payload.note);
-    }
+  if (!hasDetails) {
+    throw new Error('Thiếu chi tiết hư hại. Vui lòng chọn ít nhất một mục bị ảnh hưởng.');
   }
 
   const validUris = payload.local_uris.filter(Boolean);
@@ -662,7 +711,7 @@ export async function createOperationalIncident(
       throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
     }
 
-    const uploadResponse = await fetch(`${baseUrl}/incidents/cleaning-task`, {
+    const uploadResponse = await fetch(`${baseUrl}/incidents`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -717,6 +766,26 @@ export async function getDamageReportItems(token: string) {
   }
 }
 
+export async function getDamageServiceCatalogs(token: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<DamageServiceCatalogItem[]>>(
+      '/damage-service-catalogs',
+      {
+        headers: authHeader(token),
+        params: {
+          is_active: true,
+        },
+      },
+    );
+
+    return toArray<DamageServiceCatalogItem>(response.data?.data ?? response.data).filter(
+      (item) => String(item.id || '').trim(),
+    );
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
 export async function createDamageReport(token: string, payload: CreateDamageReportPayload) {
   try {
     const formData = await buildDamageReportFormData(payload);
@@ -725,7 +794,7 @@ export async function createDamageReport(token: string, payload: CreateDamageRep
       throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
     }
 
-    const uploadResponse = await fetch(`${baseUrl}/incidents/damage-report`, {
+    const uploadResponse = await fetch(`${baseUrl}/incidents`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -881,6 +950,28 @@ export async function getMyCleanerKeyByBookingId(token: string, bookingId: strin
     const item = extractData<MyCleanerKeyByBookingData>(response.data?.data ?? response.data);
     if (!item) {
       throw new Error('Không lấy được cleaner key cho booking');
+    }
+
+    return item;
+  } catch (error: any) {
+    const normalizedError = new Error(getErrorMessage(error)) as Error & { statusCode?: number };
+    normalizedError.statusCode = error?.response?.status || error?.statusCode;
+    throw normalizedError;
+  }
+}
+
+export async function getMyCleanerKeyByTaskId(token: string, cleaningTaskId: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<MyCleanerKeyByTaskData>>(
+      `/cleaning-tasks/${cleaningTaskId}/my-key`,
+      {
+        headers: authHeader(token),
+      },
+    );
+
+    const item = extractData<MyCleanerKeyByTaskData>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Không lấy được cleaner key cho task');
     }
 
     return item;

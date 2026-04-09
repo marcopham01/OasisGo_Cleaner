@@ -22,8 +22,9 @@ export type CleaningRequestSource = (typeof CLEANING_REQUEST_SOURCES)[number];
 export type ShiftAssignmentStatus = 'ASSIGNED' | 'CHECKED_IN' | 'COMPLETED' | 'ABSENT';
 export type CleaningPhotoType = 'BEFORE' | 'AFTER';
 export type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type IncidentStatus = 'PENDING' | 'INVESTIGATING' | 'RESOLVED' | 'CLOSED';
+export type IncidentStatus = 'PENDING' | 'RESOLVED' | 'DISMISSED' | 'INVESTIGATING' | 'CLOSED';
 export type IncidentType = 'OPERATIONAL' | 'DAMAGE_REPORT';
+export type IncidentDetailType = 'ITEM' | 'SERVICE';
 export type DamageType = 'BROKEN' | 'SCRATCHED' | 'LOST' | 'STAINED';
 export type LostFoundStatus = 'FOUND' | 'STORED' | 'CLAIMED' | 'DISPOSED';
 
@@ -65,7 +66,9 @@ export const CLEANER_NOTIFICATION_EVENT_CODES = [
   'SHIFT_START_REMINDER',
   'INVENTORY_CHECKOUT_CONFIRMED',
   'INCIDENT_REPORTED',
+  'INCIDENT_REVIEW_REQUIRED',
   'INCIDENT_RESOLVED',
+  'INCIDENT_DISMISSED',
   'POD_AUTO_MIGRATION_ALERT',
   'BOOKING_AUTO_MIGRATED',
   'SUPPORT_ESCALATED',
@@ -149,6 +152,18 @@ export interface IncidentDamagedItem {
   quantity_damaged?: number;
   total_damage_cost?: number | null;
   damage_type?: DamageType | string;
+  note?: string | null;
+  [key: string]: unknown;
+}
+
+export interface IncidentDetailLine {
+  type: IncidentDetailType | string;
+  item_id?: string | null;
+  service_catalog_id?: string | null;
+  name_snapshot?: string | null;
+  unit_cost_snapshot?: number | null;
+  quantity?: number;
+  total_cost?: number | null;
   note?: string | null;
   [key: string]: unknown;
 }
@@ -334,6 +349,7 @@ export interface Incident {
   severity?: IncidentSeverity | string;
   status?: IncidentStatus | string;
   incident_type?: IncidentType | string;
+  details?: IncidentDetailLine[];
   damaged_items?: IncidentDamagedItem[];
   item_id?: string | null;
   item_name_snapshot?: string | null;
@@ -351,7 +367,9 @@ export interface Incident {
 }
 
 export interface CreateOperationalIncidentPayload {
-  cleaning_task_id: string;
+  cleaning_task_id?: string;
+  pod_id?: string;
+  booking_id?: string;
   description: string;
   severity?: IncidentSeverity;
   local_uris: string[];
@@ -372,18 +390,31 @@ export interface DamageReportItem {
   [key: string]: unknown;
 }
 
+export interface DamageServiceCatalogItem {
+  id?: string;
+  name?: string;
+  category?: 'CONSTRUCTION' | 'CLEANING' | 'PENALTY' | string | null;
+  base_price?: number;
+  unit_name?: string | null;
+  description?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
 export interface CreateDamageReportPayload {
   cleaning_task_id?: string;
   pod_id?: string;
   booking_id?: string;
   description: string;
+  details?: IncidentDetailLine[];
+  // Legacy fallback fields retained for older payload mapping.
   damaged_items?: Array<{
     item_id: string;
     quantity_damaged?: number;
     damage_type?: DamageType;
     note?: string;
   }>;
-  // Legacy fallback fields supported by backend.
   item_id?: string;
   quantity_damaged?: number;
   quantity_affected?: number;
@@ -411,13 +442,7 @@ export interface DamageReportResponse {
     cleaner_name?: string | null;
     [key: string]: unknown;
   };
-  item?: {
-    item_id?: string | null;
-    item_name_snapshot?: string | null;
-    unit_cost_snapshot?: number | null;
-    quantity_affected?: number | null;
-    [key: string]: unknown;
-  };
+  details?: IncidentDetailLine[];
   damaged_items?: IncidentDamagedItem[];
   pricing?: {
     estimated_item_value?: number;
@@ -544,6 +569,11 @@ export interface MyCleanerKeyByBookingData {
   booking_checkin_state?: string;
   online_key?: CleanerOnlineKey;
   [key: string]: unknown;
+}
+
+export interface MyCleanerKeyByTaskData extends MyCleanerKeyByBookingData {
+  task_id?: string;
+  cleaner_id?: string;
 }
 
 export type CleanerTaskAction = 'accept' | 'start' | 'complete' | 'reject';

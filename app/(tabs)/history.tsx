@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,19 +13,22 @@ import {
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
   getMyNotifications,
+  getDamageReports,
   getMyUnreadNotificationCount,
   markAllNotificationsAsRead,
   markNotificationAsRead,
 } from '@/services/cleaner-dashboard.service';
+import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
   decrementNotificationBadge,
   setNotificationBadgeCount,
   subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
-import type { CleanerNotification } from '@/types/cleaner-dashboard';
+import type { CleanerNotification, DamageReportResponse } from '@/types/cleaner-dashboard';
+
+type HistoryTabKey = 'NOTIFICATIONS' | 'INCIDENTS';
 
 function normalizeToken(value?: string | null) {
   return String(value || '')
@@ -72,7 +76,7 @@ function getDeliveryStatusBadge(status: unknown, palette: typeof Colors.light) {
     return { label: 'Thất bại', textColor: palette.error, bgColor: 'rgba(244, 63, 94, 0.14)' };
   }
   if (normalized === 'SKIPPED_NO_TOKEN') {
-    return { label: 'Bỏ qua', textColor: palette.textMuted, bgColor: palette.border };
+    return null;
   }
 
   return { label: normalized, textColor: palette.textMuted, bgColor: palette.border };
@@ -126,8 +130,12 @@ function getEventCodeLabel(eventCode: unknown) {
       return 'Xác nhận xuất kho';
     case 'INCIDENT_REPORTED':
       return 'Báo cáo sự cố thành công';
+    case 'INCIDENT_REVIEW_REQUIRED':
+      return 'Báo cáo sự cố cần được duyệt';
     case 'INCIDENT_RESOLVED':
       return 'Sự cố đã được xử lý';
+    case 'INCIDENT_DISMISSED':
+      return 'Báo cáo sự cố đã bị từ chối';
     case 'POD_AUTO_MIGRATION_ALERT':
       return 'Cảnh báo chuyển pod tự động';
     case 'BOOKING_AUTO_MIGRATED':
@@ -153,6 +161,14 @@ function sortByNewest(items: CleanerNotification[]) {
   });
 }
 
+function sortIncidentsByNewest(items: DamageReportResponse[]) {
+  return [...items].sort((a, b) => {
+    const aTime = new Date(String(a.created_at || a.updated_at || 0)).getTime() || 0;
+    const bTime = new Date(String(b.created_at || b.updated_at || 0)).getTime() || 0;
+    return bTime - aTime;
+  });
+}
+
 function formatDateTime(value?: string | null) {
   if (!value) return 'Không xác định';
 
@@ -169,12 +185,98 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function formatCurrencyVnd(value?: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return `${new Intl.NumberFormat('vi-VN').format(value)} đ`;
+}
+
+function getIncidentStatusBadge(status: unknown, palette: typeof Colors.light) {
+  const normalized = normalizeToken(typeof status === 'string' ? status : null);
+
+  if (normalized === 'PENDING') {
+    return { label: 'Đang chờ duyệt', textColor: palette.warning, bgColor: 'rgba(245, 158, 11, 0.16)' };
+  }
+
+  if (normalized === 'RESOLVED') {
+    return { label: 'Đã xử lý', textColor: palette.success, bgColor: palette.secondaryBg };
+  }
+
+  if (normalized === 'DISMISSED') {
+    return { label: 'Bị bác bỏ', textColor: palette.error, bgColor: 'rgba(244, 63, 94, 0.14)' };
+  }
+
+  return {
+    label: normalized || 'Không xác định',
+    textColor: palette.textMuted,
+    bgColor: palette.border,
+  };
+}
+
+function getIncidentSeverityBadge(severity: unknown, palette: typeof Colors.light) {
+  const normalized = normalizeToken(typeof severity === 'string' ? severity : null);
+
+  if (normalized === 'LOW') {
+    return { label: 'Thấp', textColor: palette.success, bgColor: palette.secondaryBg };
+  }
+
+  if (normalized === 'MEDIUM') {
+    return { label: 'Trung bình', textColor: palette.warning, bgColor: 'rgba(245, 158, 11, 0.16)' };
+  }
+
+  if (normalized === 'HIGH') {
+    return { label: 'Cao', textColor: '#b45309', bgColor: 'rgba(251, 191, 36, 0.2)' };
+  }
+
+  if (normalized === 'CRITICAL') {
+    return { label: 'Nghiêm trọng', textColor: palette.error, bgColor: 'rgba(244, 63, 94, 0.14)' };
+  }
+
+  return {
+    label: normalized || 'Không xác định',
+    textColor: palette.textMuted,
+    bgColor: palette.border,
+  };
+}
+
+function resolveNotificationTaskId(item: CleanerNotification) {
+  const data = (item.data || {}) as Record<string, unknown>;
+
+  const candidate =
+    item.cleaning_task_id ||
+    item.task_id ||
+    item.taskId ||
+    item.entity_id ||
+    data.cleaning_task_id ||
+    data.task_id ||
+    data.taskId ||
+    data.entity_id;
+
+  return String(candidate || '').trim();
+}
+
+function isCleaningNotification(item: CleanerNotification) {
+  const type = normalizeToken(typeof item.type === 'string' ? item.type : null);
+  const event = normalizeToken(typeof item.event_code === 'string' ? item.event_code : null);
+
+  return (
+    type === 'CLEANING' ||
+    event.startsWith('CLEANING_TASK_') ||
+    event === 'SUPPORT_CLEANING_REQUEST'
+  );
+}
+
 export default function HistoryScreen() {
+  const router = useRouter();
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const { user, token } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<HistoryTabKey>('NOTIFICATIONS');
   const [items, setItems] = useState<CleanerNotification[]>([]);
+  const [incidentItems, setIncidentItems] = useState<DamageReportResponse[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -192,7 +294,7 @@ export default function HistoryScreen() {
     };
   }, []);
 
-  const loadNotifications = useCallback(
+  const loadHistoryData = useCallback(
     async (options?: { isRefresh?: boolean }) => {
       if (!token) return;
 
@@ -204,12 +306,14 @@ export default function HistoryScreen() {
       }
 
       try {
-        const [listResult, unread] = await Promise.all([
+        const [listResult, unread, reportResult] = await Promise.all([
           getMyNotifications(token, { page: 1, limit: 50 }),
           getMyUnreadNotificationCount(token),
+          getDamageReports(token, { page: 1, limit: 50 }),
         ]);
 
         setItems(sortByNewest(listResult.data));
+        setIncidentItems(sortIncidentsByNewest(reportResult.items));
         setNotificationBadgeCount(unread);
       } finally {
         if (isRefresh) {
@@ -230,10 +334,10 @@ export default function HistoryScreen() {
       return;
     }
 
-    loadNotifications().catch(() => {
+    loadHistoryData().catch(() => {
       setIsLoading(false);
     });
-  }, [canLoad, loadNotifications]);
+  }, [canLoad, loadHistoryData]);
 
   useEffect(() => {
     if (!token || !user?.id) {
@@ -244,14 +348,14 @@ export default function HistoryScreen() {
       token,
       cleanerId: user.id,
       onNotification: () => {
-        loadNotifications({ isRefresh: true }).catch(() => null);
+        loadHistoryData({ isRefresh: true }).catch(() => null);
       },
     });
 
     return () => {
       disconnect();
     };
-  }, [loadNotifications, token, user?.id]);
+  }, [loadHistoryData, token, user?.id]);
 
   const handleMarkAsRead = useCallback(
     async (item: CleanerNotification) => {
@@ -307,10 +411,36 @@ export default function HistoryScreen() {
 
   const emptyText = useMemo(() => {
     if (!canLoad) {
-      return 'Vui lòng đăng nhập để xem thông báo.';
+      return 'Vui lòng đăng nhập để xem lịch sử.';
     }
+
+    if (activeTab === 'INCIDENTS') {
+      return 'Bạn chưa gửi incident nào.';
+    }
+
     return 'Chưa có thông báo nào.';
-  }, [canLoad]);
+  }, [activeTab, canLoad]);
+
+  const handleNotificationPress = useCallback(
+    async (item: CleanerNotification) => {
+      await handleMarkAsRead(item);
+
+      if (!isCleaningNotification(item)) {
+        return;
+      }
+
+      const taskId = resolveNotificationTaskId(item);
+      if (!taskId) {
+        return;
+      }
+
+      router.push({
+        pathname: '/task/[id]',
+        params: { id: taskId },
+      });
+    },
+    [handleMarkAsRead, router],
+  );
 
   const renderItem = useCallback(
     ({ item }: { item: CleanerNotification }) => {
@@ -321,7 +451,7 @@ export default function HistoryScreen() {
       return (
         <Pressable
           onPress={() => {
-            handleMarkAsRead(item).catch(() => null);
+            handleNotificationPress(item).catch(() => null);
           }}
           style={[
             styles.itemCard,
@@ -365,7 +495,59 @@ export default function HistoryScreen() {
         </Pressable>
       );
     },
-    [handleMarkAsRead, palette.border, palette.primary, palette.surface, palette.text, palette.textMuted],
+    [handleNotificationPress, palette],
+  );
+
+  const renderIncidentItem = useCallback(
+    ({ item }: { item: DamageReportResponse }) => {
+      const statusBadge = getIncidentStatusBadge(item.status, palette);
+      const severityBadge = getIncidentSeverityBadge(item.severity, palette);
+      const totalValue = formatCurrencyVnd(item.pricing?.estimated_total_value);
+      const podName = item.context?.pod_name || item.context?.pod_id || 'Không rõ Pod';
+      const incidentId = String(item.report_id || '').trim();
+      const photoCount = Array.isArray(item.photo_urls) ? item.photo_urls.length : 0;
+
+      return (
+        <View
+          style={[
+            styles.itemCard,
+            {
+              backgroundColor: palette.surface,
+              borderColor: palette.border,
+            },
+          ]}>
+          <View style={styles.itemHeaderRow}>
+            <Text style={[styles.itemTitle, { color: palette.text }]} numberOfLines={2}>
+              {item.description || 'Báo cáo sự cố'}
+            </Text>
+          </View>
+
+          <View style={styles.badgeRow}>
+            <View style={[styles.badgeChip, { backgroundColor: statusBadge.bgColor }]}> 
+              <Text style={[styles.badgeText, { color: statusBadge.textColor }]}>{statusBadge.label}</Text>
+            </View>
+            <View style={[styles.badgeChip, { backgroundColor: severityBadge.bgColor }]}> 
+              <Text style={[styles.badgeText, { color: severityBadge.textColor }]}>{severityBadge.label}</Text>
+            </View>
+          </View>
+
+          <View style={styles.incidentMetaWrap}>
+            <Text style={[styles.metaText, { color: palette.textMuted }]}>Pod: {podName}</Text>
+            {totalValue ? (
+              <Text style={[styles.metaText, { color: palette.textMuted }]}>Ước tính: {totalValue}</Text>
+            ) : null}
+            <Text style={[styles.metaText, { color: palette.textMuted }]}>Ảnh đính kèm: {photoCount}</Text>
+            {incidentId ? (
+              <Text style={[styles.metaText, { color: palette.textMuted }]}>Mã report: {incidentId}</Text>
+            ) : null}
+            <Text style={[styles.metaText, { color: palette.textMuted }]}>
+              {formatDateTime(item.created_at || item.updated_at)}
+            </Text>
+          </View>
+        </View>
+      );
+    },
+    [palette],
   );
 
   return (
@@ -378,25 +560,76 @@ export default function HistoryScreen() {
             borderColor: palette.border,
           },
         ]}>
-        <Text style={[styles.headerTitle, { color: palette.text }]}>Thông báo</Text>
+        <Text style={[styles.headerTitle, { color: palette.text }]}>Lịch sử cleaner</Text>
         <Text style={[styles.headerSubtitle, { color: palette.textMuted }]}>
           Xin chào, {user?.name || 'Cleaner'}.
         </Text>
         <View style={styles.summaryRow}>
           <Text style={[styles.unreadText, { color: palette.primary }]}>Chưa đọc: {unreadCount}</Text>
+          <Text style={[styles.unreadText, { color: palette.textMuted }]}>Incident: {incidentItems.length}</Text>
           <Pressable
-            disabled={isMarkingAll || unreadCount <= 0}
+            disabled={activeTab !== 'NOTIFICATIONS' || isMarkingAll || unreadCount <= 0}
             onPress={() => {
               handleMarkAllAsRead().catch(() => null);
             }}
             style={[
               styles.markAllButton,
               {
-                backgroundColor: unreadCount > 0 ? palette.primaryBg : palette.border,
+                backgroundColor:
+                  activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primaryBg : palette.border,
               },
             ]}>
-            <Text style={[styles.markAllText, { color: unreadCount > 0 ? palette.primary : palette.textMuted }]}>
+            <Text
+              style={[
+                styles.markAllText,
+                {
+                  color:
+                    activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primary : palette.textMuted,
+                },
+              ]}>
               Đánh dấu tất cả đã đọc
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.switchRow}>
+          <Pressable
+            onPress={() => {
+              setActiveTab('NOTIFICATIONS');
+            }}
+            style={[
+              styles.switchButton,
+              {
+                backgroundColor: activeTab === 'NOTIFICATIONS' ? palette.primaryBg : palette.surface,
+                borderColor: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.border,
+              },
+            ]}>
+            <Text
+              style={[
+                styles.switchButtonText,
+                { color: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.textMuted },
+              ]}>
+              Thông báo
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              setActiveTab('INCIDENTS');
+            }}
+            style={[
+              styles.switchButton,
+              {
+                backgroundColor: activeTab === 'INCIDENTS' ? palette.primaryBg : palette.surface,
+                borderColor: activeTab === 'INCIDENTS' ? palette.primary : palette.border,
+              },
+            ]}>
+            <Text
+              style={[
+                styles.switchButtonText,
+                { color: activeTab === 'INCIDENTS' ? palette.primary : palette.textMuted },
+              ]}>
+              Incident của tôi
             </Text>
           </Pressable>
         </View>
@@ -406,7 +639,7 @@ export default function HistoryScreen() {
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={palette.primary} />
         </View>
-      ) : (
+      ) : activeTab === 'NOTIFICATIONS' ? (
         <FlatList
           data={items}
           keyExtractor={(item) => String(item.id || item._id || `${item.event_code}-${item.createdAt}`)}
@@ -417,7 +650,36 @@ export default function HistoryScreen() {
               refreshing={isRefreshing}
               tintColor={palette.primary}
               onRefresh={() => {
-                loadNotifications({ isRefresh: true }).catch(() => null);
+                loadHistoryData({ isRefresh: true }).catch(() => null);
+              }}
+            />
+          }
+          ListEmptyComponent={
+            <View
+              style={[
+                styles.infoCard,
+                {
+                  backgroundColor: palette.surface,
+                  borderColor: palette.border,
+                },
+              ]}>
+              <Text style={[styles.infoTitle, { color: palette.text }]}>Chưa có dữ liệu</Text>
+              <Text style={[styles.infoDescription, { color: palette.textMuted }]}>{emptyText}</Text>
+            </View>
+          }
+        />
+      ) : (
+        <FlatList
+          data={incidentItems}
+          keyExtractor={(item) => String(item.report_id || `${item.created_at}-${item.description}`)}
+          contentContainerStyle={styles.listContainer}
+          renderItem={renderIncidentItem}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              tintColor={palette.primary}
+              onRefresh={() => {
+                loadHistoryData({ isRefresh: true }).catch(() => null);
               }}
             />
           }
@@ -475,6 +737,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacingX._10,
+  },
+  switchRow: {
+    marginTop: spacingY._10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._10,
+  },
+  switchButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    borderWidth: 1,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  switchButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
   },
   unreadText: {
     fontSize: 13,
@@ -536,7 +818,7 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
   },
   metaRow: {
-    marginTop: spacingY._3,
+    marginTop: spacingY._5,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -545,6 +827,10 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 11,
     fontFamily: Fonts.mono,
+  },
+  incidentMetaWrap: {
+    marginTop: spacingY._5,
+    gap: spacingY._5,
   },
   infoCard: {
     borderRadius: radius._15,

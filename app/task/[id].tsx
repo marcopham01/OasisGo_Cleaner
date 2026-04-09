@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TaskDetailTab from '@/components/task-detail-tab';
 import { Colors, Fonts, spacingX } from '@/constants/theme';
@@ -15,30 +16,37 @@ export default function TaskDetailScreen() {
 
   if (!token) {
     return (
-      <View style={[styles.centerContainer, { backgroundColor: palette.background }]}>
-        <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
-      </View>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
+        <View style={styles.centerContainer}>
+          <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <TaskDetailTab
-      token={token}
-      taskId={String(id || '') || null}
-      isDark={theme === 'dark'}
-      palette={palette}
-      onClose={() => {
-        if (router.canGoBack()) {
-          router.back();
-        } else {
-          router.replace('/(tabs)');
-        }
-      }}
-    />
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
+      <TaskDetailTab
+        token={token}
+        taskId={String(id || '') || null}
+        isDark={theme === 'dark'}
+        palette={palette}
+        onClose={() => {
+          if (router.canGoBack()) {
+            router.back();
+          } else {
+            router.replace('/(tabs)');
+          }
+        }}
+      />
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
   centerContainer: {
     flex: 1,
     alignItems: 'center',
