@@ -54,7 +54,7 @@ function statusColor(status: string | undefined, isDark: boolean) {
   const normalized = (status || '').toUpperCase();
   if (normalized === 'DONE') return isDark ? '#34d399' : '#10b981';
   if (normalized === 'IN_PROGRESS') return isDark ? '#fbbf24' : '#d97706';
-  if (normalized === 'ACCEPTED') return isDark ? '#60a5fa' : '#2563eb';
+  if (normalized === 'ACCEPTED') return isDark ? '#93c5fd' : '#1d4ed8';
   if (normalized === 'ASSIGNED') return isDark ? '#60a5fa' : '#2563eb';
   if (normalized === 'CANCELLED' || normalized === 'MISSED') return isDark ? '#fb7185' : '#e11d48';
   return isDark ? '#94a3b8' : '#64748b';
@@ -174,7 +174,18 @@ function resolvedDueText(task: CleaningTask, bookingWindow: BookingTimeWindow) {
   );
 }
 
-const ACTIVE_STATUSES = new Set(['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS']);
+function resolvedEstimatedStartText(task: CleaningTask, bookingWindow: BookingTimeWindow) {
+  return String(
+    task.estimated_start_time ||
+      task.start_time ||
+      task.booking_start_time ||
+      bookingWindow.start_time ||
+      task.assigned_at ||
+      task.created_at ||
+      '',
+  );
+}
+
 const TASKS_PAGE_SIZE = 8;
 
 function dateKey(value?: string) {
@@ -205,6 +216,7 @@ function isTaskToday(task: CleaningTask) {
 
 function statusBadgeBackground(status: string, isDark: boolean) {
   const normalized = status.toUpperCase();
+  if (normalized === 'ACCEPTED') return isDark ? '#1e40af' : '#1d4ed8';
   if (normalized === 'IN_PROGRESS') return isDark ? '#1d4ed8' : '#dbeafe';
   if (normalized === 'ASSIGNED' || normalized === 'NOTIFIED') return isDark ? '#92400e' : '#fef3c7';
   if (normalized === 'DONE') return isDark ? '#065f46' : '#d1fae5';
@@ -214,6 +226,7 @@ function statusBadgeBackground(status: string, isDark: boolean) {
 
 function statusBadgeText(status: string, isDark: boolean) {
   const normalized = status.toUpperCase();
+  if (normalized === 'ACCEPTED') return isDark ? '#bfdbfe' : '#dbeafe';
   if (normalized === 'IN_PROGRESS') return isDark ? '#bfdbfe' : '#1d4ed8';
   if (normalized === 'ASSIGNED' || normalized === 'NOTIFIED') return isDark ? '#fcd34d' : '#b45309';
   if (normalized === 'DONE') return isDark ? '#6ee7b7' : '#047857';
@@ -223,6 +236,15 @@ function statusBadgeText(status: string, isDark: boolean) {
 
 function statusLabel(status: string) {
   return status.replace(/_/g, ' ');
+}
+
+function requestSourceLabel(source?: string) {
+  const normalized = String(source || '').toUpperCase();
+  if (normalized === 'USER_REQUEST') return 'Yêu cầu từ khách';
+  if (normalized === 'AUTO_AFTER_CHECKOUT') return 'Dọn dẹp sau checkout';
+  if (normalized === 'SYSTEM_RETRY') return 'Hệ thống thử lại';
+  if (!normalized) return '-';
+  return normalized.replace(/_/g, ' ');
 }
 
 export default function TasksTab({
@@ -251,6 +273,7 @@ export default function TasksTab({
   const [draftStatusFilter, setDraftStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
   const [draftSourceFilter, setDraftSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
   const [draftSortFilter, setDraftSortFilter] = useState<'newest' | 'oldest'>('newest');
+  const [showAllTasks, setShowAllTasks] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const searchAnimation = useRef(new Animated.Value(0)).current;
 
@@ -300,28 +323,37 @@ export default function TasksTab({
     });
   }, [tasks, searchQuery, sortFilter, podNameMap, podClusterNameMap, bookingNameMap]);
 
-  const todayTaskCount = useMemo(() => {
+  const todayFilteredTaskCount = useMemo(() => {
     return filteredTasks.filter((task) => isTaskToday(task)).length;
   }, [filteredTasks]);
 
+  const visibleTasks = useMemo(() => {
+    if (showAllTasks) return filteredTasks;
+    return filteredTasks.filter((task) => isTaskToday(task));
+  }, [filteredTasks, showAllTasks]);
+
+  const hiddenTaskCount = useMemo(() => {
+    return Math.max(0, filteredTasks.length - todayFilteredTaskCount);
+  }, [filteredTasks.length, todayFilteredTaskCount]);
+
   const totalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(filteredTasks.length / TASKS_PAGE_SIZE));
-  }, [filteredTasks.length]);
+    return Math.max(1, Math.ceil(visibleTasks.length / TASKS_PAGE_SIZE));
+  }, [visibleTasks.length]);
 
   const pagedTasks = useMemo(() => {
     const safePage = Math.max(1, Math.min(currentPage, totalPages));
     const start = (safePage - 1) * TASKS_PAGE_SIZE;
-    return filteredTasks.slice(start, start + TASKS_PAGE_SIZE);
-  }, [currentPage, filteredTasks, totalPages]);
+    return visibleTasks.slice(start, start + TASKS_PAGE_SIZE);
+  }, [currentPage, totalPages, visibleTasks]);
 
-  const activeCount = useMemo(() => {
-    return tasks.filter((task) => ACTIVE_STATUSES.has(String(task.status || '').toUpperCase())).length;
+  const todayTaskCount = useMemo(() => {
+    return tasks.filter((task) => isTaskToday(task)).length;
   }, [tasks]);
 
-  const assignedCount = useMemo(() => {
+  const doneTodayCount = useMemo(() => {
     return tasks.filter((task) => {
       const status = String(task.status || '').toUpperCase();
-      return status === 'ASSIGNED' || status === 'NOTIFIED';
+      return isTaskToday(task) && status === 'DONE';
     }).length;
   }, [tasks]);
 
@@ -373,7 +405,7 @@ export default function TasksTab({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, statusFilter, sourceFilter, sortFilter]);
+  }, [searchQuery, statusFilter, sourceFilter, sortFilter, showAllTasks]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -593,17 +625,17 @@ export default function TasksTab({
           ]}>
           <View style={styles.summaryRow}>
             <View>
-              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐÃ PHÂN CÔNG</Text>
-              <Text style={[styles.summaryValue, { color: palette.white }]}>{assignedCount} Pod</Text>
+              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>NHIỆM VỤ HÔM NAY</Text>
+              <Text style={[styles.summaryValue, { color: palette.white }]}>{todayTaskCount}</Text>
             </View>
             <View style={styles.summaryRight}>
-              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐANG HOẠT ĐỘNG</Text>
-              <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>{activeCount}</Text>
+              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐÃ HOÀN THÀNH</Text>
+              <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>{doneTodayCount}</Text>
             </View>
           </View>
 
           <Text style={[styles.title, { color: palette.white }]}>Nhiệm vụ của tôi</Text>
-          <Text style={[styles.subtitle, { color: palette.primaryLight }]}>Quản lý task theo trạng thái và nguồn yêu cầu</Text>
+          <Text style={[styles.subtitle, { color: palette.primaryLight }]}>Theo dõi công việc trong ngày theo tiến độ xử lý</Text>
         </View>
 
         <View style={styles.actionsRow}>
@@ -650,22 +682,22 @@ export default function TasksTab({
           />
         </Animated.View>
 
-        <View style={styles.activeFilterRow}>
-          <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
-            Trạng thái: {statusFilter === 'ALL' ? 'Tất cả' : statusLabel(statusFilter)}
-          </Text>
-          <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
-            Nguồn: {sourceFilter === 'ALL' ? 'Tất cả' : sourceFilter.replace(/_/g, ' ')}
-          </Text>
-          <Text style={[styles.activeFilterText, { color: palette.textMuted }]}>
-            Sắp xếp: {sortFilter === 'newest' ? 'Mới nhất' : 'Cũ nhất'}
-          </Text>
+        <View style={styles.paginationSummaryRow}>
+          <Text style={[styles.paginationSummaryText, { color: palette.textMuted }]}>Đang hiển thị: {visibleTasks.length} task</Text>
+          <Text style={[styles.paginationSummaryText, { color: palette.primary }]}>Hôm nay: {todayFilteredTaskCount}</Text>
         </View>
 
-        <View style={styles.paginationSummaryRow}>
-          <Text style={[styles.paginationSummaryText, { color: palette.textMuted }]}>Tổng: {filteredTasks.length} task</Text>
-          <Text style={[styles.paginationSummaryText, { color: palette.primary }]}>Hôm nay: {todayTaskCount}</Text>
-        </View>
+        {hiddenTaskCount > 0 ? (
+          <Pressable
+            style={[styles.viewToggleButton, { borderColor: palette.primary, backgroundColor: palette.surface }]}
+            onPress={() => setShowAllTasks((prev) => !prev)}>
+            <Text style={[styles.viewToggleText, { color: palette.primary }]}>
+              {showAllTasks
+                ? 'Chỉ xem nhiệm vụ hôm nay'
+                : `Xem toàn bộ nhiệm vụ hiện có (${hiddenTaskCount} nhiệm vụ còn lại)`}
+            </Text>
+          </Pressable>
+        ) : null}
 
         {error && (
           <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error }]}>
@@ -675,8 +707,12 @@ export default function TasksTab({
 
         {loading ? (
           <ActivityIndicator color={palette.primary} style={styles.loader} />
-        ) : filteredTasks.length === 0 ? (
-          <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có task nào.</Text>
+        ) : visibleTasks.length === 0 ? (
+          <Text style={[styles.emptyText, { color: palette.textMuted }]}>
+            {filteredTasks.length > 0 && !showAllTasks
+              ? 'Không có task nào trong hôm nay.'
+              : 'Không có task nào.'}
+          </Text>
         ) : (
           pagedTasks.map((task) => {
             const status = String(task.status || 'UNKNOWN');
@@ -685,6 +721,7 @@ export default function TasksTab({
             const podLabel = resolvedPodLabel(task, podNameMap);
             const clusterOrLocationLabel = resolvedClusterOrLocationLabel(task, podClusterNameMap);
             const bookingLabel = resolvedBookingLabel(task, bookingNameMap);
+            const estimatedStartText = resolvedEstimatedStartText(task, bookingWindow);
             const dueText = resolvedDueText(task, bookingWindow);
 
             return (
@@ -722,7 +759,7 @@ export default function TasksTab({
                         </Text>
                       </View>
                       <View style={styles.metaLine}>
-                        <MaterialIcons name="event-note" size={16} color={palette.neutral500} />
+                        <MaterialIcons name="person" size={16} color={palette.neutral500} />
                         <Text style={[styles.meta, { color: palette.textMuted }]}>
                           {bookingLabel}
                         </Text>
@@ -730,7 +767,13 @@ export default function TasksTab({
                       <View style={styles.metaLine}>
                         <MaterialIcons name="local-offer" size={16} color={palette.neutral500} />
                         <Text style={[styles.meta, { color: palette.textMuted }]}>
-                          {String(task.request_source || '-')}
+                          {requestSourceLabel(String(task.request_source || ''))}
+                        </Text>
+                      </View>
+                      <View style={styles.metaLine}>
+                        <MaterialIcons name="timer" size={16} color={palette.neutral500} />
+                        <Text style={[styles.meta, { color: palette.textMuted }]}> 
+                          Bắt đầu dự kiến: {formatDateTime(estimatedStartText)}
                         </Text>
                       </View>
                       <View style={styles.metaLine}>
@@ -751,7 +794,7 @@ export default function TasksTab({
           })
         )}
 
-        {!loading && filteredTasks.length > 0 ? (
+        {!loading && visibleTasks.length > 0 ? (
           <View style={styles.paginationRow}>
             <Pressable
               style={[
@@ -794,7 +837,7 @@ export default function TasksTab({
         <View style={styles.modalOverlay}>
           <View style={[styles.modalCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: palette.text }]}>Bộ lọc task</Text>
+              <Text style={[styles.modalTitle, { color: palette.text }]}>Bộ lọc nhiệm vụ</Text>
               <Pressable onPress={() => setIsFilterModalOpen(false)}>
                 <MaterialIcons name="close" size={20} color={palette.textMuted} />
               </Pressable>
@@ -839,7 +882,7 @@ export default function TasksTab({
                     ]}
                     onPress={() => setDraftSourceFilter(source)}>
                     <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
-                      {source === 'ALL' ? 'Tất cả' : source.replace(/_/g, ' ')}
+                      {source === 'ALL' ? 'Tất cả' : requestSourceLabel(source)}
                     </Text>
                   </Pressable>
                 );
@@ -990,6 +1033,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: Fonts.sans,
     fontWeight: '600',
+  },
+  viewToggleButton: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._7,
+    alignSelf: 'flex-start',
+  },
+  viewToggleText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
   },
   filterLabel: {
     fontSize: 12,

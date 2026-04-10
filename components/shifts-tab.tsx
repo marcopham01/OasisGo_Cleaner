@@ -1,31 +1,34 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  checkinShift,
-  checkoutShift,
-  getMyAttendanceLogs,
-  getMyAttendanceLogsPaginated,
-  getMyCleaningTasks,
-  getMyShiftAssignments,
+    checkinShift,
+    checkoutShift,
+    getMyAssignmentAttendanceStatus,
+    getMyAttendanceLogs,
+    getMyAttendanceLogsPaginated,
+    getMyCleaningTasks,
+    getMyShiftAssignments,
+    getMyTodayAttendanceStatus,
 } from '@/services/cleaner-dashboard.service';
 import type {
-  CleaningTask,
-  StaffAttendanceLog,
-  StaffAttendanceLogListResponse,
-  StaffShiftAssignment,
+    CleaningTask,
+    StaffAttendanceLog,
+    StaffAttendanceLogListResponse,
+    StaffShiftAssignment,
+    StaffTodayAttendanceStatus,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -156,7 +159,137 @@ function canCheckout(assignment: StaffShiftAssignment, attendance?: AssignmentAt
 }
 
 function shouldHidePermissionMessage(message: string) {
-  return message.toLowerCase().includes('không có quyền');
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('không có quyền') ||
+    normalized.includes('khong co quyen') ||
+    normalized.includes('not allowed')
+  );
+}
+
+function isDuplicateAttendanceError(message: string) {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('already checked in') ||
+    normalized.includes('already checked out') ||
+    normalized.includes('đã vào ca') ||
+    normalized.includes('đã tan ca') ||
+    normalized.includes('ban da vao ca truoc do') ||
+    normalized.includes('ban da tan ca truoc do')
+  );
+}
+
+function localizeShiftErrorMessage(message: string) {
+  const normalized = String(message || '').toLowerCase();
+
+  if (normalized.includes('not authorized. please login to access this resource')) {
+    return 'Bạn chưa đăng nhập. Vui lòng đăng nhập để tiếp tục';
+  }
+  if (normalized.includes('user not found. token is invalid')) {
+    return 'Không tìm thấy người dùng. Token không hợp lệ';
+  }
+  if (normalized.includes('your account has been deactivated')) {
+    return 'Tài khoản của bạn đã bị vô hiệu hóa';
+  }
+  if (normalized.includes('invalid token. please login again')) {
+    return 'Token không hợp lệ. Vui lòng đăng nhập lại';
+  }
+  if (normalized.includes('token expired. please login again')) {
+    return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại';
+  }
+  if (normalized.includes('is not authorized to access this route')) {
+    return 'Vai trò tài khoản của bạn không có quyền truy cập chức năng này';
+  }
+  if (normalized.includes('server error during authentication')) {
+    return 'Lỗi máy chủ trong quá trình xác thực';
+  }
+
+  const checkedInAtMatch = normalized.match(/ban da vao ca truoc do luc\s+(.+)$/i);
+  if (checkedInAtMatch?.[1]) return `Bạn đã vào ca trước đó lúc ${checkedInAtMatch[1]}`;
+
+  const checkedOutAtMatch = normalized.match(/ban da tan ca truoc do luc\s+(.+)$/i);
+  if (checkedOutAtMatch?.[1]) return `Bạn đã tan ca trước đó lúc ${checkedOutAtMatch[1]}`;
+
+  if (normalized.includes('already checked in')) return 'Bạn đã vào ca rồi';
+  if (normalized.includes('already checked out')) return 'Bạn đã tan ca rồi';
+  if (normalized.includes('ban da vao ca truoc do')) return 'Bạn đã vào ca trước đó';
+  if (normalized.includes('ban da tan ca truoc do')) return 'Bạn đã tan ca trước đó';
+  if (normalized.includes('ca lam viec chua duoc cau hinh gio bat dau/ket thuc')) {
+    return 'Ca làm việc chưa được cấu hình giờ bắt đầu/kết thúc';
+  }
+  if (normalized.includes('thieu shift_assignment_id') || normalized.includes('shift_assignment_id is required')) {
+    return 'Thiếu mã phân công ca (shift_assignment_id)';
+  }
+  if (normalized.includes('khong tim thay thong tin nguoi dung')) {
+    return 'Không tìm thấy thông tin người dùng';
+  }
+  if (normalized.includes('khong xac dinh duoc id nguoi dung')) {
+    return 'Không xác định được ID người dùng';
+  }
+  if (normalized.includes('action khong hop le')) {
+    return 'Action không hợp lệ. Chỉ chấp nhận CHECKIN hoặc CHECKOUT';
+  }
+  if (normalized.includes('must check in before check out')) return 'Bạn cần vào ca trước khi tan ca';
+  if (normalized.includes('ban can vao ca truoc khi tan ca')) return 'Bạn cần vào ca trước khi tan ca';
+  const checkinStatusMatch = normalized.match(/cannot check in assignment with status\s+(.+)$/i);
+  if (checkinStatusMatch?.[1]) {
+    return `Không thể vào ca khi phân công đang ở trạng thái ${checkinStatusMatch[1].toUpperCase()}`;
+  }
+  const checkinStatusViMatch = normalized.match(/khong the vao ca khi phan cong dang o trang thai\s+(.+)$/i);
+  if (checkinStatusViMatch?.[1]) {
+    return `Không thể vào ca khi phân công đang ở trạng thái ${checkinStatusViMatch[1].toUpperCase()}`;
+  }
+  const checkoutStatusMatch = normalized.match(/cannot check out assignment with status\s+(.+)$/i);
+  if (checkoutStatusMatch?.[1]) {
+    return `Không thể tan ca khi phân công đang ở trạng thái ${checkoutStatusMatch[1].toUpperCase()}`;
+  }
+  const checkoutStatusViMatch = normalized.match(/khong the tan ca khi phan cong dang o trang thai\s+(.+)$/i);
+  if (checkoutStatusViMatch?.[1]) {
+    return `Không thể tan ca khi phân công đang ở trạng thái ${checkoutStatusViMatch[1].toUpperCase()}`;
+  }
+  if (normalized.includes('outside the allowed check-in/check-out window')) {
+    return 'Hiện tại chưa nằm trong khung giờ cho phép chấm công';
+  }
+  if (normalized.includes('thoi diem hien tai nam ngoai khung gio cho phep vao ca/tan ca')) {
+    return 'Hiện tại chưa nằm trong khung giờ cho phép chấm công';
+  }
+  if (normalized.includes('check-in is only allowed')) {
+    return 'Chỉ được vào ca trong khoảng 30 phút trước giờ bắt đầu đến hết giờ kết thúc ca';
+  }
+  if (normalized.includes('chi duoc vao ca tu 30 phut truoc gio bat dau den het gio ket thuc ca')) {
+    return 'Chỉ được vào ca trong khoảng 30 phút trước giờ bắt đầu đến hết giờ kết thúc ca';
+  }
+  if (normalized.includes('check-out is only allowed')) {
+    return 'Chỉ được tan ca trong thời gian ca làm và tối đa 180 phút sau khi kết thúc ca';
+  }
+  if (normalized.includes('chi duoc tan ca trong thoi gian ca va toi da 180 phut sau khi ket thuc ca')) {
+    return 'Chỉ được tan ca trong thời gian ca làm và tối đa 180 phút sau khi kết thúc ca';
+  }
+  if (normalized.includes('shift assignment not found')) return 'Không tìm thấy phân công ca';
+  if (normalized.includes('khong tim thay phan cong ca')) return 'Không tìm thấy phân công ca';
+  if (normalized.includes('date khong hop le')) return 'Ngày không hợp lệ, định dạng đúng là YYYY-MM-DD';
+  if (normalized.includes('from_date khong hop le')) return 'from_date không hợp lệ, định dạng đúng là YYYY-MM-DD';
+  if (normalized.includes('to_date khong hop le')) return 'to_date không hợp lệ, định dạng đúng là YYYY-MM-DD';
+  if (normalized.includes('ngay ban dang thao tac') && normalized.includes('khong dung voi ngay co the cham cong hien tai')) {
+    return 'Ngày bạn đang thao tác không khớp với ngày có thể chấm công tại thời điểm hiện tại';
+  }
+  if (normalized.includes('ban khong co quyen vao ca cho phan cong nay')) {
+    return 'Bạn không có quyền vào ca cho phân công này';
+  }
+  if (normalized.includes('ban khong co quyen tan ca cho phan cong nay')) {
+    return 'Bạn không có quyền tan ca cho phân công này';
+  }
+  if (normalized.includes('ban khong co quyen xem phan cong ca nay')) {
+    return 'Bạn không có quyền xem phân công ca này';
+  }
+  if (normalized.includes('not allowed')) return 'Bạn không có quyền thao tác ca này';
+  if (normalized.includes('khong co quyen')) return 'Bạn không có quyền thao tác ca này';
+  if (normalized.includes('invalid attendance timeline')) return 'Mốc thời gian chấm công không hợp lệ';
+  if (normalized.includes('du lieu cham cong khong hop le')) {
+    return 'Dữ liệu chấm công không hợp lệ: tan ca không thể xảy ra trước vào ca';
+  }
+
+  return message;
 }
 
 function statusBadgeMeta(status: string, isDark: boolean) {
@@ -201,6 +334,16 @@ function statusBadgeMeta(status: string, isDark: boolean) {
   };
 }
 
+function systemStatusText(status: string) {
+  const normalized = String(status || '').toUpperCase();
+  if (normalized === 'ASSIGNED') return 'Chưa chấm công';
+  if (normalized === 'CHECKED_IN') return 'Đã vào ca';
+  if (normalized === 'COMPLETED') return 'Đã tan ca';
+  if (normalized === 'ABSENT') return 'Vắng mặt';
+  if (!normalized) return 'Không xác định';
+  return normalized;
+}
+
 function confirmShiftAction(action: 'checkin' | 'checkout') {
   const title = action === 'checkin' ? 'Xac nhan vao ca' : 'Xac nhan tan ca';
   const message =
@@ -230,6 +373,82 @@ function confirmShiftAction(action: 'checkin' | 'checkout') {
 }
 
 const FINISHED_TASK_STATUSES = new Set(['DONE', 'CANCELLED', 'MISSED']);
+const CHECKIN_EARLY_MINUTES = 30;
+const CHECKOUT_LATE_MINUTES = 180;
+
+function parseTimeParts(timeValue?: string) {
+  const text = String(timeValue || '').trim();
+  const match = text.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] || 0);
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    Number.isNaN(seconds) ||
+    hours > 23 ||
+    minutes > 59 ||
+    seconds > 59
+  ) {
+    return null;
+  }
+
+  return { hours, minutes, seconds };
+}
+
+function startOfDay(value: Date) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function endOfDay(value: Date) {
+  const date = new Date(value);
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function withTime(baseDate: Date, parts: { hours: number; minutes: number; seconds: number }) {
+  const date = new Date(baseDate);
+  date.setHours(parts.hours, parts.minutes, parts.seconds, 0);
+  return date;
+}
+
+function resolveActionableWorkDate(assignment: StaffShiftAssignment, now = new Date()) {
+  const startParts = parseTimeParts(String(assignment.start_time || assignment.shift?.start_time || ''));
+  const endParts = parseTimeParts(String(assignment.end_time || assignment.shift?.end_time || ''));
+  const startDate = assignment.start_date ? new Date(String(assignment.start_date)) : null;
+  const endDate = assignment.end_date ? new Date(String(assignment.end_date)) : null;
+
+  if (!startParts || !endParts || !startDate || !endDate) return null;
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return null;
+
+  const assignmentStart = startOfDay(startDate);
+  const assignmentEnd = endOfDay(endDate);
+  const today = startOfDay(now);
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const candidates = [today, yesterday];
+
+  for (const day of candidates) {
+    if (day < assignmentStart || day > assignmentEnd) continue;
+
+    const shiftStart = withTime(day, startParts);
+    let shiftEnd = withTime(day, endParts);
+    if (shiftEnd <= shiftStart) {
+      shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+    }
+
+    const gateStart = new Date(shiftStart.getTime() - CHECKIN_EARLY_MINUTES * 60 * 1000);
+    const gateEnd = new Date(shiftEnd.getTime() + CHECKOUT_LATE_MINUTES * 60 * 1000);
+    if (now >= gateStart && now <= gateEnd) {
+      return toDateKey(shiftStart.toISOString());
+    }
+  }
+
+  return null;
+}
 
 function toDateKey(value?: string) {
   if (!value) return '';
@@ -300,6 +519,10 @@ export default function ShiftsTab({
 }: ShiftsTabProps) {
   const [assignments, setAssignments] = useState<StaffShiftAssignment[]>([]);
   const [attendanceLogs, setAttendanceLogs] = useState<StaffAttendanceLog[]>([]);
+  const [assignmentAttendanceMap, setAssignmentAttendanceMap] = useState<
+    Record<string, AssignmentAttendanceState>
+  >({});
+  const [todayAttendanceStatus, setTodayAttendanceStatus] = useState<StaffTodayAttendanceStatus | null>(null);
   const [shiftDate, setShiftDate] = useState(todayDateInput());
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -333,6 +556,13 @@ export default function ShiftsTab({
 
   const attendanceByAssignmentId = useMemo<Record<string, AssignmentAttendanceState>>(() => {
     return assignments.reduce<Record<string, AssignmentAttendanceState>>((acc, assignment) => {
+      const id = assignmentId(assignment);
+      const fromStatusApi = assignmentAttendanceMap[id];
+      if (fromStatusApi?.checkin_at || fromStatusApi?.checkout_at) {
+        acc[id] = fromStatusApi;
+        return acc;
+      }
+
       const ids = collectAssignmentIds(assignment);
       if (ids.length === 0) return acc;
 
@@ -351,14 +581,14 @@ export default function ShiftsTab({
         .filter((log) => String(log.action || '').toUpperCase() === 'CHECKOUT')
         .sort((a, b) => toTimestamp(b.created_at as string | undefined) - toTimestamp(a.created_at as string | undefined))[0];
 
-      acc[assignmentId(assignment)] = {
+      acc[id] = {
         checkin_at: String(latestCheckin?.created_at || '').trim() || undefined,
         checkout_at: String(latestCheckout?.created_at || '').trim() || undefined,
       };
 
       return acc;
     }, {});
-  }, [assignments, attendanceLogs]);
+  }, [assignments, attendanceLogs, assignmentAttendanceMap]);
 
   const loadShifts = useCallback(async () => {
     setLoading(true);
@@ -366,9 +596,15 @@ export default function ShiftsTab({
     onLoadingChange?.(true);
 
     try {
+      let dailyStatus: StaffTodayAttendanceStatus | null = null;
+      try {
+        dailyStatus = await getMyTodayAttendanceStatus(token, shiftDate);
+      } catch {
+        dailyStatus = null;
+      }
+
       let assignmentData = await getMyShiftAssignments(token, {
-        from_date: shiftDate,
-        to_date: shiftDate,
+        work_date: shiftDate,
       });
 
       if (assignmentData.length === 0) {
@@ -379,8 +615,42 @@ export default function ShiftsTab({
       }
 
       let myAttendanceLogs: StaffAttendanceLog[] = [];
+      const byAssignmentStatus: Record<string, AssignmentAttendanceState> = {};
 
       if (assignmentData.length > 0) {
+        try {
+          const statusEntries = await Promise.all(
+            assignmentData.map(async (assignment) => {
+              const id = assignmentId(assignment);
+              if (!id) return null;
+
+              try {
+                const status = await getMyAssignmentAttendanceStatus(token, {
+                  shift_assignment_id: id,
+                  date: shiftDate,
+                });
+
+                return {
+                  id,
+                  state: {
+                    checkin_at: String(status.checkin_at || '').trim() || undefined,
+                    checkout_at: String(status.checkout_at || '').trim() || undefined,
+                  },
+                };
+              } catch {
+                return null;
+              }
+            }),
+          );
+
+          statusEntries.forEach((entry) => {
+            if (!entry) return;
+            byAssignmentStatus[entry.id] = entry.state;
+          });
+        } catch {
+          // Keep fallback based on /me logs.
+        }
+
         try {
           const logsByAssignment = await Promise.all(
             assignmentData.map(async (assignment) => {
@@ -390,6 +660,8 @@ export default function ShiftsTab({
               try {
                 return await getMyAttendanceLogs(token, {
                   shift_assignment_id: id,
+                  from_date: shiftDate,
+                  to_date: shiftDate,
                   limit: 50,
                 });
               } catch {
@@ -412,12 +684,19 @@ export default function ShiftsTab({
 
       setAssignments(assignmentData);
       setAttendanceLogs(myAttendanceLogs);
+      setAssignmentAttendanceMap(byAssignmentStatus);
+      setTodayAttendanceStatus(dailyStatus);
       onErrorChange?.(null);
     } catch (err) {
-      const msg = getErrorMessage(err);
-      if (shouldHidePermissionMessage(msg)) {
+      const rawMsg = getErrorMessage(err);
+      const msg = localizeShiftErrorMessage(rawMsg);
+      if (shouldHidePermissionMessage(rawMsg)) {
         setError(null);
         onErrorChange?.(null);
+      } else if (isDuplicateAttendanceError(rawMsg)) {
+        setError(msg);
+        onErrorChange?.(msg);
+        await loadShifts();
       } else {
         setError(msg);
         onErrorChange?.(msg);
@@ -465,14 +744,15 @@ export default function ShiftsTab({
 
     try {
       if (action === 'checkin') {
-        await checkinShift(token, targetId);
+        await checkinShift(token, targetId, shiftDate);
       } else {
-        await checkoutShift(token, targetId);
+        await checkoutShift(token, targetId, shiftDate);
       }
       await loadShifts();
     } catch (err) {
-      const msg = getErrorMessage(err);
-      if (shouldHidePermissionMessage(msg)) {
+      const rawMsg = getErrorMessage(err);
+      const msg = localizeShiftErrorMessage(rawMsg);
+      if (shouldHidePermissionMessage(rawMsg)) {
         setError(null);
         onErrorChange?.(null);
       } else {
@@ -510,7 +790,7 @@ export default function ShiftsTab({
         setHistoryTotalPages(result.pagination?.pages || 1);
         setHistoryError(null);
       } catch (err) {
-        setHistoryError(getErrorMessage(err));
+        setHistoryError(localizeShiftErrorMessage(getErrorMessage(err)));
       } finally {
         if (append) {
           setHistoryLoadingMore(false);
@@ -567,6 +847,18 @@ export default function ShiftsTab({
           </View>
         )}
 
+        {todayAttendanceStatus && (
+          <View style={[styles.summaryCard, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+            <Text style={[styles.summaryTitle, { color: palette.text }]}>Tổng quan chấm công ngày {formatDate(todayAttendanceStatus.date)}</Text>
+            <Text style={[styles.summaryText, { color: palette.textMuted }]}>Đã vào ca: {todayAttendanceStatus.checked_in_today ? 'Có' : 'Chưa'}</Text>
+            <Text style={[styles.summaryText, { color: palette.textMuted }]}>Đã tan ca: {todayAttendanceStatus.checked_out_today ? 'Có' : 'Chưa'}</Text>
+            <Text style={[styles.summaryText, { color: palette.textMuted }]}>Số lần check-in/check-out: {todayAttendanceStatus.checkin_count}/{todayAttendanceStatus.checkout_count}</Text>
+            <Text style={[styles.summaryText, { color: palette.textMuted }]}>
+              Mốc gần nhất: In {formatDateTime(todayAttendanceStatus.latest_checkin_at || '')} | Out {formatDateTime(todayAttendanceStatus.latest_checkout_at || '')}
+            </Text>
+          </View>
+        )}
+
         {loading ? (
           <ActivityIndicator color={palette.primary} style={styles.loader} />
         ) : assignments.length === 0 ? (
@@ -577,8 +869,14 @@ export default function ShiftsTab({
             const status = displayStatus(assignment, attendanceState);
             const statusBadge = statusBadgeMeta(status, isDark);
             const key = assignmentId(assignment);
-            const checkinDisabled = disableAllActions || !canCheckin(assignment, attendanceState);
-            const checkoutDisabled = disableAllActions || !canCheckout(assignment, attendanceState);
+            const actionableWorkDate = resolveActionableWorkDate(assignment);
+            const selectedDateKey = toDateKey(shiftDate);
+            const isWrongSelectedDate =
+              Boolean(actionableWorkDate) && selectedDateKey !== actionableWorkDate;
+            const checkinDisabled =
+              disableAllActions || isWrongSelectedDate || !canCheckin(assignment, attendanceState);
+            const checkoutDisabled =
+              disableAllActions || isWrongSelectedDate || !canCheckout(assignment, attendanceState);
 
             return (
               <View
@@ -594,7 +892,9 @@ export default function ShiftsTab({
                   </View>
                 </View>
 
-                <Text style={[styles.meta, { color: statusColor(status, isDark) }]}>Trạng thái hệ thống: {status}</Text>
+                <Text style={[styles.meta, { color: statusColor(status, isDark) }]}>
+                  Trạng thái hệ thống: {systemStatusText(status)}
+                </Text>
 
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
                   Ngày: {assignmentDateWithCurrentLabel(assignment, shiftDate)}
@@ -611,6 +911,12 @@ export default function ShiftsTab({
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
                   Giờ check-out: {formatDateTime(assignment.checkout_at || attendanceState?.checkout_at)}
                 </Text>
+
+                {isWrongSelectedDate && (
+                  <Text style={[styles.meta, { color: palette.warning || '#d97706' }]}>
+                    Bạn đang xem ngày {formatDate(shiftDate)}. Hiện tại chỉ có thể chấm công cho ngày {formatDate(actionableWorkDate || '')}.
+                  </Text>
+                )}
 
                 <View style={styles.buttonRow}>
                   <Pressable
@@ -775,6 +1081,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: Fonts.sans,
     fontWeight: '600',
+  },
+  summaryCard: {
+    borderWidth: 1,
+    borderRadius: radius._12,
+    padding: spacingX._12,
+    gap: spacingY._5,
+  },
+  summaryTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  summaryText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
   },
   emptyText: {
     fontSize: 13,

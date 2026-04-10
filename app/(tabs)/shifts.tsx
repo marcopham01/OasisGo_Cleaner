@@ -1,4 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import ShiftsTab from '@/components/shifts-tab';
 import { Colors, Fonts, spacingX, spacingY } from '@/constants/theme';
@@ -12,21 +13,28 @@ export default function ShiftsScreen() {
 
   if (!token) {
     return (
-      <View style={[styles.centerContainer, { backgroundColor: palette.background }]}>
-        <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
-      </View>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
+        <View style={styles.centerContainer}>
+          <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <Text style={[styles.screenTitle, { color: palette.text }]}>Ca làm việc</Text>
-      <ShiftsTab token={token} isDark={theme === 'dark'} palette={palette} />
-    </View>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
+      <View style={styles.container}>
+        <Text style={[styles.screenTitle, { color: palette.text }]}>Ca làm việc</Text>
+        <ShiftsTab token={token} isDark={theme === 'dark'} palette={palette} />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
   centerContainer: {
     flex: 1,
     alignItems: 'center',
@@ -40,13 +48,13 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    paddingTop: spacingY._10,
+    paddingTop: spacingY._12,
   },
   screenTitle: {
     fontSize: 20,
     fontWeight: '700',
     fontFamily: Fonts.sans,
     paddingHorizontal: spacingX._20,
-    paddingBottom: spacingY._5,
+    paddingBottom: spacingY._7,
   },
 });

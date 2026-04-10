@@ -4,42 +4,44 @@ import { Platform } from 'react-native';
 
 import { apiClient } from '@/services/api';
 import type {
-  BookingDetails,
-  CleanerMarkAllReadResponse,
-  CleanerNotification,
-  CleanerNotificationListResponse,
-  CleanerNotificationQuery,
-  CleanerUnreadCountResponse,
-  CleaningPhoto,
-  CleaningPhotoType,
-  CleaningTask,
-  CleaningTaskQuery,
-  CreateCleaningPhotoUploadPayload,
-  CreateDamageReportPayload,
-  CreateIncidentFromCleaningTaskPayload,
-  CreateLostFoundItemPayload,
-  DamageReportItem,
-  DamageServiceCatalogItem,
-  DamageReportListResponse,
-  DamageReportResponse,
-  Incident,
-  IncidentQuery,
-  IncidentStatus,
-  LostFoundItem,
-  LostFoundQuery,
-  LostFoundStatus,
-  MyCleanerKeyByBookingData,
-  MyCleanerKeyByTaskData,
-  PodDetails,
-  StaffAttendanceLog,
-  StaffAttendanceLogListResponse,
-  StaffAttendanceLogQuery,
-  StaffShiftAssignment,
-  StaffShiftAssignmentQuery,
-  StaffWorkRoster,
-  StaffWorkRosterQuery,
-  UpdateCleaningPhotoPayload,
-  UpdateCleaningTaskPayload,
+    BookingDetails,
+    CleanerMarkAllReadResponse,
+    CleanerNotification,
+    CleanerNotificationListResponse,
+    CleanerNotificationQuery,
+    CleanerUnreadCountResponse,
+    CleaningPhoto,
+    CleaningPhotoType,
+    CleaningTask,
+    CleaningTaskQuery,
+    CreateCleaningPhotoUploadPayload,
+    CreateDamageReportPayload,
+    CreateIncidentFromCleaningTaskPayload,
+    CreateLostFoundItemPayload,
+    DamageReportItem,
+    DamageReportListResponse,
+    DamageReportResponse,
+    DamageServiceCatalogItem,
+    Incident,
+    IncidentQuery,
+    IncidentStatus,
+    LostFoundItem,
+    LostFoundQuery,
+    LostFoundStatus,
+    MyCleanerKeyByBookingData,
+    MyCleanerKeyByTaskData,
+    PodDetails,
+    StaffAssignmentAttendanceStatus,
+    StaffAttendanceLog,
+    StaffAttendanceLogListResponse,
+    StaffAttendanceLogQuery,
+    StaffShiftAssignment,
+    StaffShiftAssignmentQuery,
+    StaffTodayAttendanceStatus,
+    StaffWorkRoster,
+    StaffWorkRosterQuery,
+    UpdateCleaningPhotoPayload,
+    UpdateCleaningTaskPayload,
 } from '@/types/cleaner-dashboard';
 import { normalizeBackendMessage } from '@/utils/validation';
 
@@ -86,6 +88,16 @@ function getErrorMessage(error: unknown) {
   }
 
   return 'Không thể tải dữ liệu dashboard';
+}
+
+function withRawBackendMessage(error: unknown, fallbackMessage: string) {
+  const axiosError = error as AxiosError<{ message?: string }>;
+  const rawBackendMessage = String(axiosError.response?.data?.message || '').trim();
+  const wrapped = new Error(fallbackMessage) as Error & { rawBackendMessage?: string };
+  if (rawBackendMessage) {
+    wrapped.rawBackendMessage = rawBackendMessage;
+  }
+  return wrapped;
 }
 
 function extractData<T>(value: unknown): T | null {
@@ -448,11 +460,11 @@ export async function getStaffWorkRosters(token: string, query: StaffWorkRosterQ
   }
 }
 
-export async function checkinShift(token: string, shiftAssignmentId: string) {
+export async function checkinShift(token: string, shiftAssignmentId: string, date?: string) {
   try {
     const response = await apiClient.post<ApiEnvelope<StaffAttendanceLog>>(
       '/staff-attendance-logs/checkin',
-      { shift_assignment_id: shiftAssignmentId },
+      compactParams({ shift_assignment_id: shiftAssignmentId, date }),
       {
         headers: authHeader(token),
       },
@@ -465,15 +477,15 @@ export async function checkinShift(token: string, shiftAssignmentId: string) {
 
     return item;
   } catch (error) {
-    throw new Error(getErrorMessage(error));
+    throw withRawBackendMessage(error, getErrorMessage(error));
   }
 }
 
-export async function checkoutShift(token: string, shiftAssignmentId: string) {
+export async function checkoutShift(token: string, shiftAssignmentId: string, date?: string) {
   try {
     const response = await apiClient.post<ApiEnvelope<StaffAttendanceLog>>(
       '/staff-attendance-logs/checkout',
-      { shift_assignment_id: shiftAssignmentId },
+      compactParams({ shift_assignment_id: shiftAssignmentId, date }),
       {
         headers: authHeader(token),
       },
@@ -486,7 +498,7 @@ export async function checkoutShift(token: string, shiftAssignmentId: string) {
 
     return item;
   } catch (error) {
-    throw new Error(getErrorMessage(error));
+    throw withRawBackendMessage(error, getErrorMessage(error));
   }
 }
 
@@ -521,6 +533,54 @@ export async function getMyAttendanceLogsPaginated(
       data: toArray<StaffAttendanceLog>(response.data?.data ?? response.data),
       pagination: response.data?.pagination ?? null,
     };
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getMyAssignmentAttendanceStatus(
+  token: string,
+  query: { shift_assignment_id: string; date?: string },
+): Promise<StaffAssignmentAttendanceStatus> {
+  try {
+    const response = await apiClient.get<ApiEnvelope<StaffAssignmentAttendanceStatus>>(
+      '/staff-attendance-logs/me/status',
+      {
+        headers: authHeader(token),
+        params: compactParams(query),
+      },
+    );
+
+    const item = extractData<StaffAssignmentAttendanceStatus>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Không thể lấy trạng thái chấm công theo ca');
+    }
+
+    return item;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getMyTodayAttendanceStatus(
+  token: string,
+  date?: string,
+): Promise<StaffTodayAttendanceStatus> {
+  try {
+    const response = await apiClient.get<ApiEnvelope<StaffTodayAttendanceStatus>>(
+      '/staff-attendance-logs/me/today-status',
+      {
+        headers: authHeader(token),
+        params: compactParams({ date }),
+      },
+    );
+
+    const item = extractData<StaffTodayAttendanceStatus>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Không thể lấy trạng thái chấm công theo ngày');
+    }
+
+    return item;
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }

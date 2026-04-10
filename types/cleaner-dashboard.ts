@@ -217,6 +217,7 @@ export interface StaffAttendanceLog {
   _id?: string;
   staff_id?: string;
   shift_assignment_id?: string;
+  work_date?: string;
   action?: StaffAttendanceAction | string;
   created_at?: string;
   updated_at?: string;
@@ -227,9 +228,32 @@ export interface StaffAttendanceLogQuery {
   action?: StaffAttendanceAction | string;
   from_date?: string;
   to_date?: string;
+  date?: string;
+  work_date?: string;
   shift_assignment_id?: string;
   page?: number;
   limit?: number;
+}
+
+export interface StaffAssignmentAttendanceStatus {
+  shift_assignment_id: string;
+  date: string;
+  checked_in: boolean;
+  checked_out: boolean;
+  checkin_at: string | null;
+  checkout_at: string | null;
+}
+
+export interface StaffTodayAttendanceStatus {
+  date: string;
+  checked_in_today: boolean;
+  checked_out_today: boolean;
+  checkin_count: number;
+  checkout_count: number;
+  latest_checkin_at: string | null;
+  latest_checkout_at: string | null;
+  checkin_assignment_ids: string[];
+  checkout_assignment_ids: string[];
 }
 
 export interface StaffAttendanceLogListResponse {
@@ -268,6 +292,7 @@ export interface CleaningTask {
   cleaner_id?: string;
   shift_assignment_id?: string | null;
   request_source?: CleaningRequestSource | string;
+  estimated_start_time?: string | null;
   due_at?: string | null;
   assigned_at?: string | null;
   notified_at?: string | null;
@@ -299,6 +324,7 @@ export interface UpdateCleaningTaskPayload {
   cleaner_id?: string;
   shift_assignment_id?: string | null;
   request_source?: CleaningRequestSource | string;
+  estimated_start_time?: string | null;
   due_at?: string | null;
   assigned_at?: string | null;
   notified_at?: string | null;

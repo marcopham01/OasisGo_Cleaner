@@ -3,44 +3,44 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  checkinBookingWithCleanerKey,
-  createCleaningPhoto,
-  createDamageReport,
-  createOperationalIncident,
-  getBookingById,
-  getCleaningPhotos,
-  getCleaningTaskById,
-  getDamageReportItems,
-  getDamageServiceCatalogs,
-  getIncidentsByCleaningTaskId,
-  getMyCleanerKeyByBookingId,
-  getMyCleanerKeyByTaskId,
-  getPodById,
-  updateCleaningTask,
+    checkinBookingWithCleanerKey,
+    createCleaningPhoto,
+    createDamageReport,
+    createOperationalIncident,
+    getBookingById,
+    getCleaningPhotos,
+    getCleaningTaskById,
+    getDamageReportItems,
+    getDamageServiceCatalogs,
+    getIncidentsByCleaningTaskId,
+    getMyCleanerKeyByBookingId,
+    getMyCleanerKeyByTaskId,
+    getPodById,
+    updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import type {
-  CleanerOnlineKey,
-  CleanerTaskAction,
-  CleaningPhoto,
-  CleaningPhotoType,
-  CleaningTask,
-  DamageServiceCatalogItem,
-  DamageReportItem,
-  Incident,
-  IncidentSeverity,
+    CleanerOnlineKey,
+    CleanerTaskAction,
+    CleaningPhoto,
+    CleaningPhotoType,
+    CleaningTask,
+    DamageReportItem,
+    DamageServiceCatalogItem,
+    Incident,
+    IncidentSeverity,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -71,6 +71,15 @@ function formatDateTime(dateText?: string) {
         hour: '2-digit',
         minute: '2-digit',
       });
+}
+
+function requestSourceLabel(source?: string) {
+  const normalized = String(source || '').toUpperCase();
+  if (normalized === 'USER_REQUEST') return 'Yêu cầu từ khách';
+  if (normalized === 'AUTO_AFTER_CHECKOUT') return 'Dọn dẹp sau checkout';
+  if (normalized === 'SYSTEM_RETRY') return 'Hệ thống thử lại';
+  if (!normalized) return '-';
+  return normalized.replace(/_/g, ' ');
 }
 
 function formatVnd(value?: number | null) {
@@ -941,6 +950,7 @@ export default function TaskDetailTab({
   const progress = progressStepState(taskStatus);
   const showReadyAction = canAccept || canStart;
   const bookingWindow = bookingWindowOverride || taskBookingWindow(task);
+  const estimatedTimeRangeText = `${formatDateTime(task.estimated_start_time || undefined)} - ${formatDateTime(task.due_at || undefined)}`;
   const onlineKeyValidation = resolveOnlineKeyValidationWithAccess(lastCleanerKey, onlineKeyAccessState);
   const onlineKeyStatusColor =
     onlineKeyValidation.status === 'VALID'
@@ -991,7 +1001,7 @@ export default function TaskDetailTab({
           <Pressable onPress={onClose} style={styles.backButton}>
             <MaterialIcons name="arrow-back" size={24} color={palette.text} />
           </Pressable>
-          <Text style={[styles.title, { color: palette.text }]}>Chi tiết Task</Text>
+          <Text style={[styles.title, { color: palette.text }]}>Chi tiết nhiệm vụ</Text>
           <View style={styles.headerSpacer} />
         </View>
 
@@ -1003,7 +1013,7 @@ export default function TaskDetailTab({
 
         {/* Task Info */}
         <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
-          <Text style={[styles.sectionTitle, { color: palette.text }]}>Thông tin task</Text>
+          <Text style={[styles.sectionTitle, { color: palette.text }]}>Thông tin nhiệm vụ</Text>
           <View style={styles.infoRow}>
             <MaterialIcons name="meeting-room" size={17} color={palette.neutral500} />
             <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Tên pod:</Text>
@@ -1021,43 +1031,22 @@ export default function TaskDetailTab({
           </View>
           <View style={styles.infoRow}>
             <MaterialIcons name="event" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Ngày làm việc:</Text>
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Thời gian phải hoàn thành nhiệm vụ:</Text>
             <Text style={[styles.infoValue, { color: palette.text }]}>
               {formatDateTime(task.due_at || bookingWindow.end_time || '2026-04-01T23:30:00.000Z')}
             </Text>
           </View>
           <View style={styles.infoRow}>
             <MaterialIcons name="schedule" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Bắt đầu dự kiến:</Text>
+            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Thời gian dự kiến:</Text>
             <Text style={[styles.infoValue, { color: palette.text }]}>
-              {formatDateTime(bookingWindow.start_time || '2026-04-01T22:30:00.000Z')}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="schedule" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Kết thúc dự kiến:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>
-              {formatDateTime(bookingWindow.end_time || task.due_at || '2026-04-01T23:30:00.000Z')}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="play-circle-outline" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Bắt đầu thực tế:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>
-              {formatDateTime(task.start_time || '2026-04-01T22:35:00.000Z')}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="check-circle-outline" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Kết thúc thực tế:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>
-              {formatDateTime(task.end_time || '2026-04-01T23:10:00.000Z')}
+              {estimatedTimeRangeText}
             </Text>
           </View>
           <View style={styles.infoRow}>
             <MaterialIcons name="label-outline" size={17} color={palette.neutral500} />
             <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Nguồn yêu cầu:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>{String(task.request_source || 'AUTO_AFTER_CHECKOUT')}</Text>
+            <Text style={[styles.infoValue, { color: palette.text }]}>{requestSourceLabel(String(task.request_source || ''))}</Text>
           </View>
         </View>
 
@@ -1784,7 +1773,6 @@ export default function TaskDetailTab({
                                   <Text style={[styles.damageItemCost, { color: palette.textMuted }]}>{amount}</Text>
                                 </View>
                                 <View style={styles.detailSelectionQtyWrap}>
-                                  <Text style={[styles.damageInputLabel, { color: palette.textMuted }]}>Số lượng</Text>
                                   <View
                                     style={[
                                       styles.detailSelectionQtyStepper,
@@ -2671,23 +2659,22 @@ const styles = StyleSheet.create({
   detailSelectionRow: {
     borderWidth: 1,
     borderRadius: radius._10,
-    paddingHorizontal: spacingX._10,
-    paddingVertical: spacingY._7,
+    paddingHorizontal: spacingX._7,
+    paddingVertical: spacingY._5,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacingX._10,
+    gap: spacingX._7,
   },
   detailSelectionInfo: {
     flex: 1,
-    gap: spacingY._5,
+    gap: 2,
   },
   detailSelectionQtyWrap: {
-    width: 108,
-    gap: spacingY._5,
+    width: 92,
   },
   detailSelectionQtyStepper: {
-    minHeight: 40,
+    minHeight: 32,
     borderWidth: 1,
     borderRadius: radius._10,
     flexDirection: 'row',
@@ -2696,7 +2683,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   detailSelectionQtyButton: {
-    width: 32,
+    width: 28,
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2704,7 +2691,7 @@ const styles = StyleSheet.create({
   detailSelectionQtyValue: {
     flex: 1,
     textAlign: 'center',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     fontFamily: Fonts.sans,
     includeFontPadding: false,

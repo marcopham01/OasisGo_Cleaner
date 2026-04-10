@@ -1,30 +1,31 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    FlatList,
+    Pressable,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
-  getMyNotifications,
-  getDamageReports,
-  getMyUnreadNotificationCount,
-  markAllNotificationsAsRead,
-  markNotificationAsRead,
+    getDamageReports,
+    getMyNotifications,
+    getMyUnreadNotificationCount,
+    markAllNotificationsAsRead,
+    markNotificationAsRead,
 } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
-  decrementNotificationBadge,
-  setNotificationBadgeCount,
-  subscribeNotificationBadge,
+    decrementNotificationBadge,
+    setNotificationBadgeCount,
+    subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
 import type { CleanerNotification, DamageReportResponse } from '@/types/cleaner-dashboard';
 
@@ -551,87 +552,89 @@ export default function HistoryScreen() {
   );
 
   return (
-    <View style={[styles.screen, { backgroundColor: palette.background }]}> 
-      <View
-        style={[
-          styles.headerCard,
-          {
-            backgroundColor: palette.card,
-            borderColor: palette.border,
-          },
-        ]}>
-        <Text style={[styles.headerTitle, { color: palette.text }]}>Lịch sử cleaner</Text>
-        <Text style={[styles.headerSubtitle, { color: palette.textMuted }]}>
-          Xin chào, {user?.name || 'Cleaner'}.
-        </Text>
-        <View style={styles.summaryRow}>
-          <Text style={[styles.unreadText, { color: palette.primary }]}>Chưa đọc: {unreadCount}</Text>
-          <Text style={[styles.unreadText, { color: palette.textMuted }]}>Incident: {incidentItems.length}</Text>
-          <Pressable
-            disabled={activeTab !== 'NOTIFICATIONS' || isMarkingAll || unreadCount <= 0}
-            onPress={() => {
-              handleMarkAllAsRead().catch(() => null);
-            }}
-            style={[
-              styles.markAllButton,
-              {
-                backgroundColor:
-                  activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primaryBg : palette.border,
-              },
-            ]}>
-            <Text
+    <SafeAreaView style={[styles.screen, { backgroundColor: palette.background }]} edges={['top']}>
+      <View style={styles.headerWrap}>
+        <View
+          style={[
+            styles.headerCard,
+            {
+              backgroundColor: palette.card,
+              borderColor: palette.border,
+            },
+          ]}>
+          <Text style={[styles.headerTitle, { color: palette.text }]}>Lịch sử cleaner</Text>
+          <Text style={[styles.headerSubtitle, { color: palette.textMuted }]}>
+            Xin chào, {user?.name || 'Cleaner'}.
+          </Text>
+          <View style={styles.summaryRow}>
+            <Text style={[styles.unreadText, { color: palette.primary }]}>Chưa đọc: {unreadCount}</Text>
+            <Text style={[styles.unreadText, { color: palette.textMuted }]}>Incident: {incidentItems.length}</Text>
+            <Pressable
+              disabled={activeTab !== 'NOTIFICATIONS' || isMarkingAll || unreadCount <= 0}
+              onPress={() => {
+                handleMarkAllAsRead().catch(() => null);
+              }}
               style={[
-                styles.markAllText,
+                styles.markAllButton,
                 {
-                  color:
-                    activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primary : palette.textMuted,
+                  backgroundColor:
+                    activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primaryBg : palette.border,
                 },
               ]}>
-              Đánh dấu tất cả đã đọc
-            </Text>
-          </Pressable>
-        </View>
+              <Text
+                style={[
+                  styles.markAllText,
+                  {
+                    color:
+                      activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primary : palette.textMuted,
+                  },
+                ]}>
+                Đánh dấu tất cả đã đọc
+              </Text>
+            </Pressable>
+          </View>
 
-        <View style={styles.switchRow}>
-          <Pressable
-            onPress={() => {
-              setActiveTab('NOTIFICATIONS');
-            }}
-            style={[
-              styles.switchButton,
-              {
-                backgroundColor: activeTab === 'NOTIFICATIONS' ? palette.primaryBg : palette.surface,
-                borderColor: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.border,
-              },
-            ]}>
-            <Text
+          <View style={styles.switchRow}>
+            <Pressable
+              onPress={() => {
+                setActiveTab('NOTIFICATIONS');
+              }}
               style={[
-                styles.switchButtonText,
-                { color: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.textMuted },
+                styles.switchButton,
+                {
+                  backgroundColor: activeTab === 'NOTIFICATIONS' ? palette.primaryBg : palette.surface,
+                  borderColor: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.border,
+                },
               ]}>
-              Thông báo
-            </Text>
-          </Pressable>
+              <Text
+                style={[
+                  styles.switchButtonText,
+                  { color: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.textMuted },
+                ]}>
+                Thông báo
+              </Text>
+            </Pressable>
 
-          <Pressable
-            onPress={() => {
-              setActiveTab('INCIDENTS');
-            }}
-            style={[
-              styles.switchButton,
-              {
-                backgroundColor: activeTab === 'INCIDENTS' ? palette.primaryBg : palette.surface,
-                borderColor: activeTab === 'INCIDENTS' ? palette.primary : palette.border,
-              },
-            ]}>
-            <Text
+            <Pressable
+              onPress={() => {
+                setActiveTab('INCIDENTS');
+              }}
               style={[
-                styles.switchButtonText,
-                { color: activeTab === 'INCIDENTS' ? palette.primary : palette.textMuted },
+                styles.switchButton,
+                {
+                  backgroundColor: activeTab === 'INCIDENTS' ? palette.primaryBg : palette.surface,
+                  borderColor: activeTab === 'INCIDENTS' ? palette.primary : palette.border,
+                },
               ]}>
-              Incident của tôi
-            </Text>
-          </Pressable>
+              <Text
+                style={[
+                  styles.switchButtonText,
+                  { color: activeTab === 'INCIDENTS' ? palette.primary : palette.textMuted },
+                ]}>
+                Incident của tôi
+              </Text>
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -698,13 +701,17 @@ export default function HistoryScreen() {
           }
         />
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+  },
+  headerWrap: {
+    paddingTop: spacingY._12,
+    paddingHorizontal: spacingX._20,
   },
   loadingWrap: {
     flex: 1,
@@ -713,7 +720,8 @@ const styles = StyleSheet.create({
   },
   listContainer: {
     paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._15,
+    paddingTop: spacingY._12,
+    paddingBottom: spacingY._15,
     gap: spacingY._15,
   },
   headerCard: {

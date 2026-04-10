@@ -1,4 +1,5 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
@@ -10,37 +11,38 @@ export default function ProfileScreen() {
   const { user, signOut } = useAuth();
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: palette.background }}
-      contentContainerStyle={styles.container}>
-      <View
-        style={[
-          styles.profileCard,
-          {
-            backgroundColor: palette.card,
-            borderColor: palette.border,
-          },
-        ]}>
-        <Text style={[styles.title, { color: palette.text }]}>Tài khoản</Text>
-        <Text style={[styles.name, { color: palette.text }]}>{user?.name || 'Cleaner'}</Text>
-        <Text style={[styles.meta, { color: palette.textMuted }]}>{user?.email || 'Chưa có email'}</Text>
-      </View>
+    <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }} edges={['top']}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.container}>
+        <View
+          style={[
+            styles.profileCard,
+            {
+              backgroundColor: palette.card,
+              borderColor: palette.border,
+            },
+          ]}>
+          <Text style={[styles.title, { color: palette.text }]}>Tài khoản</Text>
+          <Text style={[styles.name, { color: palette.text }]}>{user?.name || 'Cleaner'}</Text>
+          <Text style={[styles.meta, { color: palette.textMuted }]}>{user?.email || 'Chưa có email'}</Text>
+        </View>
 
-      <Pressable
-        onPress={() => {
-          void signOut();
-        }}
-        style={[styles.signOutButton, { backgroundColor: palette.primaryDark }]}>
-        <Text style={[styles.signOutText, { color: palette.white }]}>Đăng xuất</Text>
-      </Pressable>
-    </ScrollView>
+        <Pressable
+          onPress={() => {
+            void signOut();
+          }}
+          style={[styles.signOutButton, { backgroundColor: palette.primaryDark }]}>
+          <Text style={[styles.signOutText, { color: palette.white }]}>Đăng xuất</Text>
+        </Pressable>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._15,
+    paddingTop: spacingY._12,
+    paddingBottom: spacingY._15,
     gap: spacingY._15,
   },
   profileCard: {

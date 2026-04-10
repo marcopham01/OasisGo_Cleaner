@@ -1,26 +1,32 @@
 import { Redirect, Tabs } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Text, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import { getMyUnreadNotificationCount } from '@/services/cleaner-dashboard.service';
+import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
-  getNotificationBadgeCount,
-  incrementNotificationBadge,
-  setNotificationBadgeCount,
-  subscribeNotificationBadge,
+    getNotificationBadgeCount,
+    incrementNotificationBadge,
+    setNotificationBadgeCount,
+    subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
   const palette = Colors[colorScheme ?? 'light'];
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const { isAuthenticated, isHydrating, token, user } = useAuth();
   const [unreadCount, setUnreadCount] = useState(() => getNotificationBadgeCount());
+  const tabBarBottomPadding = Math.max(insets.bottom, 8);
+  const tabBarHeight = 56 + tabBarBottomPadding;
+  const tabIconSize = width <= 360 ? 24 : 28;
 
   useEffect(() => {
     const unsubscribe = subscribeNotificationBadge(setUnreadCount);
@@ -98,21 +104,37 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: palette.tint,
+        tabBarInactiveTintColor: palette.tabIconDefault,
         headerShown: false,
         tabBarButton: HapticTab,
+        tabBarStyle: {
+          height: tabBarHeight,
+          paddingTop: 8,
+          paddingBottom: tabBarBottomPadding,
+          backgroundColor: palette.card,
+          borderTopColor: palette.border,
+          borderTopWidth: 1,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+        },
+        tabBarItemStyle: {
+          paddingVertical: 2,
+        },
       }}>
       <Tabs.Screen
         name="index"
         options={{
           title: 'Nhiệm vụ',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet.rectangle.fill" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={tabIconSize} name="list.bullet.rectangle.fill" color={color} />,
         }}
       />
       <Tabs.Screen
         name="shifts"
         options={{
           title: 'Ca làm',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="calendar.badge.clock" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={tabIconSize} name="calendar.badge.clock" color={color} />,
         }}
       />
       <Tabs.Screen
@@ -121,7 +143,7 @@ export default function TabLayout() {
           title: 'Thông báo',
           tabBarIcon: ({ color }) => (
             <View>
-              <IconSymbol size={28} name="clock.arrow.circlepath" color={color} />
+              <IconSymbol size={tabIconSize} name="clock.arrow.circlepath" color={color} />
               {inboxBadge ? (
                 <View
                   style={{
@@ -151,7 +173,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Tài khoản',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.crop.circle.fill" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={tabIconSize} name="person.crop.circle.fill" color={color} />,
         }}
       />
     </Tabs>
