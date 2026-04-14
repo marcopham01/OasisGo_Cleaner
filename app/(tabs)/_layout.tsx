@@ -1,4 +1,4 @@
-import { Redirect, Tabs } from 'expo-router';
+import { Redirect, Tabs, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,16 +8,23 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { updateDevicePushToken } from '@/services/auth.service';
 import { getMyUnreadNotificationCount } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
-    getNotificationBadgeCount,
-    incrementNotificationBadge,
-    setNotificationBadgeCount,
-    subscribeNotificationBadge,
+  observeNotificationResponses,
+  presentRealtimeNotificationAsync,
+  registerForPushNotificationsAsync,
+} from '@/services/expo-notifications.service';
+import {
+  getNotificationBadgeCount,
+  incrementNotificationBadge,
+  setNotificationBadgeCount,
+  subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
 
 export default function TabLayout() {
+  const router = useRouter();
   const colorScheme = useColorScheme();
   const palette = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
@@ -34,6 +41,40 @@ export default function TabLayout() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) {
+      return;
+    }
+
+    const unsubscribeResponses = observeNotificationResponses((target) => {
+      if (target.type === 'TASK') {
+        router.push({
+          pathname: '/task/[id]',
+          params: {
+            id: target.taskId,
+          },
+        });
+        return;
+      }
+
+      router.push('/(tabs)/history');
+    });
+
+    registerForPushNotificationsAsync()
+      .then((expoPushToken) => {
+        if (!expoPushToken) {
+          return;
+        }
+
+        updateDevicePushToken(token, expoPushToken).catch(() => null);
+      })
+      .catch(() => null);
+
+    return () => {
+      unsubscribeResponses();
+    };
+  }, [isAuthenticated, router, token]);
 
   const loadUnreadCount = useCallback(async () => {
     if (!token) {
@@ -66,8 +107,9 @@ export default function TabLayout() {
     const disconnect = connectCleanerNotificationSocket({
       token,
       cleanerId: user.id,
-      onNotification: () => {
+      onNotification: (event) => {
         incrementNotificationBadge(1);
+        presentRealtimeNotificationAsync(event).catch(() => null);
       },
     });
 

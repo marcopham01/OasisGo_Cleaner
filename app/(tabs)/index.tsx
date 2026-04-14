@@ -10,7 +10,7 @@ export default function HomeScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
 
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   if (!token) {
     return (
@@ -26,7 +26,7 @@ export default function HomeScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <View style={styles.container}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Nhiệm vụ của tôi</Text>
-        <TasksTab token={token} isDark={theme === 'dark'} palette={palette} />
+        <TasksTab token={token} userId={user?.id} isDark={theme === 'dark'} palette={palette} />
       </View>
     </SafeAreaView>
   );

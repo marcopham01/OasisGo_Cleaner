@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
+import { clearDevicePushToken } from '@/services/auth.service';
 import type { AuthResponse, AuthUser } from '@/types/auth';
 
 const AUTH_STORAGE_KEY = 'oasisgo_cleaner_auth';
@@ -71,6 +72,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    const activeToken = token;
+
+    if (activeToken) {
+      await clearDevicePushToken(activeToken).catch(() => null);
+    }
+
     setUser(null);
     setToken(null);
     await AsyncStorage.removeItem(AUTH_STORAGE_KEY);

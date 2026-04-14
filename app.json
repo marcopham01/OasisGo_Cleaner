@@ -28,6 +28,12 @@
     "plugins": [
       "expo-router",
       [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",

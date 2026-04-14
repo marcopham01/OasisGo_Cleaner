@@ -1,13 +1,16 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    FlatList,
-    Pressable,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,17 +18,17 @@ import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
-    getDamageReports,
-    getMyNotifications,
-    getMyUnreadNotificationCount,
-    markAllNotificationsAsRead,
-    markNotificationAsRead,
+  getDamageReports,
+  getMyNotifications,
+  getMyUnreadNotificationCount,
+  markAllNotificationsAsRead,
+  markNotificationAsRead,
 } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
-    decrementNotificationBadge,
-    setNotificationBadgeCount,
-    subscribeNotificationBadge,
+  decrementNotificationBadge,
+  setNotificationBadgeCount,
+  subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
 import type { CleanerNotification, DamageReportResponse } from '@/types/cleaner-dashboard';
 
@@ -121,6 +124,8 @@ function getEventCodeLabel(eventCode: unknown) {
       return 'Cảnh báo sắp quá hạn SLA';
     case 'CLEANING_TASK_CANCELLED_NO_SHOW':
       return 'Hủy nhiệm vụ do NO_SHOW';
+    case 'CLEANING_TASK_STATUS_CHANGED':
+      return 'Trạng thái nhiệm vụ đã thay đổi';
     case 'SUPPORT_CLEANING_REQUEST':
       return 'Yêu cầu hỗ trợ vệ sinh';
     case 'SHIFT_ASSIGNED':
@@ -507,6 +512,16 @@ export default function HistoryScreen() {
       const podName = item.context?.pod_name || item.context?.pod_id || 'Không rõ Pod';
       const incidentId = String(item.report_id || '').trim();
       const photoCount = Array.isArray(item.photo_urls) ? item.photo_urls.length : 0;
+      const copyIncidentId = () => {
+        if (!incidentId) return;
+        Clipboard.setStringAsync(incidentId)
+          .then(() => {
+            Alert.alert('Đã sao chép', `Mã báo cáo: ${incidentId}`);
+          })
+          .catch(() => {
+            Alert.alert('Không thể sao chép', 'Vui lòng thử lại.');
+          });
+      };
 
       return (
         <View
@@ -539,7 +554,18 @@ export default function HistoryScreen() {
             ) : null}
             <Text style={[styles.metaText, { color: palette.textMuted }]}>Ảnh đính kèm: {photoCount}</Text>
             {incidentId ? (
-              <Text style={[styles.metaText, { color: palette.textMuted }]}>Mã report: {incidentId}</Text>
+              <View style={styles.reportIdRow}>
+                <Text style={[styles.metaText, { color: palette.textMuted }]}>Mã báo cáo:</Text>
+                <Text
+                  style={[styles.metaText, styles.reportIdText, { color: palette.textMuted }]}
+                  numberOfLines={1}
+                  ellipsizeMode="head">
+                  {incidentId}
+                </Text>
+                <Pressable onPress={copyIncidentId} style={styles.copyReportButton} hitSlop={8}>
+                  <MaterialIcons name="content-copy" size={14} color={palette.textMuted} />
+                </Pressable>
+              </View>
             ) : null}
             <Text style={[styles.metaText, { color: palette.textMuted }]}>
               {formatDateTime(item.created_at || item.updated_at)}
@@ -562,13 +588,17 @@ export default function HistoryScreen() {
               borderColor: palette.border,
             },
           ]}>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>Lịch sử cleaner</Text>
+          <Text style={[styles.headerTitle, { color: palette.text }]}>
+            Thông báo của {user?.name || 'Cleaner'}
+          </Text>
           <Text style={[styles.headerSubtitle, { color: palette.textMuted }]}>
             Xin chào, {user?.name || 'Cleaner'}.
           </Text>
           <View style={styles.summaryRow}>
-            <Text style={[styles.unreadText, { color: palette.primary }]}>Chưa đọc: {unreadCount}</Text>
-            <Text style={[styles.unreadText, { color: palette.textMuted }]}>Incident: {incidentItems.length}</Text>
+            <View style={styles.summaryStats}>
+              <Text style={[styles.unreadText, { color: palette.primary }]}>Chưa đọc: {unreadCount}</Text>
+              <Text style={[styles.unreadText, { color: palette.textMuted }]}>Incident: {incidentItems.length}</Text>
+            </View>
             <Pressable
               disabled={activeTab !== 'NOTIFICATIONS' || isMarkingAll || unreadCount <= 0}
               onPress={() => {
@@ -588,8 +618,9 @@ export default function HistoryScreen() {
                     color:
                       activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primary : palette.textMuted,
                   },
-                ]}>
-                Đánh dấu tất cả đã đọc
+                ]}
+                numberOfLines={1}>
+                Đánh dấu đã đọc
               </Text>
             </Pressable>
           </View>
@@ -631,7 +662,7 @@ export default function HistoryScreen() {
                   styles.switchButtonText,
                   { color: activeTab === 'INCIDENTS' ? palette.primary : palette.textMuted },
                 ]}>
-                Incident của tôi
+                Báo cáo hư hại
               </Text>
             </Pressable>
           </View>
@@ -742,9 +773,18 @@ const styles = StyleSheet.create({
   summaryRow: {
     marginTop: spacingY._10,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: spacingX._10,
+  },
+  summaryStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacingX._10,
+    flexShrink: 1,
+    minWidth: 0,
   },
   switchRow: {
     marginTop: spacingY._10,
@@ -775,9 +815,11 @@ const styles = StyleSheet.create({
     borderRadius: radius._10,
     paddingHorizontal: spacingX._12,
     paddingVertical: spacingY._7,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   markAllText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
@@ -839,6 +881,22 @@ const styles = StyleSheet.create({
   incidentMetaWrap: {
     marginTop: spacingY._5,
     gap: spacingY._5,
+  },
+  reportIdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
+  },
+  reportIdText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  copyReportButton: {
+    width: 22,
+    height: 22,
+    borderRadius: radius._6,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   infoCard: {
     borderRadius: radius._15,

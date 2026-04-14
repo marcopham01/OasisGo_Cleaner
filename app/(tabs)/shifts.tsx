@@ -9,7 +9,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 export default function ShiftsScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   if (!token) {
     return (
@@ -25,7 +25,7 @@ export default function ShiftsScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <View style={styles.container}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Ca làm việc</Text>
-        <ShiftsTab token={token} isDark={theme === 'dark'} palette={palette} />
+        <ShiftsTab token={token} userId={user?.id} isDark={theme === 'dark'} palette={palette} />
       </View>
     </SafeAreaView>
   );

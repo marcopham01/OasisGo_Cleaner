@@ -3,49 +3,53 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    checkinBookingWithCleanerKey,
-    createCleaningPhoto,
-    createDamageReport,
-    createOperationalIncident,
-    getBookingById,
-    getCleaningPhotos,
-    getCleaningTaskById,
-    getDamageReportItems,
-    getDamageServiceCatalogs,
-    getIncidentsByCleaningTaskId,
-    getMyCleanerKeyByBookingId,
-    getMyCleanerKeyByTaskId,
-    getPodById,
-    updateCleaningTask,
+  checkinBookingWithCleanerKey,
+  createCleaningPhoto,
+  createDamageReport,
+  createOperationalIncident,
+  getBookingById,
+  getCleaningPhotos,
+  getCleaningTaskById,
+  getDamageReportItems,
+  getDamageServiceCatalogs,
+  getIncidentsByCleaningTaskId,
+  getMyCleanerKeyByBookingId,
+  getMyCleanerKeyByTaskId,
+  getPodById,
+  updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
+import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import type {
-    CleanerOnlineKey,
-    CleanerTaskAction,
-    CleaningPhoto,
-    CleaningPhotoType,
-    CleaningTask,
-    DamageReportItem,
-    DamageServiceCatalogItem,
-    Incident,
-    IncidentSeverity,
+  CleanerOnlineKey,
+  CleanerRealtimeNotification,
+  CleanerTaskAction,
+  CleaningPhoto,
+  CleaningPhotoType,
+  CleaningTask,
+  DamageReportItem,
+  DamageServiceCatalogItem,
+  Incident,
+  IncidentSeverity,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
 interface TaskDetailTabProps {
   token: string;
+  userId?: string | null;
   taskId: string | null;
   isDark: boolean;
   palette: typeof Colors.light;
@@ -59,6 +63,12 @@ type BookingTimeWindow = {
   end_time?: string;
 };
 
+type PendingPhoto = {
+  id: string;
+  uri: string;
+  type: CleaningPhotoType;
+};
+
 function formatDateTime(dateText?: string) {
   if (!dateText) return '-';
   const parsed = new Date(dateText);
@@ -68,6 +78,17 @@ function formatDateTime(dateText?: string) {
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+}
+
+function formatTimeOnly(dateText?: string) {
+  if (!dateText) return '-';
+  const parsed = new Date(dateText);
+  return Number.isNaN(parsed.getTime())
+    ? dateText
+    : parsed.toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
       });
@@ -117,7 +138,7 @@ function getActionLabel(action: CleanerTaskAction): string {
   const labels: Record<CleanerTaskAction, string> = {
     accept: 'Nhận việc',
     start: 'Bắt đầu dọn',
-    complete: 'Hoàn tất',
+    complete: 'Hoàn thành',
     reject: 'Từ chối',
   };
   return labels[action];
@@ -147,16 +168,24 @@ function progressStepState(status: string | undefined) {
 
 const INCIDENT_SEVERITY_OPTIONS: IncidentSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const CLEANING_CHECKLIST_ITEMS = [
-  'Change bed linens & pillowcases',
-  'Sanitize control panel & buttons',
-  'Wipe down ventilation vents',
-  'Check for left-behind items',
-  'Vacuum floor mat',
-  'Spray air freshener',
+  'Thay ga giường và vỏ gối',
+  'Khử khuẩn bảng điều khiển',
+  'Lau sạch các khe thông gió',
+  'Kiểm tra đồ khách để quên',
+  'Hút bụi thảm sàn',
+  'Xịt khử mùi không khí',
 ];
 
 function shouldHidePermissionMessage(message: string) {
   return message.toLowerCase().includes('không có quyền');
+}
+
+function getSeverityLabelVi(severity: IncidentSeverity) {
+  if (severity === 'LOW') return 'Thấp';
+  if (severity === 'MEDIUM') return 'Tr.bình';
+  if (severity === 'HIGH') return 'Cao';
+  if (severity === 'CRITICAL') return 'Tr.trọng';
+  return severity;
 }
 
 function resolveStartActionError(err: any) {
@@ -172,7 +201,7 @@ function resolveStartActionError(err: any) {
   if (status === 403) {
     return {
       title: 'Không có quyền',
-      message: 'Chủ nhân phòng chưa cho phép truy cập làm vệ sinh hoặc chưa tới giờ làm vệ sinh.',
+      message: 'Khách đang ở Pod chưa cho phép truy cập làm vệ sinh hoặc chưa tới giờ làm vệ sinh.',
     };
   }
 
@@ -249,11 +278,11 @@ function detailQuantityKey(type: 'ITEM' | 'SERVICE', id: string) {
 
 function resolveOnlineKeyValidation(key: CleanerOnlineKey | null) {
   if (!key?.key_token) {
-    return { status: 'MISSING', label: 'Chưa có key', detail: 'Chưa được cấp online key cho booking này.' };
+    return { status: 'MISSING', label: 'Chưa có key', detail: 'Chưa được cấp chìa khóa cửa cho booking này.' };
   }
 
   if (key.is_revoked) {
-    return { status: 'REVOKED', label: 'Đã thu hồi', detail: 'Online key đã bị thu hồi.' };
+    return { status: 'REVOKED', label: 'Đã thu hồi', detail: 'Chìa khóa cửa đã bị thu hồi.' };
   }
 
   const nowTime = Date.now();
@@ -265,10 +294,10 @@ function resolveOnlineKeyValidation(key: CleanerOnlineKey | null) {
   }
 
   if (Number.isFinite(toTime) && toTime < nowTime) {
-    return { status: 'EXPIRED', label: 'Hết hạn', detail: 'Online key đã hết hạn.' };
+    return { status: 'EXPIRED', label: 'Hết hạn', detail: 'Chìa khóa cửa đã hết hạn.' };
   }
 
-  return { status: 'VALID', label: 'Hợp lệ', detail: 'Online key đang trong thời gian hiệu lực.' };
+  return { status: 'VALID', label: 'Hợp lệ', detail: 'Chìa khóa cửa đang trong thời gian hiệu lực.' };
 }
 
 function resolveOnlineKeyValidationWithAccess(
@@ -279,7 +308,7 @@ function resolveOnlineKeyValidationWithAccess(
     return {
       status: 'NO_BOOKING',
       label: 'Không có booking',
-      detail: 'Task này không gắn booking nên không có online key.',
+      detail: 'Task này không gắn booking nên không có chìa khóa cửa.',
     };
   }
 
@@ -287,7 +316,7 @@ function resolveOnlineKeyValidationWithAccess(
     return {
       status: 'FORBIDDEN',
       label: 'Chưa được phép xem',
-      detail: 'Bạn chưa được phép xem online key của booking này.',
+      detail: 'Bạn chưa được phép xem chìa khóa cửa của Pod này.',
     };
   }
 
@@ -303,7 +332,7 @@ function resolveOnlineKeyValidationWithAccess(
     return {
       status: 'NOT_FOUND',
       label: 'Không tìm thấy booking/key',
-      detail: 'Không tìm thấy booking hoặc chưa được cấp online key.',
+      detail: 'Không tìm thấy booking hoặc chưa được cấp chìa khóa cửa.',
     };
   }
 
@@ -311,7 +340,7 @@ function resolveOnlineKeyValidationWithAccess(
     return {
       status: 'ERROR',
       label: 'Lỗi tải key',
-      detail: 'Không thể tải thông tin online key lúc này.',
+      detail: 'Không thể tải thông tin chìa khóa cửa lúc này.',
     };
   }
 
@@ -326,8 +355,47 @@ function resolveOnlineKeyAccessState(err: any) {
   return 'ERROR' as const;
 }
 
+function resolveRealtimeTaskId(event: CleanerRealtimeNotification) {
+  const payload = (event.payload || {}) as Record<string, unknown>;
+
+  const candidate =
+    event.task_id ||
+    event.taskId ||
+    event.cleaning_task_id ||
+    event.entity_id ||
+    payload.task_id ||
+    payload.taskId ||
+    payload.cleaning_task_id ||
+    payload.entity_id;
+
+  return normalizeId(candidate);
+}
+
+function shouldRefreshDetailFromEvent(event: CleanerRealtimeNotification, currentTaskId: string) {
+  const eventCode = String(event.event || '').trim().toUpperCase();
+  const payload = (event.payload || {}) as Record<string, unknown>;
+  const payloadEvent = String(payload.event_code || payload.event || '').trim().toUpperCase();
+  const mergedCode = eventCode || payloadEvent;
+
+  if (!mergedCode) {
+    return true;
+  }
+
+  if (!mergedCode.startsWith('CLEANING_TASK_') && mergedCode !== 'SUPPORT_CLEANING_REQUEST') {
+    return false;
+  }
+
+  const eventTaskId = resolveRealtimeTaskId(event);
+  if (!eventTaskId) {
+    return true;
+  }
+
+  return eventTaskId === normalizeId(currentTaskId);
+}
+
 export default function TaskDetailTab({
   token,
+  userId,
   taskId,
   isDark,
   palette,
@@ -356,7 +424,7 @@ export default function TaskDetailTab({
     'UNKNOWN' | 'OK' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'NOT_FOUND' | 'NO_BOOKING' | 'ERROR'
   >('UNKNOWN');
 
-  const [capturedPhotoUris, setCapturedPhotoUris] = useState<string[]>([]);
+  const [capturedPhotos, setCapturedPhotos] = useState<PendingPhoto[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [photoType, setPhotoType] = useState<CleaningPhotoType>('BEFORE');
   const [captureMode, setCaptureMode] = useState<'CLEANING' | 'OPERATIONAL_INCIDENT' | 'DAMAGE_REPORT'>('CLEANING');
@@ -378,6 +446,7 @@ export default function TaskDetailTab({
   const [completedChecklistItems, setCompletedChecklistItems] = useState<string[]>([]);
 
   const [actionLoading, setActionLoading] = useState(false);
+  const realtimeReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const taskStatus = String(task?.status || '').toUpperCase();
   const isOperationalMode = captureMode === 'OPERATIONAL_INCIDENT';
@@ -402,6 +471,8 @@ export default function TaskDetailTab({
     selectedServiceIds.includes(String(service.id || '').trim()),
   );
   const selectedDetailCount = selectedItemIds.length + selectedServiceIds.length;
+  const pendingBeforePhotos = capturedPhotos.filter((photo) => photo.type === 'BEFORE');
+  const pendingAfterPhotos = capturedPhotos.filter((photo) => photo.type === 'AFTER');
 
   const getSelectedDetailQuantity = useCallback(
     (type: 'ITEM' | 'SERVICE', id: string) =>
@@ -456,7 +527,18 @@ export default function TaskDetailTab({
         return;
       }
 
-      setCapturedPhotoUris((prev) => [...prev, photo.uri]);
+      setCapturedPhotos((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          uri: photo.uri,
+          type: photoType,
+        },
+      ]);
+
+      Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách chờ lưu.', [
+        { text: 'OK' },
+      ]);
     } catch {
       Alert.alert('Lỗi', 'Không thể chụp ảnh, vui lòng thử lại.');
     }
@@ -498,11 +580,18 @@ export default function TaskDetailTab({
       return;
     }
 
-    setCapturedPhotoUris((prev) => [...prev, selectedUri]);
+    setCapturedPhotos((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        uri: selectedUri,
+        type: photoType,
+      },
+    ]);
   };
 
-  const removeCapturedPhoto = (indexToRemove: number) => {
-    setCapturedPhotoUris((prev) => prev.filter((_, index) => index !== indexToRemove));
+  const removeCapturedPhoto = (photoId: string) => {
+    setCapturedPhotos((prev) => prev.filter((photo) => photo.id !== photoId));
   };
 
   const toggleDetailSelection = (type: 'ITEM' | 'SERVICE', id: string) => {
@@ -562,7 +651,7 @@ export default function TaskDetailTab({
   useEffect(() => {
     if (!canCaptureNewPhotos) {
       setIsCameraOpen(false);
-      setCapturedPhotoUris([]);
+      setCapturedPhotos([]);
     }
   }, [canCaptureNewPhotos]);
 
@@ -578,7 +667,7 @@ export default function TaskDetailTab({
       setSelectedServiceIds([]);
       setDetailQuantityById({});
       setDetailNote('');
-      setCapturedPhotoUris([]);
+      setCapturedPhotos([]);
       setIsCameraOpen(false);
     }
   }, [canReportIncident, isIncidentMode, isAnytimeIncidentFlow]);
@@ -661,13 +750,18 @@ export default function TaskDetailTab({
         }
 
         try {
-          const cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
+          let cleanerKeyResult;
+          try {
+            cleanerKeyResult = await getMyCleanerKeyByTaskId(token, taskId);
+          } catch (taskKeyError) {
+            cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
+          }
           const resolvedKey = cleanerKeyResult.online_key || null;
           setLastCleanerKey(resolvedKey);
           setOnlineKeyAccessState('OK');
 
           if (!resolvedKey?.key_token) {
-            setOnlineKeyNotice('Chưa được cấp online key cho booking này.');
+            setOnlineKeyNotice('Chưa được cấp chìa khóa cửa cho booking này.');
           }
         } catch (err: any) {
           setLastCleanerKey(null);
@@ -678,7 +772,7 @@ export default function TaskDetailTab({
         setBookingWindowOverride(null);
         setLastCleanerKey(null);
         setOnlineKeyAccessState('NO_BOOKING');
-        setOnlineKeyNotice('Task này không có booking nên không có online key.');
+        setOnlineKeyNotice('Task này không có booking nên không có chìa khóa cửa.');
       }
 
       onErrorChange?.(null);
@@ -700,6 +794,45 @@ export default function TaskDetailTab({
     loadDetail();
   }, [loadDetail]);
 
+  useEffect(() => {
+    const normalizedTaskId = normalizeId(taskId);
+    if (!token || !userId || !normalizedTaskId) {
+      return;
+    }
+
+    const queueReload = () => {
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+      }
+
+      realtimeReloadTimer.current = setTimeout(() => {
+        realtimeReloadTimer.current = null;
+        void loadDetail();
+      }, 350);
+    };
+
+    const disconnect = connectCleanerNotificationSocket({
+      token,
+      cleanerId: userId,
+      onNotification: (event) => {
+        if (!shouldRefreshDetailFromEvent(event, normalizedTaskId)) {
+          return;
+        }
+
+        queueReload();
+      },
+    });
+
+    return () => {
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+        realtimeReloadTimer.current = null;
+      }
+
+      disconnect();
+    };
+  }, [loadDetail, taskId, token, userId]);
+
   const handleAction = async (action: CleanerTaskAction) => {
     if (!task || !taskId) return;
 
@@ -712,15 +845,21 @@ export default function TaskDetailTab({
         if (taskId) {
           try {
             const bookingId = normalizeId(task.booking_id);
-            const cleanerKeyResult = bookingId
-              ? await getMyCleanerKeyByBookingId(token, bookingId)
-              : await getMyCleanerKeyByTaskId(token, taskId);
+            let cleanerKeyResult;
+            try {
+              cleanerKeyResult = await getMyCleanerKeyByTaskId(token, taskId);
+            } catch (taskKeyError) {
+              if (!bookingId) {
+                throw taskKeyError;
+              }
+              cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
+            }
             const keyToken = String(cleanerKeyResult.online_key?.key_token || '').trim();
 
             if (!keyToken) {
               setLastCleanerKey(cleanerKeyResult.online_key || null);
               setOnlineKeyAccessState('OK');
-              setOnlineKeyNotice('Chưa được cấp online key cho booking này.');
+              setOnlineKeyNotice('Chưa được cấp chìa khóa cửa cho booking này.');
               Alert.alert('Không tìm thấy key', 'Bạn chưa được cấp cleaner key cho booking này. Hãy liên hệ quản lý hoặc thử lại sau.');
               setActionLoading(false);
               return;
@@ -754,6 +893,16 @@ export default function TaskDetailTab({
         }
       }
 
+      const completedChecklistCount = CLEANING_CHECKLIST_ITEMS.filter((item) =>
+        completedChecklistItems.includes(item),
+      ).length;
+
+      if (action === 'complete' && completedChecklistCount < CLEANING_CHECKLIST_ITEMS.length) {
+        Alert.alert('Chưa thể hoàn thành', 'Vui lòng hoàn thành toàn bộ checklist trước khi bấm Hoàn thành.');
+        setActionLoading(false);
+        return;
+      }
+
       const payload = taskActionPayload(action, '');
       const updated = await updateCleaningTask(token, taskId, payload);
 
@@ -773,7 +922,7 @@ export default function TaskDetailTab({
   };
 
   const handleUploadPhoto = async () => {
-    if (!taskId || capturedPhotoUris.length === 0) {
+    if (!taskId || capturedPhotos.length === 0) {
       Alert.alert('Lỗi', 'Vui lòng chụp ít nhất một ảnh trước khi lưu.');
       return;
     }
@@ -786,6 +935,8 @@ export default function TaskDetailTab({
       const resolvedPodId = normalizeId(task?.pod_id);
       const resolvedBookingId = normalizeId(task?.booking_id);
       const useTaskContext = canReportIncident && !isAnytimeIncidentFlow;
+
+      const capturedPhotoUris = capturedPhotos.map((photo) => photo.uri);
 
       if (isOperationalMode) {
         // OPERATIONAL INCIDENT: báo cáo sự cố chung
@@ -808,7 +959,7 @@ export default function TaskDetailTab({
         const updatedIncidents = await getIncidentsByCleaningTaskId(token, taskId);
         setIncidents(updatedIncidents);
 
-        setCapturedPhotoUris([]);
+        setCapturedPhotos([]);
         setIsAnytimeIncidentFlow(false);
         setOperationalIncidentDescription('');
         setOperationalIncidentSeverity('MEDIUM');
@@ -869,7 +1020,7 @@ export default function TaskDetailTab({
         const updatedIncidents = await getIncidentsByCleaningTaskId(token, taskId);
         setIncidents(updatedIncidents);
 
-        setCapturedPhotoUris([]);
+        setCapturedPhotos([]);
         setIsAnytimeIncidentFlow(false);
         setDamageDescription('');
         setDamageSeverity('MEDIUM');
@@ -884,20 +1035,20 @@ export default function TaskDetailTab({
         Alert.alert('Thành công', 'Đã gửi báo cáo hư hại cho nhiệm vụ này.');
       } else {
         // CLEANING PHOTOS: lưu ảnh BEFORE/AFTER
-        for (const uri of capturedPhotoUris) {
+        for (const photo of capturedPhotos) {
           await createCleaningPhoto(token, {
             cleaning_task_id: taskId,
-            local_uri: uri,
-            type: photoType,
+            local_uri: photo.uri,
+            type: photo.type,
           });
         }
 
-        setCapturedPhotoUris([]);
+        setCapturedPhotos([]);
         const updated = await getCleaningPhotos(token, taskId);
         setPhotos(updated);
         onErrorChange?.(null);
 
-        Alert.alert('Thành công', `Đã lưu ${capturedPhotoUris.length} ảnh cho task.`);
+        Alert.alert('Thành công', `Đã lưu ${capturedPhotos.length} ảnh cho task.`);
       }
     } catch (err) {
       const msg = getErrorMessage(err);
@@ -945,12 +1096,29 @@ export default function TaskDetailTab({
   const canStart = task.status === 'ACCEPTED' || task.status === 'ARRIVED';
   const canComplete = taskStatus === 'IN_PROGRESS';
   const canReject = ['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED'].includes(taskStatus);
-  const hasStartedCleaning = taskStatus === 'IN_PROGRESS' || taskStatus === 'DONE';
+  const hasStartedCleaning = taskStatus === 'IN_PROGRESS';
   const needsAssignment = !['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'DONE'].includes(taskStatus);
   const progress = progressStepState(taskStatus);
+  const completedChecklistCount = CLEANING_CHECKLIST_ITEMS.filter((item) =>
+    completedChecklistItems.includes(item),
+  ).length;
+  const isChecklistComplete =
+    CLEANING_CHECKLIST_ITEMS.length > 0 && completedChecklistCount === CLEANING_CHECKLIST_ITEMS.length;
   const showReadyAction = canAccept || canStart;
   const bookingWindow = bookingWindowOverride || taskBookingWindow(task);
-  const estimatedTimeRangeText = `${formatDateTime(task.estimated_start_time || undefined)} - ${formatDateTime(task.due_at || undefined)}`;
+  function formatDateTimeNoYear(dateText?: string) {
+    if (!dateText) return '-';
+    const parsed = new Date(dateText);
+    return Number.isNaN(parsed.getTime())
+      ? dateText
+      : parsed.toLocaleString('vi-VN', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+  }
+  const estimatedTimeRangeText = `${formatDateTimeNoYear(task.estimated_start_time || undefined)} - ${formatDateTimeNoYear(task.due_at || undefined)}`;
   const onlineKeyValidation = resolveOnlineKeyValidationWithAccess(lastCleanerKey, onlineKeyAccessState);
   const onlineKeyStatusColor =
     onlineKeyValidation.status === 'VALID'
@@ -962,6 +1130,7 @@ export default function TaskDetailTab({
           : palette.error;
   const displayPodName = podName || taskPodDisplayName(task) || 'Pod tieu chuan - A03U';
   const displayClusterName = clusterName || taskClusterDisplayName(task) || 'Cum Pod A - Khu vuc Ga Quoc noi T1';
+  const requiredBeforePhotos = photos.filter((photo) => String(photo.type || '').toUpperCase() === 'BEFORE');
   const requiredAfterPhotos = photos.filter((photo) => String(photo.type || '').toUpperCase() === 'AFTER');
 
   const handleStartCleaning = async () => {
@@ -982,7 +1151,7 @@ export default function TaskDetailTab({
       ? 'BẮT ĐẦU DỌN'
       : taskStatus === 'IN_PROGRESS'
         ? 'ĐANG DỌN DẸP'
-        : 'ĐÃ HOÀN TẤT';
+        : 'ĐÃ HOÀN THÀNH';
 
   const readyTitleText = canAccept ? 'Sẵn sàng nhận nhiệm vụ?' : 'Sẵn sàng dọn phòng?';
 
@@ -992,9 +1161,10 @@ export default function TaskDetailTab({
       ? 'Sẵn sàng bắt đầu dọn dẹp cho task này.'
       : taskStatus === 'IN_PROGRESS'
         ? 'Task đang được thực hiện. Bạn có thể cập nhật ảnh tại đây.'
-        : 'Task đã hoàn tất hoặc không khả dụng để bắt đầu.';
+        : 'Task đã hoàn thành hoặc không khả dụng để bắt đầu.';
 
   return (
+    <>
     <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
       <View style={styles.container}>
         <View style={styles.header}>
@@ -1012,65 +1182,59 @@ export default function TaskDetailTab({
         )}
 
         {/* Task Info */}
-        <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
-          <Text style={[styles.sectionTitle, { color: palette.text }]}>Thông tin nhiệm vụ</Text>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="meeting-room" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Tên pod:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>{displayPodName}</Text>
+        <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 18, marginBottom: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 1, borderWidth: 1, borderColor: '#F1F5F9', position: 'relative' }}>
+          {/* Badge trạng thái góc phải trên */}
+          <View style={{ position: 'absolute', top: 14, right: 18, zIndex: 2 }}>
+            <View style={{ backgroundColor: '#EBFDED', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 16 }}>
+              <Text style={{ color: '#22C55E', fontWeight: 'bold', fontSize: 12, textTransform: 'uppercase' }}>{task.status === 'IN_PROGRESS' ? 'ĐANG DỌN' : (task.status || 'ASSIGNED')}</Text>
+            </View>
           </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="apartment" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Khu vực:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>{displayClusterName}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="local-offer" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Trạng thái:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>{task.status || 'ASSIGNED'}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="event" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Thời gian phải hoàn thành nhiệm vụ:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>
-              {formatDateTime(task.due_at || bookingWindow.end_time || '2026-04-01T23:30:00.000Z')}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="schedule" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Thời gian dự kiến:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>
-              {estimatedTimeRangeText}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <MaterialIcons name="label-outline" size={17} color={palette.neutral500} />
-            <Text style={[styles.infoLabel, { color: palette.textMuted }]}>Nguồn yêu cầu:</Text>
-            <Text style={[styles.infoValue, { color: palette.text }]}>{requestSourceLabel(String(task.request_source || ''))}</Text>
-          </View>
+          {/* Dòng 1: Tên pod */}
+          <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#1E293B', marginBottom: 2 }}>{displayPodName}</Text>
+          {/* Dòng 2: Tên khách sạn */}
+          <Text style={{ color: '#94A3B8', fontSize: 9, marginBottom: 14 }}>{displayClusterName}</Text>
+          {/* Dòng 3: Thời gian */}
+          <Text style={{ color: '#0EA5E9', fontSize: 13, fontWeight: '900' }}>{estimatedTimeRangeText}</Text>
+        </View>
         </View>
 
-        <View style={[styles.section, styles.onlineKeySection, { backgroundColor: palette.card, borderColor: palette.border }]}>
+        <View style={{
+          backgroundColor: palette.card,
+          borderColor: palette.border,
+          borderWidth: 1,
+          borderRadius: 16,
+          padding: 14,
+          marginBottom: 14,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.03,
+          shadowRadius: 4,
+          elevation: 1,
+          alignSelf: 'center',
+          width: '92%', // Giống card phía trên
+          maxWidth: 420,
+          gap: 10,
+        }}>
           <View style={styles.onlineKeyHeaderRow}>
-            <Text style={[styles.sectionTitle, { color: palette.text }]}>Online key</Text>
+            <Text style={[styles.sectionTitle, { color: palette.text }]}>Chìa khóa cửa</Text>
             <View style={[styles.onlineKeyBadge, { backgroundColor: `${onlineKeyStatusColor}22`, borderColor: onlineKeyStatusColor }]}>
               <Text style={[styles.onlineKeyBadgeText, { color: onlineKeyStatusColor }]}>{onlineKeyValidation.label}</Text>
             </View>
           </View>
 
           <View style={[styles.onlineKeyCodeBox, { borderColor: palette.border, backgroundColor: palette.surface }]}>
-            <Text style={[styles.onlineKeyCodeLabel, { color: palette.textMuted }]}>Mã key</Text>
+            <Text style={[styles.onlineKeyCodeLabel, { color: palette.textMuted }]}>Mã khóa</Text>
             <Text style={[styles.onlineKeyCodeText, { color: palette.text }]}>{maskKeyToken(lastCleanerKey?.key_token)}</Text>
           </View>
 
           <View style={styles.onlineKeyMetaGrid}>
             <View style={[styles.onlineKeyMetaCard, { borderColor: palette.border, backgroundColor: palette.surface }]}>
               <Text style={[styles.onlineKeyMetaLabel, { color: palette.textMuted }]}>Hiệu lực từ</Text>
-              <Text style={[styles.onlineKeyMetaValue, { color: palette.text }]}>{formatDateTime(lastCleanerKey?.valid_from)}</Text>
+              <Text style={[styles.onlineKeyMetaValue, { color: palette.text }]}>{formatTimeOnly(lastCleanerKey?.valid_from)}</Text>
             </View>
             <View style={[styles.onlineKeyMetaCard, { borderColor: palette.border, backgroundColor: palette.surface }]}>
               <Text style={[styles.onlineKeyMetaLabel, { color: palette.textMuted }]}>Hiệu lực đến</Text>
-              <Text style={[styles.onlineKeyMetaValue, { color: palette.text }]}>{formatDateTime(lastCleanerKey?.valid_to)}</Text>
+              <Text style={[styles.onlineKeyMetaValue, { color: palette.text }]}>{formatTimeOnly(lastCleanerKey?.valid_to)}</Text>
             </View>
           </View>
 
@@ -1079,9 +1243,6 @@ export default function TaskDetailTab({
             <Text style={[styles.onlineKeyValidationValue, { color: palette.text }]}>{onlineKeyValidation.detail}</Text>
           </View>
 
-          {onlineKeyNotice ? (
-            <Text style={[styles.onlineKeyNotice, { color: palette.error }]}>{onlineKeyNotice}</Text>
-          ) : null}
         </View>
 
         {/* Incidents Section */}
@@ -1198,10 +1359,12 @@ export default function TaskDetailTab({
         {showReadyAction && (
           <View style={styles.readySection}>
             <View style={[styles.readyIconWrap, { backgroundColor: palette.primaryLight }]}> 
-              <MaterialIcons name="auto-awesome" size={32} color={palette.primary} />
+              <MaterialIcons name="cleaning-services" size={38} color={palette.primary} />
             </View>
             <Text style={[styles.readyTitle, { color: palette.text }]}>{readyTitleText}</Text>
-            <Text style={[styles.readyDescription, { color: palette.textMuted }]}>{actionHintText}</Text>
+            {canAccept || canStart ? null : (
+              <Text style={[styles.readyDescription, { color: palette.textMuted }]}>{actionHintText}</Text>
+            )}
             <Pressable
               style={[
                 styles.readyButton,
@@ -1233,183 +1396,122 @@ export default function TaskDetailTab({
 
         {/* Cleaning Checklist */}
         {hasStartedCleaning && (
-          <>
-            <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
-              <View style={styles.checklistHeader}>
-                <MaterialIcons name="check-box" size={20} color={palette.primary} />
-                <Text style={[styles.sectionTitle, { color: palette.text }]}>Cleaning Checklist</Text>
+          <View style={{ marginBottom: 24, backgroundColor: '#F8FAFC', borderRadius: 32, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.06, shadowRadius: 24, elevation: 4, borderWidth: 1, borderColor: '#E2E8F0', alignSelf: 'center', width: '92%', maxWidth: 420 }}>
+            <View style={{ marginHorizontal: 0, marginBottom: 16 }}>
+              <View style={{ alignItems: 'center', marginBottom: 12 }}>
+                <Text style={{ fontWeight: 'bold', color: '#3B82F6', fontSize: 22, letterSpacing: 0.2, textAlign: 'center' }}>Danh sách dọn dẹp</Text>
               </View>
               {CLEANING_CHECKLIST_ITEMS.map((item) => {
                 const isCompleted = completedChecklistItems.includes(item);
                 return (
                   <Pressable
                     key={item}
-                    style={[styles.checklistItem, { borderTopColor: palette.border }]}
-                    onPress={() => toggleChecklistItem(item)}>
-                    <View
-                      style={[
-                        styles.checkIconWrap,
-                        {
-                          backgroundColor: isCompleted ? '#3d7ce8' : 'transparent',
-                          borderColor: isCompleted ? '#3d7ce8' : '#b9c7da',
-                        },
-                      ]}>
-                      {isCompleted && <MaterialIcons name="check" size={14} color={palette.white} />}
+                    onPress={() => toggleChecklistItem(item)}
+                    style={{
+                      backgroundColor: isCompleted ? '#ECFDF5' : '#fff',
+                      borderRadius: 18,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      paddingVertical: 14,
+                      paddingHorizontal: 14,
+                      marginBottom: 12,
+                      shadowColor: isCompleted ? '#22C55E' : '#000',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: isCompleted ? 0.10 : 0.04,
+                      shadowRadius: 10,
+                      elevation: isCompleted ? 2 : 1,
+                      borderWidth: 1.5,
+                      borderColor: isCompleted ? '#22C55E' : '#F1F5F9',
+                      opacity: isCompleted ? 0.85 : 1,
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0, marginRight: 10 }}>
+                      <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: isCompleted ? '#D1FAE5' : '#EFF6FF', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                        <MaterialIcons name="cleaning-services" size={14} color={isCompleted ? '#22C55E' : '#3B82F6'} />
+                      </View>
+                      <Text style={{ flex: 1, minWidth: 0, fontWeight: '500', color: isCompleted ? '#22C55E' : '#334155', fontSize: 10, lineHeight: 14, textDecorationLine: isCompleted ? 'line-through' : 'none' }}>{item}</Text>
                     </View>
-                    <Text
-                      style={[
-                        styles.checklistText,
-                        {
-                          color: isCompleted ? palette.textMuted : palette.text,
-                          textDecorationLine: isCompleted ? 'line-through' : 'none',
-                        },
-                      ]}>
-                      {item}
-                    </Text>
+                    <View
+                      style={{
+                        flexShrink: 0,
+                        width: 20,
+                        height: 20,
+                        borderRadius: 5,
+                        borderWidth: 1.5,
+                        borderColor: isCompleted ? '#22C55E' : '#E2E8F0',
+                        backgroundColor: isCompleted ? '#22C55E' : '#fff',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {isCompleted && (
+                        <MaterialIcons name="check" size={12} color="#fff" />
+                      )}
+                    </View>
                   </Pressable>
                 );
               })}
+            </View>
 
-              <View style={styles.progressRow}>
-                <View
-                  style={[
-                    styles.progressStep,
-                    {
-                      borderColor: progress.accepted ? palette.success : palette.border,
-                      backgroundColor: progress.accepted ? `${palette.success}22` : palette.surface,
-                    },
-                  ]}>
-                  <Text style={[styles.progressLabel, { color: palette.text }]}>1. Nhận việc</Text>
-                </View>
-                <View
-                  style={[
-                    styles.progressStep,
-                    {
-                      borderColor: progress.started ? palette.success : palette.border,
-                      backgroundColor: progress.started ? `${palette.success}22` : palette.surface,
-                    },
-                  ]}>
-                  <Text style={[styles.progressLabel, { color: palette.text }]}>2. Bắt đầu</Text>
-                </View>
-                <View
-                  style={[
-                    styles.progressStep,
-                    {
-                      borderColor: progress.completed ? palette.success : palette.border,
-                      backgroundColor: progress.completed ? `${palette.success}22` : palette.surface,
-                    },
-                  ]}>
-                  <Text style={[styles.progressLabel, { color: palette.text }]}>3. Hoàn tất</Text>
-                </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, marginTop: 8 }}>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={{ fontSize: 11, color: progress.accepted ? '#22C55E' : '#94A3B8', fontWeight: 'bold', letterSpacing: 0.2 }}>1. Nhận việc</Text>
+              </View>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={{ fontSize: 11, color: progress.started ? '#22C55E' : '#94A3B8', fontWeight: 'bold', letterSpacing: 0.2 }}>2. Bắt đầu</Text>
+              </View>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={{ fontSize: 11, color: progress.completed ? '#22C55E' : '#94A3B8', fontWeight: 'bold', letterSpacing: 0.2 }}>3. Hoàn thành</Text>
               </View>
             </View>
 
             <View style={styles.actionGrid}>
-            {canAccept && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('accept', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('accept')}>
-                <Text style={[styles.actionButtonText, { color: palette.primaryDark }]}>
-                  {getActionLabel('accept')}
-                </Text>
-              </Pressable>
-            )}
+              {canAccept && (
+                <Pressable
+                  style={[styles.actionButton, { backgroundColor: getActionColor('accept', palette), borderRadius: 16, marginTop: 8 }]}
+                  disabled={actionLoading}
+                  onPress={() => void handleAction('accept')}>
+                  <Text style={[styles.actionButtonText, { color: palette.primaryDark, fontSize: 11 }]}> {getActionLabel('accept')} </Text>
+                </Pressable>
+              )}
 
-            {canStart && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('start', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('start')}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>
-                  {getActionLabel('start')}
-                </Text>
-              </Pressable>
-            )}
+              {canStart && (
+                <Pressable
+                  style={[styles.actionButton, { backgroundColor: getActionColor('start', palette), borderRadius: 16, marginTop: 8 }]}
+                  disabled={actionLoading}
+                  onPress={() => void handleAction('start')}>
+                  <Text style={[styles.actionButtonText, { color: palette.white, fontSize: 11 }]}> {getActionLabel('start')} </Text>
+                </Pressable>
+              )}
 
-            {canComplete && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('complete', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('complete')}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>
-                  {getActionLabel('complete')}
-                </Text>
-              </Pressable>
-            )}
+              {canComplete && (
+                <Pressable
+                  style={[
+                    styles.actionButton,
+                    { backgroundColor: isChecklistComplete ? getActionColor('complete', palette) : palette.neutral400, borderRadius: 16, marginTop: 8, paddingVertical: 14 },
+                  ]}
+                  disabled={actionLoading || !isChecklistComplete}
+                  onPress={() => void handleAction('complete')}>
+                  <Text style={[styles.actionButtonText, { color: palette.white, fontSize: 15 }]}> {getActionLabel('complete')} </Text>
+                </Pressable>
+              )}
 
-            {canReject && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: getActionColor('reject', palette) }]}
-                disabled={actionLoading}
-                onPress={() => void handleAction('reject')}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>
-                  {getActionLabel('reject')}
-                </Text>
-              </Pressable>
-            )}
+              {canComplete && !isChecklistComplete && (
+                <Text style={[styles.info, { color: palette.textMuted, marginTop: 8, fontSize: 10 }]}> Cần làm đủ hết mục trên trước khi hoàn thành ({completedChecklistCount}/{CLEANING_CHECKLIST_ITEMS.length}) </Text>
+              )}
 
-            {!isIncidentMode && (
-              <Pressable
-                style={[
-                  styles.actionButton,
-                  { backgroundColor: canReportIncident ? palette.error : palette.neutral400 },
-                ]}
-                disabled={actionLoading || uploadingPhoto || !canReportIncident}
-                onPress={() => {
-                  if (!canReportIncident) {
-                    Alert.alert(
-                      'Chưa thể báo cáo',
-                      'Báo cáo incident sẽ mở khi nhiệm vụ ở trạng thái IN_PROGRESS.',
-                    );
-                    return;
-                  }
+              {canReject && (
+                <Pressable
+                  style={[styles.actionButton, { backgroundColor: getActionColor('reject', palette), borderRadius: 16, marginTop: 8 }]}
+                  disabled={actionLoading}
+                  onPress={() => void handleAction('reject')}>
+                  <Text style={[styles.actionButtonText, { color: palette.white, fontSize: 11 }]}> {getActionLabel('reject')} </Text>
+                </Pressable>
+              )}
 
-                  setCaptureMode('DAMAGE_REPORT');
-                  setIsAnytimeIncidentFlow(false);
-                  setDamageDescription('');
-                  setDamageSeverity('MEDIUM');
-                  setSelectedItemIds([]);
-                  setSelectedServiceIds([]);
-                  setDetailQuantityById({});
-                  setDetailNote('');
-                  setPhotoType('BEFORE');
-                  setCapturedPhotoUris([]);
-                  setIsCameraOpen(false);
-                }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Báo cáo incident</Text>
-              </Pressable>
-            )}
-
-            {isIncidentMode && (
-              <Pressable
-                style={[styles.actionButton, { backgroundColor: palette.neutral400 }]}
-                disabled={actionLoading || uploadingPhoto}
-                onPress={() => {
-                  setCaptureMode('CLEANING');
-                  setIsAnytimeIncidentFlow(false);
-                  setOperationalIncidentDescription('');
-                  setOperationalIncidentSeverity('MEDIUM');
-                  setDamageDescription('');
-                  setDamageSeverity('MEDIUM');
-                  setSelectedItemIds([]);
-                  setSelectedServiceIds([]);
-                  setDetailQuantityById({});
-                  setDetailNote('');
-                  setCapturedPhotoUris([]);
-                  setIsCameraOpen(false);
-                }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Hủy báo cáo</Text>
-              </Pressable>
-            )}
             </View>
-
-            {!canReportIncident && !isIncidentMode && (
-              <Text style={[styles.info, { color: palette.textMuted }]}>
-                Luồng báo cáo trong khu action này chỉ khả dụng sau khi task chuyển IN_PROGRESS.
-              </Text>
-            )}
-          </>
+          </View>
         )}
 
         <View
@@ -1418,17 +1520,20 @@ export default function TaskDetailTab({
             {
               backgroundColor: `${palette.secondary}12`,
               borderColor: palette.secondary,
+              alignSelf: 'center',
+              width: '92%',
+              maxWidth: 420,
             },
           ]}>
-          <Text style={[styles.sectionTitle, { color: palette.secondary }]}>Khu riêng: Báo incident mọi lúc</Text>
+          <Text style={[styles.sectionTitle, { color: palette.secondary, alignSelf: 'center' }]}>Báo cáo hư hại</Text>
           <Text style={[styles.info, { color: palette.textMuted, marginBottom: spacingY._7 }]}> 
-            Khu này độc lập với tiến độ cleaning. Hệ thống sẽ gửi incident theo Pod hiện tại của task.
+            Báo cáo nếu như phát hiện có hư hại trong Pod.
           </Text>
 
           {isIncidentMode && isAnytimeIncidentFlow ? (
             <View style={styles.actionGrid}>
               <Pressable
-                style={[styles.actionButton, { backgroundColor: palette.neutral400 }]}
+                style={[styles.actionButton, { backgroundColor: palette.neutral400, paddingVertical: 14 }]}
                 disabled={actionLoading || uploadingPhoto}
                 onPress={() => {
                   setCaptureMode('CLEANING');
@@ -1441,38 +1546,32 @@ export default function TaskDetailTab({
                   setSelectedServiceIds([]);
                   setDetailQuantityById({});
                   setDetailNote('');
-                  setCapturedPhotoUris([]);
+                  setCapturedPhotos([]);
                   setIsCameraOpen(false);
                 }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Thoát chế độ mọi lúc</Text>
+                <Text style={[styles.actionButtonText, { color: palette.white }]}>Tắt chế độ báo cáo</Text>
               </Pressable>
             </View>
-          ) : !isIncidentMode ? (
+          ) : canReportIncidentAnytime ? (
             <View style={styles.actionGrid}>
               <Pressable
-                style={[
-                  styles.actionButton,
-                  { backgroundColor: canReportIncidentAnytime ? palette.error : palette.neutral400 },
-                ]}
-                disabled={actionLoading || uploadingPhoto || !canReportIncidentAnytime}
+                style={[styles.actionButton, { backgroundColor: palette.error, paddingVertical: 14 }]}
+                disabled={actionLoading || uploadingPhoto}
                 onPress={() => {
-                  if (!canReportIncidentAnytime) {
-                    Alert.alert('Thiếu thông tin', 'Task này chưa có pod_id để gửi incident mọi lúc.');
-                    return;
-                  }
-
                   setCaptureMode('DAMAGE_REPORT');
                   setIsAnytimeIncidentFlow(true);
+                  setOperationalIncidentDescription('');
+                  setOperationalIncidentSeverity('MEDIUM');
                   setDamageDescription('');
                   setDamageSeverity('MEDIUM');
                   setSelectedItemIds([]);
                   setSelectedServiceIds([]);
                   setDetailQuantityById({});
                   setDetailNote('');
-                  setCapturedPhotoUris([]);
+                  setCapturedPhotos([]);
                   setIsCameraOpen(false);
                 }}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}>Báo cáo incident (mọi lúc)</Text>
+                <Text style={[styles.actionButtonText, { color: palette.white }]}>Bắt đầu báo cáo hư hại</Text>
               </Pressable>
             </View>
           ) : (
@@ -1484,15 +1583,26 @@ export default function TaskDetailTab({
 
         {/* Photos */}
         {canAccessPhotoFlow ? (
-          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
+          <View style={{ alignSelf: 'center', width: '92%', maxWidth: 420, marginTop: 18, marginBottom: 18, backgroundColor: palette.card, borderRadius: 24, padding: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 1, borderWidth: 1, borderColor: '#F1F5F9' }}> 
             <Text
-              style={[
-                styles.sectionTitle,
-                isDamageReportMode
-                  ? [styles.damageReportHeaderTitle, { color: palette.error }]
-                  : { color: palette.text },
-              ]}>
-              {isDamageReportMode ? 'Báo cáo hư hại vật tư' : 'Required Photos'}
+              style={[ 
+                styles.sectionTitle, 
+                isDamageReportMode 
+                  ? [ 
+                      styles.damageReportHeaderTitle, 
+                      { 
+                        color: palette.error, 
+                        fontWeight: 'bold', 
+                        fontSize: 18, 
+                        alignSelf: 'center', 
+                        marginTop: 0, 
+                        marginBottom: 16, 
+                      }, 
+                    ] 
+                  : { color: '#3B82F6', textAlign: 'center', fontWeight: 'bold', marginBottom: 10 }, 
+              ]} 
+            > 
+              {isDamageReportMode ? 'Báo cáo hư hại vật tư' : 'Ảnh chụp dọn vệ sinh'} 
             </Text>
 
             {isOperationalMode && (
@@ -1507,9 +1617,6 @@ export default function TaskDetailTab({
 
             {canCaptureNewPhotos ? (
               <>
-                {!isDamageReportMode ? (
-                  <Text style={[styles.subsectionTitle, { color: palette.text }]}>After Clean</Text>
-                ) : null}
 
                 {isOperationalMode ? (
                   <>
@@ -1594,12 +1701,12 @@ export default function TaskDetailTab({
                         <Text style={styles.requiredCaptureLabel}>Chọn từ thư viện</Text>
                       </Pressable>
 
-                      {capturedPhotoUris.map((uri, index) => (
-                        <View key={`${uri}_${index}`} style={styles.requiredThumbWrap}>
-                          <Image source={{ uri }} style={styles.requiredThumb} resizeMode="cover" />
+                      {capturedPhotos.map((photo) => (
+                        <View key={photo.id} style={styles.requiredThumbWrap}>
+                          <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
                           <Pressable
                             style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
-                            onPress={() => removeCapturedPhoto(index)}>
+                            onPress={() => removeCapturedPhoto(photo.id)}>
                             <MaterialIcons name="close" size={14} color={palette.white} />
                           </Pressable>
                         </View>
@@ -1608,7 +1715,7 @@ export default function TaskDetailTab({
                   </>
                 ) : isDamageReportMode ? (
                   <>
-                    <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border, alignSelf: 'center', width: '92%', maxWidth: 420, marginVertical: 8 }]}>
                       <Text style={[styles.incidentDraftTitle, { color: palette.text }]}>Thông tin báo cáo hư hại</Text>
                       <TextInput
                         style={[
@@ -1629,12 +1736,12 @@ export default function TaskDetailTab({
                       />
                     </View>
 
-                    <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                      <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chọn những món đồ bị hư (ITEM)</Text>
-                      {damageItems.length > 0 ? (
+                    <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border, alignSelf: 'center', width: '92%', maxWidth: 420, marginVertical: 8 }]}>
+                      <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chọn những món đồ bị hư</Text>
+                      {damageItems.filter((entry) => String(entry.item_type || '').toUpperCase() === 'REUSABLE').length > 0 ? (
                         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                           <View style={styles.damageItemRow}>
-                            {damageItems.map((entry) => {
+                            {damageItems.filter((entry) => String(entry.item_type || '').toUpperCase() === 'REUSABLE').map((entry) => {
                               const entryId = String(entry.id || '').trim();
                               if (!entryId) return null;
 
@@ -1676,7 +1783,7 @@ export default function TaskDetailTab({
                           </View>
                         </ScrollView>
                       ) : (
-                        <Text style={[styles.info, { color: palette.textMuted }]}>Chưa có dữ liệu ITEM.</Text>
+                        <Text style={[styles.info, { color: palette.textMuted }]}>Chưa có dữ liệu món đồ REUSABLE.</Text>
                       )}
 
                       <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chọn Vi phạm Quy chuẩn Dịch vụ</Text>
@@ -1767,7 +1874,10 @@ export default function TaskDetailTab({
                                   { borderColor: palette.border, backgroundColor: palette.surface },
                                 ]}>
                                 <View style={styles.detailSelectionInfo}>
-                                  <Text style={[styles.damageItemName, { color: palette.text }]} numberOfLines={1}>
+                                  <Text
+                                    style={[styles.damageItemName, styles.detailSelectionLabel, { color: palette.text }]}
+                                    numberOfLines={2}
+                                    ellipsizeMode="tail">
                                     {label}
                                   </Text>
                                   <Text style={[styles.damageItemCost, { color: palette.textMuted }]}>{amount}</Text>
@@ -1807,7 +1917,7 @@ export default function TaskDetailTab({
                       </View>
                     ) : null}
 
-                    <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border, alignSelf: 'center', width: '100%', maxWidth: 420 }]}>
                       <View style={styles.damageNumericRow}>
                         <View style={styles.damageNumericCol}>
                           <Text style={[styles.damageInputLabel, { color: palette.textMuted }]}>Ghi chú (tuỳ chọn)</Text>
@@ -1846,7 +1956,7 @@ export default function TaskDetailTab({
                       </View>
                     </View>
 
-                    <View style={[styles.incidentPhotoSection, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <View style={[styles.incidentPhotoSection, { backgroundColor: palette.card, borderColor: palette.border, alignSelf: 'center', width: '92%', maxWidth: 420, marginVertical: 8 }]}>
                       <Text style={[styles.subsectionTitle, { color: palette.text }]}>Mức độ nghiêm trọng</Text>
                       <View style={styles.photoTypeSelector}>
                         {INCIDENT_SEVERITY_OPTIONS.map((severity) => {
@@ -1868,24 +1978,28 @@ export default function TaskDetailTab({
                               <Text
                                 style={[
                                   styles.typeButtonText,
+                                  styles.damageSeverityButtonText,
                                   { color: selected ? palette.white : palette.text },
                                 ]}>
-                                {severity}
+                                {getSeverityLabelVi(severity)}
                               </Text>
                             </Pressable>
                           );
                         })}
                       </View>
 
-                      <Text style={[styles.incidentPhotoTitle, { color: palette.text }]}>Ảnh incident</Text>
-
                       <View style={[styles.incidentModeBox, { backgroundColor: `${palette.error}14`, borderColor: palette.error }]}>
                         <Text style={[styles.incidentModeTitle, { color: palette.error }]}>Chế độ báo cáo hư hại vật tư</Text>
                         <Text style={[styles.incidentModeText, { color: palette.textMuted }]}>
-                          Ảnh mới sẽ được gửi vào Incident (DAMAGE_REPORT) với snapshot giá, không lưu vào bộ ảnh cleaning BEFORE/AFTER.
-                          {isAnytimeIncidentFlow ? ' Báo cáo này đang dùng ngữ cảnh Pod (mọi lúc).' : ''}
+                          Các mức độ gồm:{'\n'}
+                          - Thấp{'\n'}
+                          - Trung bình{'\n'}
+                          - Cao{'\n'}
+                          - Trầm trọng
                         </Text>
                       </View>
+
+                      <Text style={[styles.incidentPhotoTitle, { color: palette.text }]}>Ảnh hư hại</Text>
 
                       <View style={styles.incidentPhotoActionRow}>
                         <Pressable
@@ -1899,7 +2013,7 @@ export default function TaskDetailTab({
                             void openCamera();
                           }}>
                           <MaterialIcons name="photo-camera" size={26} color={palette.white} />
-                          <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chụp ảnh incident</Text>
+                          <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chụp ảnh hư hại</Text>
                         </Pressable>
 
                         <Pressable
@@ -1918,86 +2032,116 @@ export default function TaskDetailTab({
                       </View>
 
                       <View style={styles.requiredPhotosRow}>
-                        {capturedPhotoUris.map((uri, index) => (
-                          <View key={`${uri}_${index}`} style={styles.requiredThumbWrap}>
-                            <Image source={{ uri }} style={styles.requiredThumb} resizeMode="cover" />
+                        {capturedPhotos.map((photo) => (
+                          <View key={photo.id} style={styles.requiredThumbWrap}>
+                            <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
                             <Pressable
                               style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
-                              onPress={() => removeCapturedPhoto(index)}>
+                              onPress={() => removeCapturedPhoto(photo.id)}>
                               <MaterialIcons name="close" size={14} color={palette.white} />
                             </Pressable>
                           </View>
                         ))}
                       </View>
 
-                      {capturedPhotoUris.length === 0 ? (
-                        <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh incident</Text>
+                      {capturedPhotos.length === 0 ? (
+                        <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa có ảnh hư hại</Text>
                       ) : null}
                     </View>
                   </>
                 ) : (
-                  <View style={styles.photoTypeSelector}>
-                    <Pressable
-                      style={[styles.requiredCaptureTile, { borderColor: '#c4d2e5', backgroundColor: '#f8fbff' }]}
-                      disabled={uploadingPhoto}
-                      onPress={() => {
-                        setPhotoType('AFTER');
-                        void openCamera();
-                      }}>
-                      <MaterialIcons name="photo-camera" size={26} color="#8aa0bc" />
-                      <Text style={styles.requiredCaptureLabel}>After Clean</Text>
-                    </Pressable>
-
-                    {requiredAfterPhotos.map((photo) => (
-                      <View key={String(photo.id || Math.random())} style={styles.requiredThumbWrap}>
-                        <Image
-                          source={{ uri: String(photo.photo_url || '') }}
-                          style={styles.requiredThumb}
-                          resizeMode="cover"
-                        />
-                        <View style={styles.requiredDoneIcon}>
-                          <MaterialIcons name="check-circle" size={20} color="#22c55e" />
-                        </View>
-                      </View>
-                    ))}
-
-                    {capturedPhotoUris.map((uri, index) => (
-                      <View key={`${uri}_${index}`} style={styles.requiredThumbWrap}>
-                        <Image source={{ uri }} style={styles.requiredThumb} resizeMode="cover" />
-                        <Pressable
-                          style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
-                          onPress={() => removeCapturedPhoto(index)}>
-                          <MaterialIcons name="close" size={14} color={palette.white} />
-                        </Pressable>
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                {isCameraOpen ? (
-                  <View style={styles.cameraBox}>
-                    <CameraView style={styles.cameraView} facing="back" ref={cameraRef} />
-                    <View style={styles.cameraActions}>
+                  <View style={[styles.cleaningPhotoSections, { marginTop: 10 }]}>
+                    <View style={styles.cleaningPhotoBlock}>
+                      <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp trước khi dọn</Text>
                       <Pressable
-                        style={[styles.cameraButton, { backgroundColor: palette.neutral500 }]}
-                        onPress={() => setIsCameraOpen(false)}>
-                        <Text style={[styles.cameraButtonText, { color: palette.white }]}>Xong</Text>
+                        style={[styles.cleaningCaptureButton, { backgroundColor: '#1f7aed' }]}
+                        disabled={uploadingPhoto}
+                        onPress={() => {
+                          setPhotoType('BEFORE');
+                          void openCamera();
+                        }}>
+                        <MaterialIcons name="photo-camera" size={18} color={palette.white} />
+                        <Text style={[styles.cleaningCaptureButtonText, { color: palette.white }]}>Chụp ảnh trước khi dọn</Text>
                       </Pressable>
-                      <Pressable
-                        style={[styles.cameraButton, { backgroundColor: palette.primary }]}
-                        onPress={() => void handleCapturePhoto()}>
-                        <Text style={[styles.cameraButtonText, { color: palette.white }]}>Chụp hình</Text>
-                      </Pressable>
+
+                      <View style={styles.requiredPhotosRow}>
+                        {requiredBeforePhotos.map((photo) => (
+                          <View key={String(photo.id || Math.random())} style={styles.requiredThumbWrap}>
+                            <Image
+                              source={{ uri: String(photo.photo_url || '') }}
+                              style={styles.requiredThumb}
+                              resizeMode="cover"
+                            />
+                            <View style={styles.requiredDoneIcon}>
+                              <MaterialIcons name="check-circle" size={20} color="#22c55e" />
+                            </View>
+                          </View>
+                        ))}
+                      </View>
                     </View>
-                    {capturedPhotoUris.length > 0 && (
-                      <Text style={[styles.cameraHint, { color: palette.textMuted }]}> 
-                        Đã chụp {capturedPhotoUris.length} ảnh. Bấm {'"Chụp hình"'} để chụp thêm.
-                      </Text>
-                    )}
+
+                    <View style={styles.cleaningPhotoBlock}>
+                      <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chụp sau khi dọn</Text>
+                      <Pressable
+                        style={[styles.cleaningCaptureButton, { backgroundColor: '#1f7aed' }]}
+                        disabled={uploadingPhoto}
+                        onPress={() => {
+                          setPhotoType('AFTER');
+                          void openCamera();
+                        }}>
+                        <MaterialIcons name="photo-camera" size={18} color={palette.white} />
+                        <Text style={[styles.cleaningCaptureButtonText, { color: palette.white }]}>Chụp ảnh sau khi dọn</Text>
+                      </Pressable>
+
+                      <View style={styles.requiredPhotosRow}>
+                        {requiredAfterPhotos.map((photo) => (
+                          <View key={String(photo.id || Math.random())} style={styles.requiredThumbWrap}>
+                            <Image
+                              source={{ uri: String(photo.photo_url || '') }}
+                              style={styles.requiredThumb}
+                              resizeMode="cover"
+                            />
+                            <View style={styles.requiredDoneIcon}>
+                              <MaterialIcons name="check-circle" size={20} color="#22c55e" />
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+
+                    <Text style={[styles.info, { color: palette.textMuted }]}>Ảnh mới chờ lưu - Trước khi dọn</Text>
+                    <View style={styles.requiredPhotosRow}>
+                      {pendingBeforePhotos.map((photo) => (
+                        <View key={photo.id} style={styles.requiredThumbWrap}>
+                          <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
+                          <Pressable
+                            style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
+                            onPress={() => removeCapturedPhoto(photo.id)}>
+                            <MaterialIcons name="close" size={14} color={palette.white} />
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+
+                    <Text style={[styles.info, { color: palette.textMuted }]}>Ảnh mới chờ lưu - Sau khi dọn</Text>
+                    <View style={styles.requiredPhotosRow}>
+                      {pendingAfterPhotos.map((photo) => (
+                        <View key={photo.id} style={styles.requiredThumbWrap}>
+                          <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
+                          <Pressable
+                            style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
+                            onPress={() => removeCapturedPhoto(photo.id)}>
+                            <MaterialIcons name="close" size={14} color={palette.white} />
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
                   </View>
-                ) : (
-                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa mở camera</Text>
                 )}
+
+                {!isCameraOpen ? (
+                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Chưa mở camera</Text>
+                ) : null}
 
 
 
@@ -2012,7 +2156,7 @@ export default function TaskDetailTab({
                           : palette.success,
                     },
                   ]}
-                  disabled={uploadingPhoto || capturedPhotoUris.length === 0}
+                  disabled={uploadingPhoto || capturedPhotos.length === 0}
                   onPress={() => void handleUploadPhoto()}>
                   {uploadingPhoto ? (
                     <ActivityIndicator color={palette.white} />
@@ -2022,7 +2166,7 @@ export default function TaskDetailTab({
                         ? 'Gửi báo cáo sự cố'
                         : isDamageReportMode
                           ? 'Gửi báo cáo hư hại'
-                          : 'Lưu tất cả ảnh vào nhiệm vụ'}
+                          : `Lưu ảnh ${photoType === 'BEFORE' ? 'Trước dọn' : 'Sau dọn'} vào nhiệm vụ`}
                     </Text>
                   )}
                 </Pressable>
@@ -2031,20 +2175,52 @@ export default function TaskDetailTab({
               <Text style={[styles.emptyText, { color: palette.textMuted }]}>
                 {isIncidentMode
                   ? 'Chế độ báo cáo hư hại chỉ khả dụng khi nhiệm vụ ở trạng thái IN_PROGRESS.'
-                  : 'Nhiệm vụ đã hoàn tất, không thể chụp hoặc thêm ảnh mới.'}
+                  : 'Nhiệm vụ đã hoàn thành, không thể chụp hoặc thêm ảnh mới.'}
               </Text>
             )}
           </View>
         ) : (
-          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            <Text style={[styles.sectionTitle, { color: palette.text }]}>Ảnh BEFORE/AFTER</Text>
+          <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
             <Text style={[styles.emptyText, { color: palette.textMuted }]}>
               Ảnh chỉ hiển thị và chụp được sau khi nhiệm vụ chuyển sang bước {'"Bắt đầu dọn"'}.
             </Text>
           </View>
         )}
-      </View>
+
     </ScrollView>
+
+    <Modal
+      visible={isCameraOpen}
+      animationType="slide"
+      presentationStyle="fullScreen"
+      statusBarTranslucent
+      onRequestClose={() => setIsCameraOpen(false)}>
+      <View style={styles.cameraModalRoot}>
+        <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} />
+
+        <View style={styles.cameraModalOverlay}>
+          <View style={styles.cameraActions}>
+            <Pressable
+              style={[styles.cameraButton, { backgroundColor: '#475569' }]}
+              onPress={() => setIsCameraOpen(false)}>
+              <Text style={[styles.cameraButtonText, { color: palette.white }]}>Xong</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.cameraButton, { backgroundColor: '#1f7aed' }]}
+              onPress={() => void handleCapturePhoto()}>
+              <Text style={[styles.cameraButtonText, { color: palette.white }]}>Chụp hình</Text>
+            </Pressable>
+          </View>
+
+          {capturedPhotos.length > 0 && (
+            <Text style={[styles.cameraHint, styles.cameraModalHint]}>
+              Đã chụp {capturedPhotos.length} ảnh. Bấm {'"Chụp hình"'} để chụp thêm.
+            </Text>
+          )}
+        </View>
+      </View>
+    </Modal>
+  </>
   );
 }
 
@@ -2366,7 +2542,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: '45%',
     borderRadius: radius._10,
-    paddingVertical: spacingY._12,
+    paddingVertical: spacingY._10,
     alignItems: 'center',
   },
   actionButtonText: {
@@ -2416,6 +2592,28 @@ const styles = StyleSheet.create({
   photoTypeSelector: {
     flexDirection: 'row',
     gap: spacingX._7,
+  },
+  cleaningPhotoSections: {
+    gap: spacingY._20,
+  },
+  cleaningPhotoBlock: {
+    gap: spacingY._12,
+  },
+  cleaningCaptureButton: {
+    width: '100%',
+    height: 42,
+    borderRadius: radius._10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: spacingX._5,
+    paddingHorizontal: spacingX._7,
+  },
+  cleaningCaptureButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    textAlign: 'center',
   },
   requiredPhotosRow: {
     flexDirection: 'row',
@@ -2493,6 +2691,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
+  damageSeverityButtonText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
   uploadButton: {
     borderRadius: radius._10,
     paddingVertical: spacingY._12,
@@ -2546,6 +2748,28 @@ const styles = StyleSheet.create({
   cameraHint: {
     fontSize: 12,
     fontFamily: Fonts.sans,
+  },
+  cameraModalRoot: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  cameraModalView: {
+    flex: 1,
+  },
+  cameraModalOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: spacingX._12,
+    paddingBottom: spacingY._20,
+    paddingTop: spacingY._10,
+    backgroundColor: '#00000088',
+    gap: spacingY._7,
+  },
+  cameraModalHint: {
+    color: '#e2e8f0',
+    textAlign: 'center',
   },
   capturedBox: {
     gap: spacingY._7,
@@ -2668,28 +2892,36 @@ const styles = StyleSheet.create({
   },
   detailSelectionInfo: {
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     gap: 2,
   },
+  detailSelectionLabel: {
+    flexShrink: 1,
+  },
   detailSelectionQtyWrap: {
-    width: 92,
+    width: 84,
+    flexShrink: 0,
+    alignSelf: 'center',
   },
   detailSelectionQtyStepper: {
-    minHeight: 32,
+    height: 34,
     borderWidth: 1,
     borderRadius: radius._10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     overflow: 'hidden',
+    paddingHorizontal: spacingX._5,
   },
   detailSelectionQtyButton: {
-    width: 28,
-    height: '100%',
+    width: 22,
+    height: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
   detailSelectionQtyValue: {
-    flex: 1,
+    minWidth: 18,
     textAlign: 'center',
     fontSize: 12,
     fontWeight: '700',

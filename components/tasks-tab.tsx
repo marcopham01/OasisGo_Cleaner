@@ -16,7 +16,8 @@ import {
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getBookingById, getMyCleaningTasks, getPodById } from '@/services/cleaner-dashboard.service';
-import type { CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
+import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
+import type { CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import {
     CLEANING_REQUEST_SOURCES,
     CLEANING_TASK_STATUSES,
@@ -30,6 +31,7 @@ type BookingTimeWindow = {
 
 interface TasksTabProps {
   token: string;
+  userId?: string | null;
   isDark: boolean;
   palette: typeof Colors.light;
   onLoadingChange?: (loading: boolean) => void;
@@ -99,6 +101,28 @@ function taskBookingDisplayName(task: CleaningTask) {
   return String(task.booking_order_id || bookingRecord?.order_id || bookingRecord?.id || '').trim();
 }
 
+function taskUserDisplayName(task: CleaningTask) {
+  const bookingRecord = task.booking as {
+    user_name?: string;
+    guest_name?: string;
+    customer_name?: string;
+    full_name?: string;
+    user?: { name?: string; full_name?: string };
+  } | undefined;
+
+  return String(
+    task.user_name ||
+      task.booking_guest_name ||
+      bookingRecord?.user_name ||
+      bookingRecord?.guest_name ||
+      bookingRecord?.customer_name ||
+      bookingRecord?.full_name ||
+      bookingRecord?.user?.name ||
+      bookingRecord?.user?.full_name ||
+      '',
+  ).trim();
+}
+
 function taskBookingWindow(task: CleaningTask, bookingTimeMap: Record<string, BookingTimeWindow>) {
   const bookingRecord = task.booking as { start_time?: string; end_time?: string } | undefined;
   const bookingId = String(task.booking_id || '').trim();
@@ -152,7 +176,8 @@ function resolvedClusterOrLocationLabel(
 function resolvedBookingLabel(task: CleaningTask, bookingNameMap: Record<string, string>) {
   const bookingId = String(task.booking_id || '').trim();
   const value = String(
-    bookingNameMap[bookingId] ||
+    taskUserDisplayName(task) ||
+      bookingNameMap[bookingId] ||
       taskBookingDisplayName(task) ||
       task.booking_guest_name ||
       '',
@@ -247,8 +272,30 @@ function requestSourceLabel(source?: string) {
   return normalized.replace(/_/g, ' ');
 }
 
+function shouldRefreshTasksFromEvent(event: CleanerRealtimeNotification) {
+  const eventCode = String(event.event || '').trim().toUpperCase();
+  const payload = (event.payload || {}) as Record<string, unknown>;
+  const payloadEvent = String(payload.event_code || payload.event || '').trim().toUpperCase();
+  const mergedCode = eventCode || payloadEvent;
+
+  if (!mergedCode) {
+    return true;
+  }
+
+  if (
+    mergedCode.startsWith('CLEANING_TASK_') ||
+    mergedCode === 'SUPPORT_CLEANING_REQUEST' ||
+    mergedCode.startsWith('SHIFT_')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export default function TasksTab({
   token,
+  userId,
   isDark,
   palette,
   onLoadingChange,
@@ -276,6 +323,7 @@ export default function TasksTab({
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const searchAnimation = useRef(new Animated.Value(0)).current;
+  const realtimeReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const filteredTasks = useMemo<CleaningTask[]>(() => {
     const search = searchQuery.trim().toLowerCase();
@@ -286,7 +334,10 @@ export default function TasksTab({
         podNameMap[String(task.pod_id || '')] || taskPodDisplayName(task) || '',
       ).toLowerCase();
       const bookingDisplay = String(
-        bookingNameMap[String(task.booking_id || '')] || taskBookingDisplayName(task) || '',
+        taskUserDisplayName(task) ||
+          bookingNameMap[String(task.booking_id || '')] ||
+          taskBookingDisplayName(task) ||
+          '',
       ).toLowerCase();
       const clusterDisplay = String(
         podClusterNameMap[String(task.pod_id || '')] ||
@@ -357,6 +408,14 @@ export default function TasksTab({
     }).length;
   }, [tasks]);
 
+  const todayDateLabel = useMemo(() => {
+    return new Date().toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  }, []);
+
   const loadTasks = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -394,6 +453,44 @@ export default function TasksTab({
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  useEffect(() => {
+    if (!token || !userId) {
+      return;
+    }
+
+    const queueReload = () => {
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+      }
+
+      realtimeReloadTimer.current = setTimeout(() => {
+        realtimeReloadTimer.current = null;
+        void loadTasks();
+      }, 350);
+    };
+
+    const disconnect = connectCleanerNotificationSocket({
+      token,
+      cleanerId: userId,
+      onNotification: (event) => {
+        if (!shouldRefreshTasksFromEvent(event)) {
+          return;
+        }
+
+        queueReload();
+      },
+    });
+
+    return () => {
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+        realtimeReloadTimer.current = null;
+      }
+
+      disconnect();
+    };
+  }, [loadTasks, token, userId]);
 
   useEffect(() => {
     Animated.timing(searchAnimation, {
@@ -434,7 +531,13 @@ export default function TasksTab({
       );
       const initialBookingMap = Object.fromEntries(
         tasks
-          .map((task) => [String(task.booking_id || '').trim(), taskBookingDisplayName(task)] as const)
+          .map(
+            (task) =>
+              [
+                String(task.booking_id || '').trim(),
+                taskUserDisplayName(task) || taskBookingDisplayName(task),
+              ] as const,
+          )
           .filter(([id, label]) => Boolean(id && label)),
       );
       const initialBookingTimeMap = Object.fromEntries(
@@ -542,7 +645,9 @@ export default function TasksTab({
         });
         setBookingNameMap({
           ...initialBookingMap,
-          ...Object.fromEntries(bookings.map(([id, booking]) => [id, booking.label])),
+          ...Object.fromEntries(
+            bookings.map(([id, booking]) => [id, String(initialBookingMap[id] || booking.label || '').trim()]),
+          ),
         });
         setBookingTimeMap({
           ...initialBookingTimeMap,
@@ -635,7 +740,9 @@ export default function TasksTab({
           </View>
 
           <Text style={[styles.title, { color: palette.white }]}>Nhiệm vụ của tôi</Text>
-          <Text style={[styles.subtitle, { color: palette.primaryLight }]}>Theo dõi công việc trong ngày theo tiến độ xử lý</Text>
+          <Text style={[styles.subtitle, { color: palette.primaryLight }]}>
+            Theo dõi công việc trong ngày {todayDateLabel}
+          </Text>
         </View>
 
         <View style={styles.actionsRow}>
@@ -976,10 +1083,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 13,
     fontFamily: Fonts.sans,
+    textAlign: 'center',
   },
   actionsRow: {
     flexDirection: 'row',

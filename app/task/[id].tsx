@@ -12,7 +12,7 @@ export default function TaskDetailScreen() {
   const router = useRouter();
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   if (!token) {
     return (
@@ -28,6 +28,7 @@ export default function TaskDetailScreen() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
       <TaskDetailTab
         token={token}
+        userId={user?.id}
         taskId={String(id || '') || null}
         isDark={theme === 'dark'}
         palette={palette}

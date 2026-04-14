@@ -1,34 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    checkinShift,
-    checkoutShift,
-    getMyAssignmentAttendanceStatus,
-    getMyAttendanceLogs,
-    getMyAttendanceLogsPaginated,
-    getMyCleaningTasks,
-    getMyShiftAssignments,
-    getMyTodayAttendanceStatus,
+  checkinShift,
+  checkoutShift,
+  getMyAssignmentAttendanceStatus,
+  getMyAttendanceLogs,
+  getMyAttendanceLogsPaginated,
+  getMyCleaningTasks,
+  getMyShiftAssignments,
+  getMyTodayAttendanceStatus,
 } from '@/services/cleaner-dashboard.service';
+import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import type {
-    CleaningTask,
-    StaffAttendanceLog,
-    StaffAttendanceLogListResponse,
-    StaffShiftAssignment,
-    StaffTodayAttendanceStatus,
+  CleanerRealtimeNotification,
+  CleaningTask,
+  StaffAttendanceLog,
+  StaffAttendanceLogListResponse,
+  StaffShiftAssignment,
+  StaffTodayAttendanceStatus,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -373,8 +375,9 @@ function confirmShiftAction(action: 'checkin' | 'checkout') {
 }
 
 const FINISHED_TASK_STATUSES = new Set(['DONE', 'CANCELLED', 'MISSED']);
-const CHECKIN_EARLY_MINUTES = 30;
-const CHECKOUT_LATE_MINUTES = 180;
+// Temporary testing override: relax FE-side check-in/check-out gate.
+const CHECKIN_EARLY_MINUTES = 24 * 60;
+const CHECKOUT_LATE_MINUTES = 24 * 60;
 
 function parseTimeParts(timeValue?: string) {
   const text = String(timeValue || '').trim();
@@ -510,8 +513,26 @@ function confirmCheckoutWithPendingTasks(pendingTasks: CleaningTask[]) {
   });
 }
 
+function shouldRefreshShiftsFromEvent(event: CleanerRealtimeNotification) {
+  const eventCode = String(event.event || '').trim().toUpperCase();
+  const payload = (event.payload || {}) as Record<string, unknown>;
+  const payloadEvent = String(payload.event_code || payload.event || '').trim().toUpperCase();
+  const mergedCode = eventCode || payloadEvent;
+
+  if (!mergedCode) {
+    return true;
+  }
+
+  if (mergedCode.startsWith('SHIFT_') || mergedCode.startsWith('CLEANING_TASK_')) {
+    return true;
+  }
+
+  return false;
+}
+
 export default function ShiftsTab({
   token,
+  userId,
   isDark,
   palette,
   onLoadingChange,
@@ -534,6 +555,7 @@ export default function ShiftsTab({
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const realtimeReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const assignmentOverlapsDate = useCallback((assignment: StaffShiftAssignment, dateText: string) => {
     const selectedDate = new Date(`${dateText}T00:00:00`);
@@ -769,6 +791,44 @@ export default function ShiftsTab({
   useEffect(() => {
     void loadShifts();
   }, [loadShifts]);
+
+  useEffect(() => {
+    if (!token || !userId) {
+      return;
+    }
+
+    const queueReload = () => {
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+      }
+
+      realtimeReloadTimer.current = setTimeout(() => {
+        realtimeReloadTimer.current = null;
+        void loadShifts();
+      }, 350);
+    };
+
+    const disconnect = connectCleanerNotificationSocket({
+      token,
+      cleanerId: userId,
+      onNotification: (event) => {
+        if (!shouldRefreshShiftsFromEvent(event)) {
+          return;
+        }
+
+        queueReload();
+      },
+    });
+
+    return () => {
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+        realtimeReloadTimer.current = null;
+      }
+
+      disconnect();
+    };
+  }, [loadShifts, token, userId]);
 
   const loadHistoryPage = useCallback(
     async (page: number, append: boolean) => {
