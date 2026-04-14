@@ -226,7 +226,8 @@ function dateKey(value?: string) {
 
 function resolveTaskDateTime(task: CleaningTask) {
   return String(
-    task.due_at ||
+    task.estimated_start_time ||
+      task.due_at ||
       task.booking_end_time ||
       task.booking_start_time ||
       task.assigned_at ||

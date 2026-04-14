@@ -12,15 +12,15 @@ import { updateDevicePushToken } from '@/services/auth.service';
 import { getMyUnreadNotificationCount } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
-  observeNotificationResponses,
-  presentRealtimeNotificationAsync,
-  registerForPushNotificationsAsync,
+    observeNotificationResponses,
+    presentRealtimeNotificationAsync,
+    registerForPushNotificationsAsync,
 } from '@/services/expo-notifications.service';
 import {
-  getNotificationBadgeCount,
-  incrementNotificationBadge,
-  setNotificationBadgeCount,
-  subscribeNotificationBadge,
+    getNotificationBadgeCount,
+    incrementNotificationBadge,
+    setNotificationBadgeCount,
+    subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
 
 export default function TabLayout() {
@@ -209,6 +209,13 @@ export default function TabLayout() {
               ) : null}
             </View>
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="supplies"
+        options={{
+          title: 'Vật tư',
+          tabBarIcon: ({ color }) => <IconSymbol size={tabIconSize} name="archivebox.fill" color={color} />,
         }}
       />
       <Tabs.Screen
