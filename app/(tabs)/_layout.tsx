@@ -219,6 +219,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="lost-found"
+        options={{
+          title: 'Đồ thất lạc',
+          tabBarIcon: ({ color }) => <IconSymbol size={tabIconSize} name="bag.fill.badge.questionmark" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Tài khoản',

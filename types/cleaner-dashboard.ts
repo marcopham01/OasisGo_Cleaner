@@ -26,7 +26,7 @@ export type IncidentStatus = 'PENDING' | 'RESOLVED' | 'DISMISSED' | 'INVESTIGATI
 export type IncidentType = 'OPERATIONAL' | 'DAMAGE_REPORT';
 export type IncidentDetailType = 'ITEM' | 'SERVICE';
 export type DamageType = 'BROKEN' | 'SCRATCHED' | 'LOST' | 'STAINED';
-export type LostFoundStatus = 'FOUND' | 'STORED' | 'CLAIMED' | 'DISPOSED';
+export type LostFoundStatus = 'FOUND' | 'CLAIMED' | 'DISPOSED' | 'RETURNED_TO_USER';
 
 export const CLEANER_NOTIFICATION_TYPES = [
   'BOOKING',
@@ -514,42 +514,64 @@ export interface DamageReportListResponse {
 
 export interface LostFoundItem {
   id?: string;
-  cleaning_task_id?: string | null;
-  pod_id?: string;
+  _id?: string;
+  pod_id?: string | null;
   booking_id?: string | null;
   found_by_user_id?: string;
+  warehouse_id?: string | null;
   item_name: string;
   description?: string | null;
+  photo_url?: string | null;
   found_at?: string;
   status?: LostFoundStatus | string;
   claimed_by_user_id?: string | null;
   claimed_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  // Populated fields from backend
+  pod_name?: string | null;
+  warehouse_name?: string | null;
+  found_by_user_name?: string | null;
+  claimed_by_user_name?: string | null;
   [key: string]: unknown;
 }
 
 export interface LostFoundQuery {
-  cleaning_task_id?: string;
   pod_id?: string;
   booking_id?: string;
   found_by_user_id?: string;
+  warehouse_id?: string;
   status?: LostFoundStatus | string;
   page?: number;
   limit?: number;
 }
 
 export interface CreateLostFoundItemPayload {
-  cleaning_task_id?: string | null;
   pod_id?: string | null;
   booking_id?: string | null;
+  warehouse_id?: string | null;
   item_name: string;
   description?: string;
   found_at?: string;
 }
 
+export interface WarehouseListItem {
+  id?: string;
+  name?: string;
+  address?: string | null;
+  [key: string]: unknown;
+}
+
 export interface UpdateLostFoundStatusPayload {
   status: LostFoundStatus;
+}
+
+export interface PodCluster {
+  id?: string;
+  name?: string;
+  location_id?: string;
+  description?: string | null;
+  [key: string]: unknown;
 }
 
 export interface PodDetails {

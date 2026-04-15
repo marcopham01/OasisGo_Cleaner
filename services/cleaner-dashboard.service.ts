@@ -30,6 +30,7 @@ import type {
     LostFoundStatus,
     MyCleanerKeyByBookingData,
     MyCleanerKeyByTaskData,
+    PodCluster,
     PodDetails,
     StaffAssignmentAttendanceStatus,
     StaffAttendanceLog,
@@ -42,6 +43,7 @@ import type {
     StaffWorkRosterQuery,
     UpdateCleaningPhotoPayload,
     UpdateCleaningTaskPayload,
+    WarehouseListItem,
 } from '@/types/cleaner-dashboard';
 import { normalizeBackendMessage } from '@/utils/validation';
 
@@ -1136,6 +1138,96 @@ export async function updateLostFoundStatus(
     return item;
   } catch (error) {
     throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getMyLostFoundItems(token: string, query: LostFoundQuery = {}) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<LostFoundItem[]>>('/lost-found-items/my', {
+      headers: authHeader(token),
+      params: compactParams(query),
+    });
+
+    return toArray<LostFoundItem>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getPodList(token: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<PodDetails[]>>('/pods', {
+      headers: authHeader(token),
+      validateStatus: (status) => status < 500,
+    });
+
+    if ((response.status ?? 200) >= 400) {
+      return [] as PodDetails[];
+    }
+
+    return toArray<PodDetails>(response.data?.data ?? response.data);
+  } catch {
+    return [] as PodDetails[];
+  }
+}
+
+export async function getPodClusters(token: string, query: { location_id?: string } = {}) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<PodCluster[]>>('/pod-clusters', {
+      headers: authHeader(token),
+      params: compactParams(query),
+      validateStatus: (status) => status < 500,
+    });
+
+    if ((response.status ?? 200) >= 400) {
+      return [] as PodCluster[];
+    }
+
+    return toArray<PodCluster>(response.data?.data ?? response.data);
+  } catch {
+    return [] as PodCluster[];
+  }
+}
+
+export async function getPodsByClusterId(token: string, clusterId: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<PodDetails[]>>('/pods', {
+      headers: authHeader(token),
+      params: { cluster_id: clusterId },
+      validateStatus: (status) => status < 500,
+    });
+
+    if ((response.status ?? 200) >= 400) {
+      // Fallback: try the cluster-specific route
+      const encoded = encodeURIComponent(clusterId);
+      const fallback = await apiClient.get<ApiEnvelope<PodDetails[]>>(`/pods/cluster/${encoded}`, {
+        headers: authHeader(token),
+        validateStatus: (s) => s < 500,
+      });
+      if ((fallback.status ?? 200) >= 400) return [] as PodDetails[];
+      return toArray<PodDetails>(fallback.data?.data ?? fallback.data);
+    }
+
+    return toArray<PodDetails>(response.data?.data ?? response.data);
+  } catch {
+    return [] as PodDetails[];
+  }
+}
+
+export async function getWarehouseList(token: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<WarehouseListItem[]>>('/warehouses', {
+      headers: authHeader(token),
+      validateStatus: (status) => status < 500,
+    });
+
+    if ((response.status ?? 200) >= 400) {
+      return [] as WarehouseListItem[];
+    }
+
+    return toArray<WarehouseListItem>(response.data?.data ?? response.data);
+  } catch {
+    return [] as WarehouseListItem[];
   }
 }
 

@@ -23,6 +23,8 @@ const MAPPING = {
   'person.crop.circle.fill': 'person',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  'archivebox.fill': 'inventory',
+  'bag.fill.badge.questionmark': 'find-in-page',
 } as IconMapping;
 
 /**

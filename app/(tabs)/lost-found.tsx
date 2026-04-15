@@ -1,0 +1,52 @@
+import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import LostFoundTab from '@/components/lost-found-tab';
+import { Colors, Fonts, spacingX, spacingY } from '@/constants/theme';
+import { useAuth } from '@/contexts/auth-context';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+
+export default function LostFoundScreen() {
+  const theme = useColorScheme() ?? 'light';
+  const palette = Colors[theme];
+  const { token } = useAuth();
+
+  if (!token) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
+        <View style={styles.centerContainer}>
+          <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
+      <View style={styles.container}>
+        <LostFoundTab token={token} isDark={theme === 'dark'} palette={palette} />
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+  centerContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacingX._20,
+  },
+  centerText: {
+    fontSize: 16,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+  container: {
+    flex: 1,
+    paddingTop: spacingY._12,
+  },
+});
