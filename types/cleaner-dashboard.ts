@@ -305,6 +305,24 @@ export interface CleaningTask {
   reassigned_from_cleaner_id?: string | null;
   created_at?: string;
   updated_at?: string;
+  // Enriched fields returned from API
+  pod_name?: string | null;
+  pod_cluster_id?: string | null;
+  pod_cluster_name?: string | null;
+  location_id?: string | null;
+  location_name?: string | null;
+  booking_guest_id?: string | null;
+  booking_guest_name?: string | null;
+  booking_start_time?: string | null;
+  booking_end_time?: string | null;
+  booking_actual_end_time?: string | null;
+  booking_checked_in_at?: string | null;
+  booking_checkin_state?: string | null;
+  booking_status?: string | null;
+  pod_status?: string | null;
+  actual_start_time?: string | null;
+  actual_end_time?: string | null;
+  action_label?: string | null;
   [key: string]: unknown;
 }
 

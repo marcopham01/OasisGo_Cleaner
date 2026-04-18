@@ -25,7 +25,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <View style={styles.container}>
-        <Text style={[styles.screenTitle, { color: palette.text }]}>Nhiệm vụ của tôi</Text>
+        <Text style={[styles.screenTitle, { color: palette.primary }]}>Nhiệm vụ của tôi</Text>
         <TasksTab token={token} userId={user?.id} isDark={theme === 'dark'} palette={palette} />
       </View>
     </SafeAreaView>
@@ -57,5 +57,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     paddingHorizontal: spacingX._20,
     paddingBottom: spacingY._7,
+    textAlign: 'center',
   },
 });

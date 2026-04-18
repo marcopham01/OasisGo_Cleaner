@@ -52,6 +52,17 @@ function formatDateTime(dateText?: string) {
       });
 }
 
+function formatCompactTime(dateText?: string) {
+  if (!dateText) return '-';
+  const parsed = new Date(dateText);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  const hh = String(parsed.getHours()).padStart(2, '0');
+  const mm = String(parsed.getMinutes()).padStart(2, '0');
+  const dd = String(parsed.getDate()).padStart(2, '0');
+  const mo = String(parsed.getMonth() + 1).padStart(2, '0');
+  return `${hh}:${mm} ${dd}/${mo}`;
+}
+
 function statusColor(status: string | undefined, isDark: boolean) {
   const normalized = (status || '').toUpperCase();
   if (normalized === 'DONE') return isDark ? '#34d399' : '#10b981';
@@ -261,7 +272,16 @@ function statusBadgeText(status: string, isDark: boolean) {
 }
 
 function statusLabel(status: string) {
-  return status.replace(/_/g, ' ');
+  const s = String(status || '').toUpperCase();
+  if (s === 'ASSIGNED') return 'Đã phân công';
+  if (s === 'NOTIFIED') return 'Đã thông báo';
+  if (s === 'ACCEPTED') return 'Đã nhận việc';
+  if (s === 'ARRIVED') return 'Đã đến nơi';
+  if (s === 'IN_PROGRESS') return 'Đang dọn';
+  if (s === 'DONE') return 'Hoàn thành';
+  if (s === 'CANCELLED') return 'Đã hủy';
+  if (s === 'MISSED') return 'Bỏ lỡ';
+  return s.replace(/_/g, ' ');
 }
 
 function requestSourceLabel(source?: string) {
@@ -271,6 +291,27 @@ function requestSourceLabel(source?: string) {
   if (normalized === 'SYSTEM_RETRY') return 'Hệ thống thử lại';
   if (!normalized) return '-';
   return normalized.replace(/_/g, ' ');
+}
+
+function bookingStatusLabel(status?: string | null) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'IN_USE') return 'Đang sử dụng';
+  if (s === 'COMPLETED') return 'Đã kết thúc';
+  if (s === 'BOOKED') return 'Đã đặt';
+  if (s === 'CANCELLED') return 'Đã hủy';
+  if (s === 'NO_SHOW') return 'Không đến';
+  if (!s) return null;
+  return s.replace(/_/g, ' ');
+}
+
+function podStatusLabel(status?: string | null) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'AVAILABLE') return 'Sẵn sàng';
+  if (s === 'IN_USE') return 'Đang dùng';
+  if (s === 'NEEDS_CLEANING') return 'Cần dọn';
+  if (s === 'CLEANING') return 'Đang dọn';
+  if (!s) return null;
+  return s.replace(/_/g, ' ');
 }
 
 function shouldRefreshTasksFromEvent(event: CleanerRealtimeNotification) {
@@ -740,7 +781,6 @@ export default function TasksTab({
             </View>
           </View>
 
-          <Text style={[styles.title, { color: palette.white }]}>Nhiệm vụ của tôi</Text>
           <Text style={[styles.subtitle, { color: palette.primaryLight }]}>
             Theo dõi công việc trong ngày {todayDateLabel}
           </Text>
@@ -843,19 +883,21 @@ export default function TasksTab({
                 <View style={styles.cardContentRow}>
                   <View style={styles.cardMainContent}>
                     <View style={styles.cardHeader}>
-                      <View style={styles.cardTitleWrap}>
-                        <Text style={[styles.cardTitle, { color: palette.primaryDark }]}> 
-                          {podLabel}
+                      <Text
+                        style={[styles.cardTitle, { color: palette.primaryDark, flex: 7 }]}
+                        numberOfLines={3}>
+                        {podLabel}
+                      </Text>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          { flex: 3, alignItems: 'center', backgroundColor: statusBadgeBackground(status, isDark) },
+                        ]}>
+                        <Text
+                          style={[styles.statusBadgeText, { color: statusBadgeText(status, isDark), textAlign: 'center' }]}
+                          numberOfLines={2}>
+                          {statusLabel(status)}
                         </Text>
-                        <View
-                          style={[
-                            styles.statusBadge,
-                            { backgroundColor: statusBadgeBackground(status, isDark) },
-                          ]}>
-                          <Text style={[styles.statusBadgeText, { color: statusBadgeText(status, isDark) }]}>
-                            {statusLabel(status)}
-                          </Text>
-                        </View>
                       </View>
                     </View>
 
@@ -878,24 +920,31 @@ export default function TasksTab({
                           {requestSourceLabel(String(task.request_source || ''))}
                         </Text>
                       </View>
-                      <View style={styles.metaLine}>
-                        <MaterialIcons name="timer" size={16} color={palette.neutral500} />
-                        <Text style={[styles.meta, { color: palette.textMuted }]}> 
-                          Bắt đầu dự kiến: {formatDateTime(estimatedStartText)}
-                        </Text>
-                      </View>
+                      {task.booking_status ? (
+                        <View style={styles.metaLine}>
+                          <MaterialIcons name="event" size={16} color={palette.neutral500} />
+                          <Text style={[styles.meta, { color: palette.textMuted }]}>
+                            Booking: {bookingStatusLabel(String(task.booking_status))}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {task.pod_status ? (
+                        <View style={styles.metaLine}>
+                          <MaterialIcons name="meeting-room" size={16} color={palette.neutral500} />
+                          <Text style={[styles.meta, { color: palette.textMuted }]}>
+                            Pod: {podStatusLabel(String(task.pod_status))}
+                          </Text>
+                        </View>
+                      ) : null}
                       <View style={styles.metaLine}>
                         <MaterialIcons name="schedule" size={16} color={palette.neutral500} />
-                        <Text style={[styles.meta, { color: palette.textMuted }]}> 
-                          Hạn chót: {formatDateTime(dueText)}
+                        <Text style={[styles.meta, { color: palette.textMuted }]}>
+                          {formatCompactTime(estimatedStartText)} – {formatCompactTime(dueText)}
                         </Text>
                       </View>
                     </View>
                   </View>
 
-                  <View style={[styles.arrowButton, { backgroundColor: palette.neutral200 }]}> 
-                    <MaterialIcons name="arrow-forward" size={18} color={palette.neutral500} />
-                  </View>
                 </View>
               </Pressable>
             );
@@ -1289,18 +1338,12 @@ const styles = StyleSheet.create({
   },
   cardHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacingX._7,
-  },
-  cardTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacingX._7,
-    flex: 1,
   },
   cardTitle: {
-    fontSize: 24,
-    lineHeight: 30,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
@@ -1308,19 +1351,13 @@ const styles = StyleSheet.create({
     borderRadius: radius._10,
     paddingHorizontal: spacingX._7,
     paddingVertical: spacingY._5,
+    minHeight: 36,
+    justifyContent: 'center',
   },
   statusBadgeText: {
     fontSize: 11,
     fontWeight: '700',
     fontFamily: Fonts.sans,
-  },
-  arrowButton: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
   },
   metaBlock: {
     gap: spacingY._5,

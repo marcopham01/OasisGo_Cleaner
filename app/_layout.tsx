@@ -22,6 +22,18 @@ export default function RootLayout() {
             <Stack.Screen name="login" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="task/[id]" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="edit-profile"
+              options={{ title: 'Chỉnh sửa thông tin', headerBackTitle: 'Tài khoản' }}
+            />
+            <Stack.Screen
+              name="damage-report"
+              options={{ title: 'Tạo báo cáo hư hại', headerBackTitle: 'Sự cố' }}
+            />
+            <Stack.Screen
+              name="report-lost-found"
+              options={{ title: 'Báo cáo đồ tìm thấy', headerBackTitle: 'Sự cố' }}
+            />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
           </Stack>
           <StatusBar style="auto" />

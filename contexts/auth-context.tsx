@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { clearDevicePushToken } from '@/services/auth.service';
+import { clearDevicePushToken, getMe } from '@/services/auth.service';
 import type { AuthResponse, AuthUser } from '@/types/auth';
 
 const AUTH_STORAGE_KEY = 'oasisgo_cleaner_auth';
@@ -18,6 +18,8 @@ type AuthContextValue = {
   isHydrating: boolean;
   signIn: (auth: AuthResponse) => Promise<void>;
   signOut: () => Promise<void>;
+  updateUserState: (updated: Partial<AuthUser>) => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -83,6 +85,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
   };
 
+  const updateUserState = async (updated: Partial<AuthUser>) => {
+    if (!user || !token) return;
+    const merged = { ...user, ...updated };
+    setUser(merged);
+    const storedAuth: StoredAuth = { user: merged, token };
+    await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(storedAuth));
+  };
+
+  const refreshUser = async () => {
+    if (!token) return;
+    try {
+      const freshUser = await getMe(token);
+      await updateUserState(freshUser);
+    } catch {
+      // Silently ignore refresh errors
+    }
+  };
+
   const value = useMemo(
     () => ({
       user,
@@ -91,6 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isHydrating,
       signIn,
       signOut,
+      updateUserState,
+      refreshUser,
     }),
     [user, token, isHydrating],
   );

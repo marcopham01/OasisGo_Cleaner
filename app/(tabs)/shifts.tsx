@@ -24,7 +24,7 @@ export default function ShiftsScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <View style={styles.container}>
-        <Text style={[styles.screenTitle, { color: palette.text }]}>Ca làm việc</Text>
+        <Text style={[styles.screenTitle, { color: palette.primary }]}>Ca làm việc</Text>
         <ShiftsTab token={token} userId={user?.id} isDark={theme === 'dark'} palette={palette} />
       </View>
     </SafeAreaView>
@@ -56,5 +56,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     paddingHorizontal: spacingX._20,
     paddingBottom: spacingY._7,
+    textAlign: 'center',
   },
 });

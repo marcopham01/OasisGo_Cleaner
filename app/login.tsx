@@ -1,15 +1,15 @@
 import { Redirect, router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -159,6 +159,7 @@ export default function LoginScreen() {
                 <Text style={[styles.buttonText, { color: palette.white }]}>Đăng nhập</Text>
               )}
             </Pressable>
+
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -244,5 +245,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     fontFamily: Fonts.sans,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: spacingY._15,
+    gap: spacingX._7,
   },
 });

@@ -1,7 +1,7 @@
 import { AxiosError } from 'axios';
 
 import { apiClient } from '@/services/api';
-import type { AuthResponse, LoginRequest } from '@/types/auth';
+import type { AuthResponse, AuthUser, LoginRequest, UpdateProfileRequest } from '@/types/auth';
 import { normalizeBackendMessage } from '@/utils/validation';
 
 type ApiEnvelope<T> = {
@@ -104,4 +104,37 @@ export async function clearDevicePushToken(authToken: string): Promise<void> {
       },
     },
   );
+}
+
+export async function getMe(authToken: string): Promise<AuthUser> {
+  const response = await apiClient.get<ApiEnvelope<{ user: AuthUser }>>('/auth/me', {
+    headers: { Authorization: `Bearer ${authToken}` },
+  });
+  const body = response.data;
+  if (!body.success || !body.data?.user) {
+    throw new Error('Không thể lấy thông tin tài khoản.');
+  }
+  return body.data.user;
+}
+
+export async function updateProfile(
+  authToken: string,
+  payload: UpdateProfileRequest,
+): Promise<AuthUser> {
+  try {
+    const response = await apiClient.put<ApiEnvelope<{ user: AuthUser }>>(
+      '/auth/update-profile',
+      payload,
+      { headers: { Authorization: `Bearer ${authToken}` } },
+    );
+    const body = response.data;
+    if (!body.success || !body.data?.user) {
+      throw new Error(normalizeBackendMessage(body.message || 'Cập nhật thất bại'));
+    }
+    return body.data.user;
+  } catch (error) {
+    const axiosError = error as AxiosError<{ message?: string }>;
+    const serverMessage = axiosError.response?.data?.message;
+    throw new Error(normalizeBackendMessage(serverMessage || 'Không thể cập nhật thông tin.'));
+  }
 }

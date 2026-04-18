@@ -1,36 +1,53 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import * as Clipboard from 'expo-clipboard';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  createLostFoundItem,
-  getMyLostFoundItems,
-  getMyShiftAssignments,
-  getPodClusters,
-  getPodsByClusterId,
-  getWarehouseList,
-  updateLostFoundStatus,
+    getDamageReports,
+    getMyLostFoundItems,
+    updateLostFoundStatus,
 } from '@/services/cleaner-dashboard.service';
 import type {
-  CreateLostFoundItemPayload,
-  LostFoundItem,
-  LostFoundStatus,
-  PodCluster,
-  PodDetails,
-  StaffShiftAssignment,
-  WarehouseListItem,
+    DamageReportResponse,
+    IncidentSeverity,
+    LostFoundItem,
+    LostFoundStatus,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
+
+const INCIDENT_SEVERITY_OPTIONS: IncidentSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+function getSeverityLabelVi(severity: IncidentSeverity) {
+  if (severity === 'LOW') return 'Thấp';
+  if (severity === 'MEDIUM') return 'Tr.bình';
+  if (severity === 'HIGH') return 'Cao';
+  if (severity === 'CRITICAL') return 'Tr.trọng';
+  return severity;
+}
+
+function formatVnd(value?: number | null) {
+  if (!Number.isFinite(value)) return '-';
+  return new Intl.NumberFormat('vi-VN').format(Number(value)) + ' VND';
+}
+
+function parsePositiveInt(value: string, fallback = 1) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return n;
+}
 
 interface LostFoundTabProps {
   token: string;
@@ -89,65 +106,58 @@ function nextStatusLabel(status: LostFoundStatus) {
   return status;
 }
 
+function drStatusInfo(status: string, palette: typeof Colors.light) {
+  if (status === 'PENDING') return { label: 'Đang chờ duyệt', text: palette.warning, bg: 'rgba(245, 158, 11, 0.16)' };
+  if (status === 'RESOLVED') return { label: 'Đã xử lý', text: palette.success, bg: palette.secondaryBg };
+  if (status === 'DISMISSED') return { label: 'Bị bác bỏ', text: palette.error, bg: 'rgba(244, 63, 94, 0.14)' };
+  return { label: status || 'Không xác định', text: palette.textMuted, bg: palette.border };
+}
+
+function drSeverityInfo(severity: string, palette: typeof Colors.light) {
+  if (severity === 'LOW') return { label: 'Thấp', text: palette.success, bg: palette.secondaryBg };
+  if (severity === 'MEDIUM') return { label: 'Trung bình', text: palette.warning, bg: 'rgba(245, 158, 11, 0.16)' };
+  if (severity === 'HIGH') return { label: 'Cao', text: '#b45309', bg: 'rgba(251, 191, 36, 0.2)' };
+  if (severity === 'CRITICAL') return { label: 'Nghiêm trọng', text: palette.error, bg: 'rgba(244, 63, 94, 0.14)' };
+  return { label: severity || 'Không xác định', text: palette.textMuted, bg: palette.border };
+}
+
 export default function LostFoundTab({ token, isDark, palette, onErrorChange }: LostFoundTabProps) {
   const [items, setItems] = useState<LostFoundItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  // List sub-tab
+  const [activeListTab, setActiveListTab] = useState<'LOST_FOUND' | 'DAMAGE'>('LOST_FOUND');
+  const [damageReports, setDamageReports] = useState<DamageReportResponse[]>([]);
 
-  // create form state
-  const [itemName, setItemName] = useState('');
-  const [description, setDescription] = useState('');
-  const [selectedPodId, setSelectedPodId] = useState('');
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
-  const [foundAt, setFoundAt] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-
-  // cluster/pod/warehouse lists
-  const [clusterList, setClusterList] = useState<PodCluster[]>([]);
-  const [selectedClusterId, setSelectedClusterId] = useState('');
-  const [podListForCluster, setPodListForCluster] = useState<PodDetails[]>([]);
-  const [warehouseList, setWarehouseList] = useState<WarehouseListItem[]>([]);
-  const [loadingLists, setLoadingLists] = useState(false);
-  const [loadingClusterPods, setLoadingClusterPods] = useState(false);
-  const [showClusterSelector, setShowClusterSelector] = useState(false);
-  const [showPodSelector, setShowPodSelector] = useState(false);
-  const [showWarehouseSelector, setShowWarehouseSelector] = useState(false);
-
-  const selectedClusterName = useMemo(() => {
-    if (!selectedClusterId) return 'Chưa chọn khu vực';
-    const cluster = clusterList.find((c) => String(c.id || '') === selectedClusterId);
-    return cluster?.name || selectedClusterId;
-  }, [selectedClusterId, clusterList]);
-
-  const selectedPodName = useMemo(() => {
-    if (!selectedPodId) return 'Chưa chọn pod';
-    const pod = podListForCluster.find((p) => String(p.id || '') === selectedPodId);
-    return pod?.name || (pod?.code ? `Pod ${pod.code}` : selectedPodId);
-  }, [selectedPodId, podListForCluster]);
-
-  const selectedWarehouseName = useMemo(() => {
-    if (!selectedWarehouseId) return 'Chưa chọn kho';
-    const wh = warehouseList.find((w) => String(w.id || '') === selectedWarehouseId);
-    return wh?.name || selectedWarehouseId;
-  }, [selectedWarehouseId, warehouseList]);
-
-  const loadItems = useCallback(async () => {
-    setLoading(true);
+  const loadItems = useCallback(async (opts?: { isRefresh?: boolean }) => {
+    if (opts?.isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     onErrorChange?.(null);
 
     try {
-      const data = await getMyLostFoundItems(token, {});
-      setItems(data);
+      const [lfData, drData] = await Promise.all([
+        getMyLostFoundItems(token, {}),
+        getDamageReports(token, { page: 1, limit: 50 }).catch(() => ({ items: [], pagination: null })),
+      ]);
+      setItems(lfData);
+      setDamageReports(
+        [...drData.items].sort((a, b) =>
+          new Date(String(b.created_at || 0)).getTime() - new Date(String(a.created_at || 0)).getTime(),
+        ),
+      );
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
       onErrorChange?.(msg);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [token, onErrorChange]);
 
@@ -155,99 +165,12 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
     void loadItems();
   }, [loadItems]);
 
-  const loadSelectionLists = useCallback(async () => {
-    setLoadingLists(true);
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const [assignments, warehouses, clusters] = await Promise.all([
-        getMyShiftAssignments(token, { work_date: today }).catch((): StaffShiftAssignment[] => []),
-        getWarehouseList(token),
-        getPodClusters(token),
-      ]);
-      setWarehouseList(warehouses);
-      setClusterList(clusters);
-
-      // Default-select the cluster whose location_id matches the cleaner's shift location
-      const shiftLocationId = (assignments[0] as StaffShiftAssignment | undefined)?.location?.id;
-      const matchedCluster = shiftLocationId
-        ? clusters.find((c) => String(c.location_id || '') === String(shiftLocationId))
-        : undefined;
-      const defaultCluster = matchedCluster ?? clusters[0];
-
-      if (defaultCluster?.id) {
-        const defaultId = String(defaultCluster.id);
-        setSelectedClusterId(defaultId);
-        const pods = await getPodsByClusterId(token, defaultId);
-        setPodListForCluster(pods);
-      }
-    } catch {
-      // lists are optional; leave empty
-    } finally {
-      setLoadingLists(false);
-    }
-  }, [token]);
-
-  const loadPodsForCluster = useCallback(async (clusterId: string) => {
-    if (!clusterId) {
-      setPodListForCluster([]);
-      return;
-    }
-    setLoadingClusterPods(true);
-    try {
-      const pods = await getPodsByClusterId(token, clusterId);
-      setPodListForCluster(pods);
-    } catch {
-      setPodListForCluster([]);
-    } finally {
-      setLoadingClusterPods(false);
-    }
-  }, [token]);
-
-  const openCreateModal = useCallback(() => {
-    setItemName('');
-    setDescription('');
-    setSelectedClusterId('');
-    setPodListForCluster([]);
-    setSelectedPodId('');
-    setSelectedWarehouseId('');
-    setFoundAt('');
-    setCreateError(null);
-    setShowClusterSelector(false);
-    setShowPodSelector(false);
-    setShowWarehouseSelector(false);
-    setShowCreateModal(true);
-    void loadSelectionLists();
-  }, [loadSelectionLists]);
-
-  const handleCreateItem = async () => {
-    const normalizedName = itemName.trim();
-    if (!normalizedName) {
-      setCreateError('Vui lòng nhập tên món đồ.');
-      return;
-    }
-
-    const payload: CreateLostFoundItemPayload = {
-      item_name: normalizedName,
-      description: description.trim() || undefined,
-      pod_id: selectedPodId || null,
-      warehouse_id: selectedWarehouseId || null,
-      found_at: foundAt.trim() || undefined,
-    };
-
-    setCreating(true);
-    setCreateError(null);
-
-    try {
-      const created = await createLostFoundItem(token, payload);
-      setItems((prev) => [created, ...prev]);
-      setShowCreateModal(false);
-      Alert.alert('Thành công', 'Đã báo cáo đồ tìm thấy.');
-    } catch (err) {
-      setCreateError(getErrorMessage(err));
-    } finally {
-      setCreating(false);
-    }
-  };
+  // Reload list when navigating back from damage-report screen
+  useFocusEffect(
+    useCallback(() => {
+      void loadItems();
+    }, [loadItems]),
+  );
 
   const handleUpdateStatus = async (item: LostFoundItem, nextStatus: LostFoundStatus) => {
     const id = itemId(item);
@@ -266,322 +189,242 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: palette.background }}>
-      <View style={styles.container}>
-        {/* Header row */}
-        <View style={styles.headerRow}>
-          <Text style={[styles.title, { color: palette.text }]}>Đồ thất lạc đã báo</Text>
+    <View style={{ flex: 1, backgroundColor: palette.background }}>
+      {/* ── Page header ── */}
+      <View style={[styles.pageHeaderWrap, { backgroundColor: palette.card, borderBottomColor: palette.border }]}>
+        <Text style={[styles.pageTitle, { color: palette.primary }]}>Báo cáo sự cố</Text>
+
+        {/* Action buttons */}
+        <View style={styles.actionBtnRow}>
           <Pressable
-            style={[styles.addButton, { backgroundColor: palette.primary }]}
-            onPress={openCreateModal}>
-            <Text style={[styles.addButtonText, { color: palette.white }]}>+ Báo tìm thấy đồ</Text>
+            style={[styles.actionBtn, { backgroundColor: palette.primary }]}
+            onPress={() => router.push('/report-lost-found' as never)}>
+            <Text style={[styles.actionBtnText, { color: palette.white }]}>+ Báo tìm thấy đồ</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.actionBtn, { backgroundColor: palette.error }]}
+            onPress={() => router.push('/damage-report')}>
+            <Text style={[styles.actionBtnText, { color: palette.white }]}>⚠ Báo hư hại</Text>
           </Pressable>
         </View>
 
-        {error && (
-          <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error }]}>
-            <Text style={[styles.errorText, { color: palette.error }]}>{error}</Text>
-          </View>
-        )}
-
-        {loading ? (
-          <View style={styles.centerLoader}>
-            <ActivityIndicator color={palette.primary} />
-          </View>
-        ) : items.length === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            <Text style={[styles.emptyText, { color: palette.textMuted }]}>
-              Bạn chưa có báo cáo đồ thất lạc nào.
+        {/* Sub-tab switcher */}
+        <View style={styles.switchRow}>
+          <Pressable
+            style={[styles.switchBtn, {
+              backgroundColor: activeListTab === 'LOST_FOUND' ? palette.primaryBg : palette.surface,
+              borderColor: activeListTab === 'LOST_FOUND' ? palette.primary : palette.border,
+            }]}
+            onPress={() => setActiveListTab('LOST_FOUND')}>
+            <Text style={[styles.switchBtnText, {
+              color: activeListTab === 'LOST_FOUND' ? palette.primary : palette.textMuted,
+            }]}>
+              Đồ thất lạc ({items.length})
             </Text>
-          </View>
-        ) : (
-          items.map((item) => {
-            const status = String(item.status || 'FOUND').toUpperCase();
-            const nextStatuses = (LOST_FOUND_STATUS_TRANSITIONS[status] ?? []) as LostFoundStatus[];
-            const id = itemId(item);
-
-            return (
-              <View
-                key={id || Math.random()}
-                style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                <View style={styles.cardHeader}>
-                  <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={1}>
-                    {String(item.item_name || '-')}
-                  </Text>
-                  <Text style={[styles.statusBadge, { color: statusColor(status, isDark) }]}>
-                    {statusLabel(status)}
-                  </Text>
-                </View>
-
-                {item.description ? (
-                  <Text style={[styles.meta, { color: palette.textMuted }]}>
-                    {String(item.description)}
-                  </Text>
-                ) : null}
-
-                <View style={styles.metaGrid}>
-                  <MetaRow
-                    label="Pod"
-                    value={item.pod_name || item.pod_id || null}
-                    palette={palette}
-                  />
-                  <MetaRow
-                    label="Kho"
-                    value={item.warehouse_name || item.warehouse_id || null}
-                    palette={palette}
-                  />
-                  <MetaRow
-                    label="Thời điểm tìm"
-                    value={formatDateTime(item.found_at)}
-                    palette={palette}
-                  />
-                  {item.claimed_at ? (
-                    <MetaRow
-                      label="Đã nhận lúc"
-                      value={formatDateTime(item.claimed_at)}
-                      palette={palette}
-                    />
-                  ) : null}
-                </View>
-
-                {nextStatuses.length > 0 && (
-                  <View style={styles.actionRow}>
-                    {nextStatuses.map((next) => (
-                      <Pressable
-                        key={`${id}_${next}`}
-                        style={[styles.statusButton, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                        disabled={updatingItemId === id}
-                        onPress={() => void handleUpdateStatus(item, next)}>
-                        {updatingItemId === id ? (
-                          <ActivityIndicator size="small" color={palette.primary} />
-                        ) : (
-                          <Text style={[styles.statusButtonText, { color: palette.primary }]}>
-                            {nextStatusLabel(next)}
-                          </Text>
-                        )}
-                      </Pressable>
-                    ))}
-                  </View>
-                )}
-              </View>
-            );
-          })
-        )}
+          </Pressable>
+          <Pressable
+            style={[styles.switchBtn, {
+              backgroundColor: activeListTab === 'DAMAGE' ? `${palette.error}18` : palette.surface,
+              borderColor: activeListTab === 'DAMAGE' ? palette.error : palette.border,
+            }]}
+            onPress={() => setActiveListTab('DAMAGE')}>
+            <Text style={[styles.switchBtnText, {
+              color: activeListTab === 'DAMAGE' ? palette.error : palette.textMuted,
+            }]}>
+              Báo cáo hư hại ({damageReports.length})
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
-      {/* Create Modal */}
-      <Modal
-        visible={showCreateModal}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowCreateModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: palette.card }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: palette.text }]}>Báo cáo đồ tìm thấy</Text>
-              <Pressable onPress={() => setShowCreateModal(false)}>
-                <Text style={[styles.modalClose, { color: palette.textMuted }]}>✕</Text>
-              </Pressable>
-            </View>
-
-            <ScrollView
-              style={styles.modalBody}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}>
-              <Text style={[styles.fieldLabel, { color: palette.text }]}>Tên món đồ *</Text>
-              <TextInput
-                style={[styles.input, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
-                value={itemName}
-                onChangeText={setItemName}
-                placeholder="VD: Ví da, Điện thoại iPhone..."
-                placeholderTextColor={palette.neutral500}
-              />
-
-              <Text style={[styles.fieldLabel, { color: palette.text }]}>Mô tả</Text>
-              <TextInput
-                style={[styles.input, styles.textArea, { borderColor: palette.border, color: palette.text, backgroundColor: palette.surface }]}
-                value={description}
-                onChangeText={setDescription}
-                placeholder="Mô tả thêm về món đồ (màu sắc, đặc điểm...)"
-                placeholderTextColor={palette.neutral500}
-                multiline
-                numberOfLines={3}
-              />
-
-              <Text style={[styles.fieldLabel, { color: palette.text }]}>Khu vực (Cluster)</Text>
-              <Pressable
-                style={[styles.selectorTrigger, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                onPress={() => {
-                  setShowClusterSelector((v) => !v);
-                  setShowPodSelector(false);
-                  setShowWarehouseSelector(false);
-                }}>
-                <Text style={[styles.selectorTriggerText, { color: selectedClusterId ? palette.text : palette.neutral500 }]}>
-                  {loadingLists ? 'Đang tải...' : selectedClusterName}
-                </Text>
-                <Text style={[styles.chevron, { color: palette.textMuted }]}>{showClusterSelector ? '▲' : '▼'}</Text>
-              </Pressable>
-
-              {showClusterSelector && (
-                <ScrollView
-                  style={[styles.selectorList, { borderColor: palette.border, backgroundColor: palette.background }]}
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled">
-                  {loadingLists ? (
-                    <ActivityIndicator color={palette.primary} style={{ padding: spacingY._10 }} />
-                  ) : (
-                    <>
-                      <Pressable
-                        style={[styles.selectorItem, { borderColor: palette.border, backgroundColor: !selectedClusterId ? `${palette.primary}22` : palette.surface }]}
-                        onPress={() => { setSelectedClusterId(''); setPodListForCluster([]); setSelectedPodId(''); setShowClusterSelector(false); }}>
-                        <Text style={[styles.selectorItemText, { color: palette.text }]}>Không chọn khu vực</Text>
-                      </Pressable>
-                      {clusterList.length === 0 ? (
-                        <Text style={[styles.emptyText, { color: palette.textMuted, padding: spacingX._10 }]}>Không có khu vực nào.</Text>
-                      ) : (
-                        clusterList.map((cluster) => {
-                          const cId = String(cluster.id || '');
-                          if (!cId) return null;
-                          return (
-                            <Pressable
-                              key={cId}
-                              style={[styles.selectorItem, { borderColor: palette.border, backgroundColor: selectedClusterId === cId ? `${palette.primary}22` : palette.surface }]}
-                              onPress={() => {
-                                setSelectedClusterId(cId);
-                                setSelectedPodId('');
-                                setShowClusterSelector(false);
-                                void loadPodsForCluster(cId);
-                              }}>
-                              <Text style={[styles.selectorItemText, { color: palette.text }]}>{cluster.name || cId}</Text>
-                            </Pressable>
-                          );
-                        })
-                      )}
-                    </>
-                  )}
-                </ScrollView>
-              )}
-
-              <Text style={[styles.fieldLabel, { color: palette.text }]}>Pod tìm thấy</Text>
-              <Pressable
-                style={[styles.selectorTrigger, { borderColor: palette.border, backgroundColor: palette.surface, opacity: selectedClusterId ? 1 : 0.5 }]}
-                disabled={!selectedClusterId}
-                onPress={() => {
-                  setShowPodSelector((v) => !v);
-                  setShowClusterSelector(false);
-                  setShowWarehouseSelector(false);
-                }}>
-                <Text style={[styles.selectorTriggerText, { color: selectedPodId ? palette.text : palette.neutral500 }]}>
-                  {selectedClusterId ? selectedPodName : 'Chọn khu vực trước'}
-                </Text>
-                <Text style={[styles.chevron, { color: palette.textMuted }]}>{showPodSelector ? '▲' : '▼'}</Text>
-              </Pressable>
-
-              {showPodSelector && (
-                <ScrollView
-                  style={[styles.selectorList, { borderColor: palette.border, backgroundColor: palette.background }]}
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled">
-                  {loadingClusterPods ? (
-                    <ActivityIndicator color={palette.primary} style={{ padding: spacingY._10 }} />
-                  ) : (
-                    <>
-                      <Pressable
-                        style={[styles.selectorItem, { borderColor: palette.border, backgroundColor: !selectedPodId ? `${palette.primary}22` : palette.surface }]}
-                        onPress={() => { setSelectedPodId(''); setShowPodSelector(false); }}>
-                        <Text style={[styles.selectorItemText, { color: palette.text }]}>Không chọn pod</Text>
-                      </Pressable>
-                      {podListForCluster.length === 0 ? (
-                        <Text style={[styles.emptyText, { color: palette.textMuted, padding: spacingX._10 }]}>Không có pod nào trong khu vực này.</Text>
-                      ) : (
-                        podListForCluster.map((pod) => {
-                          const pId = String(pod.id || '');
-                          if (!pId) return null;
-                          return (
-                            <Pressable
-                              key={pId}
-                              style={[styles.selectorItem, { borderColor: palette.border, backgroundColor: selectedPodId === pId ? `${palette.primary}22` : palette.surface }]}
-                              onPress={() => { setSelectedPodId(pId); setShowPodSelector(false); }}>
-                              <Text style={[styles.selectorItemText, { color: palette.text }]}>
-                                {pod.name || (pod.code ? `Pod ${pod.code}` : pId)}
-                              </Text>
-                            </Pressable>
-                          );
-                        })
-                      )}
-                    </>
-                  )}
-                </ScrollView>
-              )}
-
-              <Text style={[styles.fieldLabel, { color: palette.text }]}>Kho lưu giữ</Text>
-              <Pressable
-                style={[styles.selectorTrigger, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                onPress={() => {
-                  setShowWarehouseSelector((v) => !v);
-                  setShowPodSelector(false);
-                  setShowClusterSelector(false);
-                }}>
-                <Text style={[styles.selectorTriggerText, { color: selectedWarehouseId ? palette.text : palette.neutral500 }]}>
-                  {selectedWarehouseName}
-                </Text>
-                <Text style={[styles.chevron, { color: palette.textMuted }]}>{showWarehouseSelector ? '▲' : '▼'}</Text>
-              </Pressable>
-
-              {showWarehouseSelector && (
-                <ScrollView
-                  style={[styles.selectorList, { borderColor: palette.border, backgroundColor: palette.background }]}
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled">
-                  {loadingLists ? (
-                    <ActivityIndicator color={palette.primary} style={{ padding: spacingY._10 }} />
-                  ) : (
-                    <>
-                      <Pressable
-                        style={[styles.selectorItem, { borderColor: palette.border, backgroundColor: !selectedWarehouseId ? `${palette.primary}22` : palette.surface }]}
-                        onPress={() => { setSelectedWarehouseId(''); setShowWarehouseSelector(false); }}>
-                        <Text style={[styles.selectorItemText, { color: palette.text }]}>Không chọn kho</Text>
-                      </Pressable>
-                      {warehouseList.length === 0 ? (
-                        <Text style={[styles.emptyText, { color: palette.textMuted, padding: spacingX._10 }]}>Không có kho nào.</Text>
-                      ) : (
-                        warehouseList.map((wh) => {
-                          const id = String(wh.id || '');
-                          if (!id) return null;
-                          return (
-                            <Pressable
-                              key={id}
-                              style={[styles.selectorItem, { borderColor: palette.border, backgroundColor: selectedWarehouseId === id ? `${palette.primary}22` : palette.surface }]}
-                              onPress={() => { setSelectedWarehouseId(id); setShowWarehouseSelector(false); }}>
-                              <Text style={[styles.selectorItemText, { color: palette.text }]}>{wh.name || id}</Text>
-                            </Pressable>
-                          );
-                        })
-                      )}
-                    </>
-                  )}
-                </ScrollView>
-              )}
-
-              {createError ? (
-                <Text style={[styles.inlineError, { color: palette.error }]}>{createError}</Text>
-              ) : null}
-
-              <Pressable
-                style={[styles.submitButton, { backgroundColor: palette.primary, opacity: creating ? 0.7 : 1 }]}
-                disabled={creating}
-                onPress={() => void handleCreateItem()}>
-                {creating ? (
-                  <ActivityIndicator color={palette.white} />
-                ) : (
-                  <Text style={[styles.submitButtonText, { color: palette.white }]}>Gửi báo cáo</Text>
-                )}
-              </Pressable>
-            </ScrollView>
-          </View>
+      {error && (
+        <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error, marginHorizontal: spacingX._20, marginTop: spacingY._12 }]}>
+          <Text style={[styles.errorText, { color: palette.error }]}>{error}</Text>
         </View>
-      </Modal>
-    </ScrollView>
+      )}
+
+      {/* ── Lists ── */}
+      {loading ? (
+        <View style={styles.centerLoader}>
+          <ActivityIndicator color={palette.primary} />
+        </View>
+      ) : activeListTab === 'LOST_FOUND' ? (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              tintColor={palette.primary}
+              onRefresh={() => void loadItems({ isRefresh: true })}
+            />
+          }>
+          {items.length === 0 ? (
+            <View style={[styles.emptyCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <Text style={[styles.emptyText, { color: palette.textMuted }]}>
+                Bạn chưa có báo cáo đồ thất lạc nào.
+              </Text>
+            </View>
+          ) : (
+            items.map((item) => {
+              const status = String(item.status || 'FOUND').toUpperCase();
+              const nextStatuses = (LOST_FOUND_STATUS_TRANSITIONS[status] ?? []) as LostFoundStatus[];
+              const id = itemId(item);
+
+              return (
+                <View
+                  key={id || Math.random()}
+                  style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                  <View style={styles.cardHeader}>
+                    <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={1}>
+                      {String(item.item_name || '-')}
+                    </Text>
+                    <View style={[styles.lfStatusBadge, { backgroundColor: `${statusColor(status, isDark)}22` }]}>
+                      <Text style={[styles.lfStatusBadgeText, { color: statusColor(status, isDark) }]}>
+                        {statusLabel(status)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {item.description ? (
+                    <Text style={[styles.meta, { color: palette.textMuted }]}>
+                      {String(item.description)}
+                    </Text>
+                  ) : null}
+
+                  <View style={styles.metaGrid}>
+                    <MetaRow label="Pod" value={item.pod_name || item.pod_id || null} palette={palette} />
+                    <MetaRow label="Kho" value={item.warehouse_name || item.warehouse_id || null} palette={palette} />
+                    <MetaRow label="Thời điểm tìm" value={formatDateTime(item.found_at)} palette={palette} />
+                    {item.claimed_at ? (
+                      <MetaRow label="Đã nhận lúc" value={formatDateTime(item.claimed_at)} palette={palette} />
+                    ) : null}
+                  </View>
+
+                  {nextStatuses.length > 0 && (
+                    <View style={styles.actionRow}>
+                      {nextStatuses.map((next) => (
+                        <Pressable
+                          key={`${id}_${next}`}
+                          style={[styles.statusButton, { borderColor: palette.border, backgroundColor: palette.surface }]}
+                          disabled={updatingItemId === id}
+                          onPress={() => void handleUpdateStatus(item, next)}>
+                          {updatingItemId === id ? (
+                            <ActivityIndicator size="small" color={palette.primary} />
+                          ) : (
+                            <Text style={[styles.statusButtonText, { color: palette.primary }]}>
+                              {nextStatusLabel(next)}
+                            </Text>
+                          )}
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+      ) : (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              tintColor={palette.primary}
+              onRefresh={() => void loadItems({ isRefresh: true })}
+            />
+          }>
+          {damageReports.length === 0 ? (
+            <View style={[styles.emptyCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <Text style={[styles.emptyText, { color: palette.textMuted }]}>
+                Bạn chưa có báo cáo hư hại nào.
+              </Text>
+            </View>
+          ) : (
+            damageReports.map((report) => {
+              const incidentId = String(report.report_id || '').trim();
+              const podName = report.context?.pod_name || report.context?.pod_id || 'Không rõ Pod';
+              const photos = Array.isArray(report.photo_urls) ? report.photo_urls.filter(Boolean) : [];
+              const totalValue = (() => {
+                const v = report.pricing?.estimated_total_value;
+                return typeof v === 'number' && Number.isFinite(v) ? formatVnd(v) : null;
+              })();
+
+              const statusNorm = String(report.status || '').toUpperCase();
+              const severityNorm = String(report.severity || '').toUpperCase();
+
+              const statusInfo = drStatusInfo(statusNorm, palette);
+              const severityInfo = drSeverityInfo(severityNorm, palette);
+
+              return (
+                <View
+                  key={incidentId || `${report.created_at}-${report.description}`}
+                  style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                  <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
+                    {String(report.description || 'Báo cáo hư hại')}
+                  </Text>
+
+                  <View style={styles.badgeRow}>
+                    <View style={[styles.badgeChip, { backgroundColor: statusInfo.bg }]}>
+                      <Text style={[styles.badgeChipText, { color: statusInfo.text }]}>{statusInfo.label}</Text>
+                    </View>
+                    <View style={[styles.badgeChip, { backgroundColor: severityInfo.bg }]}>
+                      <Text style={[styles.badgeChipText, { color: severityInfo.text }]}>{severityInfo.label}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.metaGrid}>
+                    <MetaRow label="Pod" value={podName} palette={palette} />
+                    {totalValue ? <MetaRow label="Ước tính" value={totalValue} palette={palette} /> : null}
+                    <MetaRow label="Ngày tạo" value={formatDateTime(report.created_at)} palette={palette} />
+                  </View>
+
+                  {photos.length > 0 ? (
+                    <View>
+                      <Text style={[styles.meta, { color: palette.textMuted, marginBottom: spacingY._5 }]}>
+                        Ảnh đính kèm ({photos.length})
+                      </Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <View style={styles.photoRow}>
+                          {photos.map((uri, idx) => (
+                            <Image
+                              key={`${incidentId}_photo_${idx}`}
+                              source={{ uri }}
+                              style={styles.photoThumb}
+                              resizeMode="cover"
+                            />
+                          ))}
+                        </View>
+                      </ScrollView>
+                    </View>
+                  ) : null}
+
+                  {incidentId ? (
+                    <Pressable
+                      style={styles.copyIdRow}
+                      onPress={() => {
+                        Clipboard.setStringAsync(incidentId)
+                          .then(() => Alert.alert('Đã sao chép', `Mã báo cáo: ${incidentId}`))
+                          .catch(() => null);
+                      }}
+                      hitSlop={8}>
+                      <Text style={[styles.meta, { color: palette.textMuted }]}>Mã: </Text>
+                      <Text style={[styles.meta, { color: palette.textMuted, flex: 1 }]} numberOfLines={1} ellipsizeMode="head">
+                        {incidentId}
+                      </Text>
+                      <MaterialIcons name="content-copy" size={14} color={palette.textMuted} />
+                    </Pressable>
+                  ) : null}
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+      )}
+
+    </View>
   );
 }
 
@@ -604,36 +447,65 @@ function MetaRow({
 }
 
 const styles = StyleSheet.create({
-  container: {
+  // ── Page header ──
+  pageHeaderWrap: {
     paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._15,
-    gap: spacingY._12,
+    paddingTop: spacingY._15,
+    paddingBottom: spacingY._12,
+    borderBottomWidth: 1,
+    gap: spacingY._10,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacingX._10,
-  },
-  title: {
-    fontSize: 18,
+  pageTitle: {
+    fontSize: 22,
     fontWeight: '700',
     fontFamily: Fonts.sans,
-    flex: 1,
+    textAlign: 'center',
   },
-  addButton: {
+  actionBtnRow: {
+    flexDirection: 'row',
+    gap: spacingX._10,
+  },
+  actionBtn: {
+    flex: 1,
     borderRadius: radius._10,
     paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._7,
+    paddingVertical: spacingY._10,
+    alignItems: 'center',
   },
-  addButtonText: {
+  actionBtnText: {
     fontSize: 13,
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
-  centerLoader: {
-    paddingVertical: spacingY._30,
+  switchRow: {
+    flexDirection: 'row',
+    gap: spacingX._10,
+  },
+  switchBtn: {
+    flex: 1,
+    borderRadius: radius._10,
+    borderWidth: 1,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._7,
     alignItems: 'center',
+  },
+  switchBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  // ── List ──
+  listContent: {
+    paddingHorizontal: spacingX._20,
+    paddingTop: spacingY._12,
+    paddingBottom: spacingY._20,
+    gap: spacingY._12,
+  },
+  centerLoader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacingY._30,
   },
   emptyCard: {
     borderWidth: 1,
@@ -674,11 +546,39 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     flex: 1,
   },
-  statusBadge: {
-    fontSize: 12,
+  // Lost-found status badge (chip style)
+  lfStatusBadge: {
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._7,
+    paddingVertical: 3,
+  },
+  lfStatusBadgeText: {
+    fontSize: 11,
     fontWeight: '700',
     fontFamily: Fonts.mono,
   },
+  // Damage report badge chips
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacingX._7,
+  },
+  badgeChip: {
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._7,
+    paddingVertical: 3,
+  },
+  badgeChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  copyIdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._5,
+  },
+  // Shared card sub-styles
   meta: {
     fontSize: 12,
     fontFamily: Fonts.sans,
@@ -720,109 +620,118 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
+  drChipRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+    paddingBottom: spacingY._5,
   },
-  modalSheet: {
-    borderTopLeftRadius: radius._20,
-    borderTopRightRadius: radius._20,
-    maxHeight: '90%',
-    paddingBottom: spacingY._20,
+  drChip: {
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    minWidth: 80,
+    alignItems: 'center',
   },
-  modalHeader: {
+  drChipName: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  drChipSub: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+  },
+  drSelectedCount: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    marginTop: spacingY._5,
+  },
+  drSelectedCard: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    padding: spacingX._10,
+    gap: spacingY._7,
+    marginTop: spacingY._7,
+  },
+  drSelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._15,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.08)',
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._7,
+    gap: spacingX._7,
   },
-  modalTitle: {
+  drSelInfo: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  drQtyStepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radius._6,
+    flexShrink: 0,
+  },
+  drQtyBtn: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  drQtyBtnText: {
     fontSize: 16,
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
-  modalClose: {
-    fontSize: 18,
-    fontWeight: '600',
-    padding: spacingX._5,
-  },
-  modalBody: {
-    paddingHorizontal: spacingX._20,
-    paddingTop: spacingY._12,
-  },
-  fieldLabel: {
+  drQtyVal: {
+    minWidth: 28,
+    textAlign: 'center',
     fontSize: 13,
-    fontWeight: '600',
     fontFamily: Fonts.sans,
-    marginBottom: spacingY._5,
+    fontWeight: '700',
+  },
+  drPricingBox: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    padding: spacingX._12,
+    gap: spacingY._5,
     marginTop: spacingY._10,
   },
-  input: {
-    borderWidth: 1,
-    borderRadius: radius._10,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._10,
-    fontSize: 14,
-    fontFamily: Fonts.sans,
-  },
-  textArea: {
-    minHeight: 72,
-    textAlignVertical: 'top',
-  },
-  selectorTrigger: {
-    borderWidth: 1,
-    borderRadius: radius._10,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectorTriggerText: {
-    fontSize: 14,
-    fontFamily: Fonts.sans,
-    flex: 1,
-  },
-  chevron: {
-    fontSize: 12,
-    marginLeft: spacingX._7,
-  },
-  selectorList: {
-    borderWidth: 1,
-    borderRadius: radius._10,
-    marginTop: spacingY._5,
-    maxHeight: 220,
-  },
-  selectorItem: {
-    borderBottomWidth: 1,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._10,
-  },
-  selectorItemText: {
-    fontSize: 14,
-    fontFamily: Fonts.sans,
-  },
-  inlineError: {
+  drPricingText: {
     fontSize: 12,
     fontFamily: Fonts.sans,
-    fontWeight: '600',
-    marginTop: spacingY._7,
   },
-  submitButton: {
-    borderRadius: radius._10,
-    paddingVertical: spacingY._12,
-    alignItems: 'center',
-    marginTop: spacingY._15,
-    marginBottom: spacingY._10,
-  },
-  submitButtonText: {
-    fontSize: 15,
+  drPricingTotal: {
+    fontSize: 13,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+  },
+  drSeverityRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+    flexWrap: 'wrap',
+    marginBottom: spacingY._7,
+  },
+  drSeverityChip: {
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._7,
+  },
+  drSeverityText: {
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  photoRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+  },
+  photoThumb: {
+    width: 80,
+    height: 80,
+    borderRadius: radius._10,
+    backgroundColor: '#dbe3ef',
   },
 });

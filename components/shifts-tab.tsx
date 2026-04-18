@@ -1,36 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  checkinShift,
-  checkoutShift,
-  getMyAssignmentAttendanceStatus,
-  getMyAttendanceLogs,
-  getMyAttendanceLogsPaginated,
-  getMyCleaningTasks,
-  getMyShiftAssignments,
-  getMyTodayAttendanceStatus,
+    checkinShift,
+    checkoutShift,
+    getMyAssignmentAttendanceStatus,
+    getMyAttendanceLogs,
+    getMyAttendanceLogsPaginated,
+    getMyCleaningTasks,
+    getMyShiftAssignments,
+    getMyTodayAttendanceStatus,
 } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import type {
-  CleanerRealtimeNotification,
-  CleaningTask,
-  StaffAttendanceLog,
-  StaffAttendanceLogListResponse,
-  StaffShiftAssignment,
-  StaffTodayAttendanceStatus,
+    CleanerRealtimeNotification,
+    CleaningTask,
+    StaffAttendanceLog,
+    StaffAttendanceLogListResponse,
+    StaffShiftAssignment,
+    StaffTodayAttendanceStatus,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -98,7 +98,11 @@ function toTimestamp(value?: string | null) {
 }
 
 function todayDateInput() {
-  return new Date().toISOString().split('T')[0];
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function shiftLabel(assignment: StaffShiftAssignment) {
@@ -909,7 +913,7 @@ export default function ShiftsTab({
 
         {todayAttendanceStatus && (
           <View style={[styles.summaryCard, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-            <Text style={[styles.summaryTitle, { color: palette.text }]}>Tổng quan chấm công ngày {formatDate(todayAttendanceStatus.date)}</Text>
+            <Text style={[styles.summaryTitle, { color: palette.text }]}>Tổng quan chấm công ngày {formatDate(shiftDate)}</Text>
             <Text style={[styles.summaryText, { color: palette.textMuted }]}>Đã vào ca: {todayAttendanceStatus.checked_in_today ? 'Có' : 'Chưa'}</Text>
             <Text style={[styles.summaryText, { color: palette.textMuted }]}>Đã tan ca: {todayAttendanceStatus.checked_out_today ? 'Có' : 'Chưa'}</Text>
             <Text style={[styles.summaryText, { color: palette.textMuted }]}>Số lần check-in/check-out: {todayAttendanceStatus.checkin_count}/{todayAttendanceStatus.checkout_count}</Text>

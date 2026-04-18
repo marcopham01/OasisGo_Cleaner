@@ -48,7 +48,7 @@ export interface Warehouse {
 
 export type InventoryActionType = 'CHECKOUT' | 'RETURN' | 'WASTE' | 'INITIAL' | 'ADJUSTMENT';
 
-export interface InventoryCheckoutLogEntry {
+export interface InventoryActivityLogEntry {
   inventory_stock_id: string;
   quantity: number;
   action_type?: InventoryActionType;
@@ -58,12 +58,12 @@ export interface InventoryCheckoutLogEntry {
   reason?: string | null;
 }
 
-export interface InventoryCheckoutLogBulkPayload {
+export interface InventoryActivityLogBulkPayload {
   staff_id?: string;
-  logs: InventoryCheckoutLogEntry[];
+  logs: InventoryActivityLogEntry[];
 }
 
-export interface InventoryCheckoutLog {
+export interface InventoryActivityLog {
   id?: string;
   inventory_stock_id: string;
   staff_id: string;
@@ -76,12 +76,12 @@ export interface InventoryCheckoutLog {
   created_at?: string;
 }
 
-export interface InventoryCheckoutLogBulkResponse {
+export interface InventoryActivityLogBulkResponse {
   count: number;
-  logs: InventoryCheckoutLog[];
+  logs: InventoryActivityLog[];
 }
 
-export interface InventoryCheckoutLogQuery {
+export interface InventoryActivityLogQuery {
   staff_id?: string;
   inventory_stock_id?: string;
   action_type?: InventoryActionType | string;
@@ -89,31 +89,34 @@ export interface InventoryCheckoutLogQuery {
   to?: string;
 }
 
-// --- Daily checkout log (GET /api/inventory-checkout-logs/daily/:cleaner_id) ---
+// --- Daily activity log (GET /api/inventory-activity-logs/daily/:cleaner_id) ---
 
-export interface DailyCheckoutLogSummaryItem {
+export interface DailyActivityLogSummaryItem {
   item_id: string;
   item_name: string | null;
-  total_quantity: number;
+  checkout_quantity: number;
+  return_quantity: number;
+  waste_quantity: number;
   log_count: number;
 }
 
-export interface DailyCheckoutLogEntry extends InventoryCheckoutLog {
+export interface DailyActivityLogEntry extends InventoryActivityLog {
   item_id: string | null;
   item_name: string | null;
   warehouse_id: string | null;
   warehouse_name: string | null;
 }
 
-export interface CleanerDailyCheckoutResponse {
+export interface CleanerDailyActivityLogResponse {
   cleaner_id: string;
   date: string;
   day_start: string;
   day_end: string;
-  total_checkout_count: number;
+  /** Total number of logs (all action types) */
+  total_log_count: number;
   total_quantity: number;
-  summary_by_item: DailyCheckoutLogSummaryItem[];
-  logs: DailyCheckoutLogEntry[];
+  summary_by_item: DailyActivityLogSummaryItem[];
+  logs: DailyActivityLogEntry[];
 }
 
 /** UI-level item with user-editable checkout quantity */
@@ -126,5 +129,47 @@ export interface CheckoutDraftItem {
   /** The selected/best stock entry from suggested_stocks */
   selectedStock: InventorySuggestedStock | null;
   /** Quantity the cleaner intends to check out (editable) */
+  checkoutQuantity: number;
+}
+
+/** UI-level item with user-editable return quantity */
+export interface ReturnDraftItem {
+  inventory_stock_id: string;
+  cleaning_task_id: string | null;
+  item_name: string | null;
+  warehouse_name: string | null;
+  /** Total quantity checked out today for this stock+task combination */
+  checked_out: number;
+  /** Total quantity already returned today for this stock+task combination */
+  already_returned: number;
+  /** Quantity the cleaner intends to return */
+  returnQuantity: number;
+}
+
+// --- Free checkout (all items in warehouse) ---
+
+export interface InventoryStockItem {
+  _id?: string;
+  inventory_stock_id?: string;
+  item_id: string;
+  item_name?: string | null;
+  warehouse_id?: string | null;
+  warehouse_name?: string | null;
+  quantity_available: number;
+  item_type?: string | null;
+}
+
+export interface InventoryStockQuery {
+  warehouse_id?: string;
+}
+
+/** UI-level item for free (non-task) checkout */
+export interface FreeCheckoutDraftItem {
+  inventory_stock_id: string;
+  item_id: string;
+  item_name: string | null;
+  warehouse_id: string | null;
+  warehouse_name: string | null;
+  available_quantity: number;
   checkoutQuantity: number;
 }
