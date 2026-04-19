@@ -126,6 +126,27 @@ export function normalizeBackendMessage(rawMessage: string): string {
   }
 
   if (
+    lower.includes('after') && lower.includes('photo') &&
+    (lower.includes('required') || lower.includes('missing') || lower.includes('must'))
+  ) {
+    return 'Vui lòng chụp và lưu ít nhất một ảnh sau khi dọn trước khi hoàn thành nhiệm vụ.';
+  }
+
+  if (
+    lower.includes('before') && lower.includes('photo') &&
+    (lower.includes('required') || lower.includes('missing') || lower.includes('must'))
+  ) {
+    return 'Vui lòng chụp và lưu ít nhất một ảnh trước khi dọn.';
+  }
+
+  if (
+    lower.includes('photo') &&
+    (lower.includes('required') || lower.includes('missing') || lower.includes('must upload'))
+  ) {
+    return 'Vui lòng chụp và lưu ảnh trước khi thực hiện thao tác này.';
+  }
+
+  if (
     lower.includes('network') ||
     lower.includes('failed to fetch') ||
     lower.includes('econnaborted') ||

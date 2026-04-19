@@ -24,7 +24,7 @@ export default function SuppliesScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <View style={styles.container}>
-        <Text style={[styles.screenTitle, { color: palette.primary }]}>Lấy vật tư</Text>
+        <Text style={[styles.screenTitle, { color: palette.primary }]}>Vật tư trong kho</Text>
         <SuppliesTab token={token} userId={user?.id} isDark={theme === 'dark'} palette={palette} />
       </View>
     </SafeAreaView>

@@ -1,36 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Modal,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
 import {
-    bulkCreateInventoryActivityLogs,
-    getAllInventoryStocks,
-    getCleanerDailyActivityLogs,
-    getInventoryEstimate,
+  bulkCreateInventoryActivityLogs,
+  getAllInventoryStocks,
+  getCleanerDailyActivityLogs,
+  getInventoryEstimate,
 } from '@/services/inventory.service';
 import type {
-    CheckoutDraftItem,
-    CleanerDailyActivityLogResponse,
-    DailyActivityLogEntry,
-    DailyActivityLogSummaryItem,
-    FreeCheckoutDraftItem,
-    InventoryEstimateResponse,
-    InventoryStockItem,
-    InventorySuggestedStock,
-    ReturnDraftItem,
+  CheckoutDraftItem,
+  CleanerDailyActivityLogResponse,
+  DailyActivityLogEntry,
+  DailyActivityLogSummaryItem,
+  FreeCheckoutDraftItem,
+  InventoryEstimateResponse,
+  InventoryStockItem,
+  InventorySuggestedStock,
+  ReturnDraftItem,
 } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -1567,6 +1567,26 @@ export default function SuppliesTab({ token, userId, palette }: SuppliesTabProps
                   <Text style={[styles.daySumLabel, { color: palette.textMuted }]}>Đã lấy hôm nay</Text>
                 </View>
               </View>
+
+              {summaryItems.length > 0 && (
+                <View style={[styles.checkoutBreakdownCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                  <Text style={[styles.checkoutBreakdownTitle, { color: palette.primary }]}>Đồ đã lấy hôm nay</Text>
+                  {summaryItems.map((s) => {
+                    const net = s.checkout_quantity - s.return_quantity;
+                    const netColor = net < 0 ? palette.error : net === 0 ? palette.textMuted : palette.primary;
+                    return (
+                      <View key={s.item_id} style={styles.checkoutBreakdownRow}>
+                        <Text style={[styles.checkoutBreakdownName, { color: palette.text }]} numberOfLines={1}>
+                          {s.item_name || s.item_id}
+                        </Text>
+                        <View style={[styles.checkoutBreakdownBadge, { backgroundColor: netColor + '18' }]}>
+                          <Text style={[styles.checkoutBreakdownQty, { color: netColor }]}>×{net}</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
 
             </>
           );

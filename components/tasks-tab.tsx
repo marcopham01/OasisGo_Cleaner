@@ -458,10 +458,12 @@ export default function TasksTab({
     });
   }, []);
 
-  const loadTasks = useCallback(async () => {
-    setLoading(true);
+  const loadTasks = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      onLoadingChange?.(true);
+    }
     setError(null);
-    onLoadingChange?.(true);
 
     try {
       const data = await getMyCleaningTasks(token, {
@@ -481,8 +483,10 @@ export default function TasksTab({
         onErrorChange?.(msg);
       }
     } finally {
-      setLoading(false);
-      onLoadingChange?.(false);
+      if (!silent) {
+        setLoading(false);
+        onLoadingChange?.(false);
+      }
     }
   }, [
     token,
@@ -501,17 +505,6 @@ export default function TasksTab({
       return;
     }
 
-    const queueReload = () => {
-      if (realtimeReloadTimer.current) {
-        clearTimeout(realtimeReloadTimer.current);
-      }
-
-      realtimeReloadTimer.current = setTimeout(() => {
-        realtimeReloadTimer.current = null;
-        void loadTasks();
-      }, 350);
-    };
-
     const disconnect = connectCleanerNotificationSocket({
       token,
       cleanerId: userId,
@@ -520,7 +513,13 @@ export default function TasksTab({
           return;
         }
 
-        queueReload();
+        if (realtimeReloadTimer.current) {
+          clearTimeout(realtimeReloadTimer.current);
+        }
+        realtimeReloadTimer.current = setTimeout(() => {
+          realtimeReloadTimer.current = null;
+          void loadTasks(true);
+        }, 350);
       },
     });
 

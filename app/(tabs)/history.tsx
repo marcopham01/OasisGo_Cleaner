@@ -3,14 +3,14 @@ import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    Pressable,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -18,17 +18,17 @@ import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
-  getDamageReports,
-  getMyNotifications,
-  getMyUnreadNotificationCount,
-  markAllNotificationsAsRead,
-  markNotificationAsRead,
+    getDamageReports,
+    getMyNotifications,
+    getMyUnreadNotificationCount,
+    markAllNotificationsAsRead,
+    markNotificationAsRead,
 } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import {
-  decrementNotificationBadge,
-  setNotificationBadgeCount,
-  subscribeNotificationBadge,
+    decrementNotificationBadge,
+    setNotificationBadgeCount,
+    subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
 import type { CleanerNotification, DamageReportResponse } from '@/types/cleaner-dashboard';
 
@@ -54,6 +54,12 @@ function getTypeBadge(type: unknown, palette: typeof Colors.light) {
   }
   if (normalized === 'BOOKING') {
     return { label: 'Đặt chỗ', textColor: palette.warning, bgColor: 'rgba(245, 158, 11, 0.16)' };
+  }
+  if (normalized === 'INVENTORY') {
+    return { label: 'Vật tư', textColor: '#7c3aed', bgColor: 'rgba(124, 58, 237, 0.12)' };
+  }
+  if (normalized === 'SHIFT') {
+    return { label: 'Ca làm', textColor: palette.primaryDark, bgColor: palette.primaryBg };
   }
   if (normalized === 'SYSTEM') {
     return { label: 'Hệ thống', textColor: palette.textMuted, bgColor: palette.border };
@@ -274,6 +280,20 @@ function isCleaningNotification(item: CleanerNotification) {
   );
 }
 
+function isShiftNotification(item: CleanerNotification) {
+  const type = normalizeToken(typeof item.type === 'string' ? item.type : null);
+  const event = normalizeToken(typeof item.event_code === 'string' ? item.event_code : null);
+
+  return type === 'SHIFT' || event.startsWith('SHIFT_');
+}
+
+function isInventoryNotification(item: CleanerNotification) {
+  const type = normalizeToken(typeof item.type === 'string' ? item.type : null);
+  const event = normalizeToken(typeof item.event_code === 'string' ? item.event_code : null);
+
+  return type === 'INVENTORY' || event.startsWith('INVENTORY_');
+}
+
 export default function HistoryScreen() {
   const router = useRouter();
   const theme = useColorScheme() ?? 'light';
@@ -301,11 +321,14 @@ export default function HistoryScreen() {
   }, []);
 
   const loadHistoryData = useCallback(
-    async (options?: { isRefresh?: boolean }) => {
+    async (options?: { isRefresh?: boolean; silent?: boolean }) => {
       if (!token) return;
 
       const isRefresh = Boolean(options?.isRefresh);
-      if (isRefresh) {
+      const isSilent = Boolean(options?.silent);
+      if (isSilent) {
+        // no loading indicator
+      } else if (isRefresh) {
         setIsRefreshing(true);
       } else {
         setIsLoading(true);
@@ -324,7 +347,7 @@ export default function HistoryScreen() {
       } finally {
         if (isRefresh) {
           setIsRefreshing(false);
-        } else {
+        } else if (!isSilent) {
           setIsLoading(false);
         }
       }
@@ -354,7 +377,7 @@ export default function HistoryScreen() {
       token,
       cleanerId: user.id,
       onNotification: () => {
-        loadHistoryData({ isRefresh: true }).catch(() => null);
+        loadHistoryData({ silent: true }).catch(() => null);
       },
     });
 
@@ -430,6 +453,16 @@ export default function HistoryScreen() {
   const handleNotificationPress = useCallback(
     async (item: CleanerNotification) => {
       await handleMarkAsRead(item);
+
+      if (isShiftNotification(item)) {
+        router.push('/(tabs)/shifts');
+        return;
+      }
+
+      if (isInventoryNotification(item)) {
+        router.push('/(tabs)/supplies');
+        return;
+      }
 
       if (!isCleaningNotification(item)) {
         return;

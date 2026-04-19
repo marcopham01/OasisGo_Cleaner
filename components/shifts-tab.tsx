@@ -616,10 +616,12 @@ export default function ShiftsTab({
     }, {});
   }, [assignments, attendanceLogs, assignmentAttendanceMap]);
 
-  const loadShifts = useCallback(async () => {
-    setLoading(true);
+  const loadShifts = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      onLoadingChange?.(true);
+    }
     setError(null);
-    onLoadingChange?.(true);
 
     try {
       let dailyStatus: StaffTodayAttendanceStatus | null = null;
@@ -728,8 +730,10 @@ export default function ShiftsTab({
         onErrorChange?.(msg);
       }
     } finally {
-      setLoading(false);
-      onLoadingChange?.(false);
+      if (!silent) {
+        setLoading(false);
+        onLoadingChange?.(false);
+      }
     }
   }, [token, shiftDate, onLoadingChange, onErrorChange, assignmentOverlapsDate]);
 
@@ -774,7 +778,7 @@ export default function ShiftsTab({
       } else {
         await checkoutShift(token, targetId, shiftDate);
       }
-      await loadShifts();
+      await loadShifts(true);
     } catch (err) {
       const rawMsg = getErrorMessage(err);
       const msg = localizeShiftErrorMessage(rawMsg);
@@ -801,17 +805,6 @@ export default function ShiftsTab({
       return;
     }
 
-    const queueReload = () => {
-      if (realtimeReloadTimer.current) {
-        clearTimeout(realtimeReloadTimer.current);
-      }
-
-      realtimeReloadTimer.current = setTimeout(() => {
-        realtimeReloadTimer.current = null;
-        void loadShifts();
-      }, 350);
-    };
-
     const disconnect = connectCleanerNotificationSocket({
       token,
       cleanerId: userId,
@@ -820,7 +813,13 @@ export default function ShiftsTab({
           return;
         }
 
-        queueReload();
+        if (realtimeReloadTimer.current) {
+          clearTimeout(realtimeReloadTimer.current);
+        }
+        realtimeReloadTimer.current = setTimeout(() => {
+          realtimeReloadTimer.current = null;
+          void loadShifts(true);
+        }, 350);
       },
     });
 

@@ -3,46 +3,46 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningPhoto,
-    createDamageReport,
-    createOperationalIncident,
-    getBookingById,
-    getCleaningPhotos,
-    getCleaningTaskById,
-    getDamageReportItems,
-    getDamageServiceCatalogs,
-    getIncidentsByCleaningTaskId,
-    getMyCleanerKeyByBookingId,
-    getMyCleanerKeyByTaskId,
-    getPodById,
-    updateCleaningTask
+  createCleaningPhoto,
+  createDamageReport,
+  createOperationalIncident,
+  getBookingById,
+  getCleaningPhotos,
+  getCleaningTaskById,
+  getDamageReportItems,
+  getDamageServiceCatalogs,
+  getIncidentsByCleaningTaskId,
+  getMyCleanerKeyByBookingId,
+  getMyCleanerKeyByTaskId,
+  getPodById,
+  updateCleaningTask
 } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import type {
-    CleanerOnlineKey,
-    CleanerRealtimeNotification,
-    CleanerTaskAction,
-    CleaningPhoto,
-    CleaningPhotoType,
-    CleaningTask,
-    DamageReportItem,
-    DamageServiceCatalogItem,
-    Incident,
-    IncidentSeverity,
+  CleanerOnlineKey,
+  CleanerRealtimeNotification,
+  CleanerTaskAction,
+  CleaningPhoto,
+  CleaningPhotoType,
+  CleaningTask,
+  DamageReportItem,
+  DamageServiceCatalogItem,
+  Incident,
+  IncidentSeverity,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -705,10 +705,12 @@ export default function TaskDetailTab({
     }
   }, [canReportIncident, isIncidentMode, isAnytimeIncidentFlow]);
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback(async (silent = false) => {
     if (!taskId || !token) return;
 
-    setLoading(true);
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
     onErrorChange?.(null);
 
@@ -819,7 +821,9 @@ export default function TaskDetailTab({
         onErrorChange?.(msg);
       }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [taskId, token, onErrorChange, damageItems.length, damageServiceCatalogs.length]);
 
@@ -833,17 +837,6 @@ export default function TaskDetailTab({
       return;
     }
 
-    const queueReload = () => {
-      if (realtimeReloadTimer.current) {
-        clearTimeout(realtimeReloadTimer.current);
-      }
-
-      realtimeReloadTimer.current = setTimeout(() => {
-        realtimeReloadTimer.current = null;
-        void loadDetail();
-      }, 350);
-    };
-
     const disconnect = connectCleanerNotificationSocket({
       token,
       cleanerId: userId,
@@ -852,7 +845,13 @@ export default function TaskDetailTab({
           return;
         }
 
-        queueReload();
+        if (realtimeReloadTimer.current) {
+          clearTimeout(realtimeReloadTimer.current);
+        }
+        realtimeReloadTimer.current = setTimeout(() => {
+          realtimeReloadTimer.current = null;
+          void loadDetail(true);
+        }, 350);
       },
     });
 
@@ -887,6 +886,22 @@ export default function TaskDetailTab({
         Alert.alert('Chưa thể hoàn thành', 'Vui lòng hoàn thành toàn bộ checklist trước khi bấm Hoàn thành.');
         setActionLoading(false);
         return;
+      }
+
+      if (action === 'complete') {
+        const savedBeforePhotos = photos.filter((p) => String(p.type || '').toUpperCase() === 'BEFORE');
+        if (savedBeforePhotos.length === 0) {
+          Alert.alert('Chưa thể hoàn thành', 'Vui lòng chụp và lưu ít nhất một ảnh trước khi dọn trước khi hoàn thành nhiệm vụ.');
+          setActionLoading(false);
+          return;
+        }
+
+        const savedAfterPhotos = photos.filter((p) => String(p.type || '').toUpperCase() === 'AFTER');
+        if (savedAfterPhotos.length === 0) {
+          Alert.alert('Chưa thể hoàn thành', 'Vui lòng chụp và lưu ít nhất một ảnh sau khi dọn trước khi hoàn thành nhiệm vụ.');
+          setActionLoading(false);
+          return;
+        }
       }
 
       const payload = taskActionPayload(action, '');
