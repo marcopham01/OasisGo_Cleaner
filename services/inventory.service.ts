@@ -2,16 +2,18 @@ import { AxiosError } from 'axios';
 
 import { apiClient } from '@/services/api';
 import type {
-  CleanerDailyActivityLogResponse,
-  InventoryActivityLog,
-  InventoryActivityLogBulkPayload,
-  InventoryActivityLogBulkResponse,
-  InventoryActivityLogQuery,
-  InventoryEstimateQuery,
-  InventoryEstimateResponse,
-  InventoryStockItem,
-  InventoryStockQuery,
-  Warehouse,
+    CleanerDailyActivityLogResponse,
+    DailyTakenItemsSummaryQuery,
+    DailyTakenItemsSummaryResponse,
+    InventoryActivityLog,
+    InventoryActivityLogBulkPayload,
+    InventoryActivityLogBulkResponse,
+    InventoryActivityLogQuery,
+    InventoryEstimateQuery,
+    InventoryEstimateResponse,
+    InventoryStockItem,
+    InventoryStockQuery,
+    Warehouse,
 } from '@/types/inventory';
 import { normalizeBackendMessage } from '@/utils/validation';
 
@@ -47,6 +49,7 @@ export async function getInventoryEstimate(
           date: query.date,
           include_done: query.include_done,
           warehouse_id: query.warehouse_id,
+          tz: 'Asia/Ho_Chi_Minh',
         }),
       },
     );
@@ -213,7 +216,7 @@ export async function getCleanerDailyActivityLogs(
       `/inventory-activity-logs/daily/${cleanerId}`,
       {
         headers: authHeader(token),
-        params: compactParams({ date: date ?? '' }),
+        params: compactParams({ date: date ?? '', tz: 'Asia/Ho_Chi_Minh' }),
       },
     );
 
@@ -226,6 +229,33 @@ export async function getCleanerDailyActivityLogs(
     };
   } catch (error) {
     const msg = getErrorMessage(error, 'Không thể tải lịch sử xuất kho trong ngày');
+    throw new Error(msg);
+  }
+}
+
+export async function getDailyTakenItemsSummary(
+  token: string,
+  query: DailyTakenItemsSummaryQuery = {},
+): Promise<DailyTakenItemsSummaryResponse> {
+  try {
+    const response = await apiClient.get('/inventory-activity-logs/daily-taken-summary', {
+      headers: authHeader(token),
+      params: compactParams({
+        date: query.date,
+        cleaner_id: query.cleaner_id,
+        tz: 'Asia/Ho_Chi_Minh',
+      }),
+    });
+
+    const body = response.data as { success?: boolean; data?: DailyTakenItemsSummaryResponse };
+    const raw = body?.data ?? (response.data as DailyTakenItemsSummaryResponse);
+
+    return {
+      ...raw,
+      cleaners: Array.isArray(raw?.cleaners) ? raw.cleaners : [],
+    } as DailyTakenItemsSummaryResponse;
+  } catch (error) {
+    const msg = getErrorMessage(error, 'Không thể tải danh sách vật tư đang giữ');
     throw new Error(msg);
   }
 }

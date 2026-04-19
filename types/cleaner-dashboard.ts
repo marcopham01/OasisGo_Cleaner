@@ -571,6 +571,7 @@ export interface CreateLostFoundItemPayload {
   item_name: string;
   description?: string;
   found_at?: string;
+  photo_local_uri?: string | null;
 }
 
 export interface WarehouseListItem {
@@ -599,6 +600,29 @@ export interface PodDetails {
   status?: string;
   cluster_id?: string;
   [key: string]: unknown;
+}
+
+export interface PodItemEntry {
+  id?: string;
+  pod_id?: string;
+  item_id?: string;
+  item_name?: string | null;
+  expected_quantity?: number;
+  current_quantity?: number;
+  status?: 'IN_STOCK' | 'MISSING' | 'OVERSTOCKED' | string;
+  message?: string;
+  difference?: number;
+  item?: {
+    id?: string;
+    name?: string;
+    unit_price?: number;
+  } | null;
+  [key: string]: unknown;
+}
+
+export interface PodItemQuery {
+  pod_id?: string;
+  item_id?: string;
 }
 
 export interface BookingDetails {

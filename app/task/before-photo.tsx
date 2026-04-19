@@ -2,21 +2,23 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import TaskDetailTab from '@/components/task-detail-tab';
+import TaskBeforePhotoTab from '@/components/task-before-photo-tab';
 import { Colors, Fonts, spacingX } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-export default function TaskDetailScreen() {
-  const { id } = useLocalSearchParams<{ id?: string }>();
+export default function BeforePhotoScreen() {
+  const { taskId } = useLocalSearchParams<{ taskId?: string }>();
   const router = useRouter();
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
-  const { token, user } = useAuth();
+  const { token } = useAuth();
 
   if (!token) {
     return (
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
+      <SafeAreaView
+        style={[styles.safeArea, { backgroundColor: palette.background }]}
+        edges={['bottom']}>
         <View style={styles.centerContainer}>
           <Text style={[styles.centerText, { color: palette.error }]}>Bạn chưa đăng nhập</Text>
         </View>
@@ -24,12 +26,15 @@ export default function TaskDetailScreen() {
     );
   }
 
+  const resolvedTaskId = String(taskId || '').trim() || null;
+
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
-      <TaskDetailTab
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: palette.background }]}
+      edges={['bottom']}>
+      <TaskBeforePhotoTab
         token={token}
-        userId={user?.id}
-        taskId={String(id || '') || null}
+        taskId={resolvedTaskId}
         isDark={theme === 'dark'}
         palette={palette}
         onClose={() => {
@@ -39,8 +44,9 @@ export default function TaskDetailScreen() {
             router.replace('/(tabs)');
           }
         }}
-        onStarted={() => router.push(`/task/before-photo?taskId=${String(id || '')}`)}
-        onViewSummary={() => router.push(`/task/summary?taskId=${String(id || '')}`)}
+        onPhotosDone={() => {
+          router.push(`/task/checklist?taskId=${resolvedTaskId}`);
+        }}
       />
     </SafeAreaView>
   );

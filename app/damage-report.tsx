@@ -1,7 +1,6 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -70,6 +69,18 @@ export default function DamageReportScreen() {
   const palette = Colors[theme];
   const { token } = useAuth();
 
+  // ── Locked context (when navigated from cleaning task) ──
+  const params = useLocalSearchParams<{
+    cleaningTaskId?: string;
+    bookingId?: string;
+    podId?: string;
+    podName?: string;
+  }>();
+  const lockedCleaningTaskId = params.cleaningTaskId?.trim() || undefined;
+  const lockedBookingId = params.bookingId?.trim() || undefined;
+  const lockedPodId = params.podId?.trim() || undefined;
+  const lockedPodName = params.podName?.trim() || undefined;
+
   // ── Form state ──
   const [description, setDescription] = useState('');
   const [severity, setSeverity] = useState<IncidentSeverity>('MEDIUM');
@@ -95,6 +106,7 @@ export default function DamageReportScreen() {
   // ── Camera / photo state ──
   const [capturedPhotos, setCapturedPhotos] = useState<PendingPhoto[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [lightboxUri, setLightboxUri] = useState<string | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
@@ -102,6 +114,23 @@ export default function DamageReportScreen() {
   useEffect(() => {
     if (!token) return;
     setLoadingCatalogs(true);
+
+    // When opened from a cleaning task, skip cluster/pod fetching — just load catalogs
+    if (lockedCleaningTaskId) {
+      if (lockedPodId) setSelectedPodId(lockedPodId);
+      Promise.all([
+        getDamageReportItems(token).catch((): DamageReportItem[] => []),
+        getDamageServiceCatalogs(token).catch((): DamageServiceCatalogItem[] => []),
+      ])
+        .then(([drItems, drServices]) => {
+          setItems(drItems.filter((it) => String(it.id || '').trim()));
+          setServices(drServices);
+        })
+        .catch(() => null)
+        .finally(() => setLoadingCatalogs(false));
+      return;
+    }
+
     const today = new Date().toISOString().split('T')[0];
     Promise.all([
       getMyShiftAssignments(token, { work_date: today }).catch((): StaffShiftAssignment[] => []),
@@ -127,7 +156,7 @@ export default function DamageReportScreen() {
       })
       .catch(() => null)
       .finally(() => setLoadingCatalogs(false));
-  }, [token]);
+  }, [token, lockedCleaningTaskId, lockedPodId]);
 
   const loadPodsForCluster = useCallback(
     async (clusterId: string) => {
@@ -222,31 +251,15 @@ export default function DamageReportScreen() {
     if (!cameraRef.current) return;
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
-      if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh.'); return; }
+      if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.'); return; }
       setCapturedPhotos((prev) => [
         ...prev,
         { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri },
       ]);
-      setIsCameraOpen(false);
+      Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách.', [{ text: 'OK', onPress: () => setIsCameraOpen(false) }]);
     } catch {
       Alert.alert('Lỗi', 'Không thể chụp ảnh, vui lòng thử lại.');
     }
-  };
-
-  const pickPhotoFromLibrary = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.75,
-      allowsEditing: false,
-      selectionLimit: 1,
-    });
-    if (result.canceled || !result.assets?.length) return;
-    const uri = result.assets[0]?.uri;
-    if (!uri) { Alert.alert('Lỗi', 'Không đọc được ảnh.'); return; }
-    setCapturedPhotos((prev) => [
-      ...prev,
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri },
-    ]);
   };
 
   const removePhoto = (photoId: string) => {
@@ -284,7 +297,9 @@ export default function DamageReportScreen() {
       0,
     );
     const payload: CreateDamageReportPayload = {
-      pod_id: selectedPodId || undefined,
+      cleaning_task_id: lockedCleaningTaskId,
+      booking_id: lockedBookingId,
+      pod_id: lockedCleaningTaskId ? (lockedPodId || undefined) : (selectedPodId || undefined),
       description: desc,
       details: [...itemDetails, ...serviceDetails],
       estimated_service_fee: estimatedServiceFee,
@@ -317,7 +332,17 @@ export default function DamageReportScreen() {
             <View style={[styles.incidentDraftCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
               <Text style={[styles.incidentDraftTitle, { color: palette.text }]}>Vị trí hư hại</Text>
 
-              <Text style={[styles.subsectionTitle, { color: palette.text }]}>Khu vực (Cluster)</Text>
+              {lockedCleaningTaskId ? (
+                /* Locked — values from cleaning task context */
+                <View style={[styles.lockedField, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                  <MaterialIcons name="lock" size={16} color={palette.textMuted} style={{ marginRight: 6 }} />
+                  <Text style={[styles.lockedFieldText, { color: palette.text }]}>
+                    {lockedPodName ? `Pod: ${lockedPodName}` : lockedPodId ? `Pod ID: ${lockedPodId}` : 'Pod: (từ nhiệm vụ dọn dẹp)'}
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Text style={[styles.subsectionTitle, { color: palette.text }]}>Khu vực (Cluster)</Text>
               <Pressable
                 style={[styles.selector, { borderColor: palette.border, backgroundColor: palette.surface }]}
                 onPress={() => { setShowClusterSelector((v) => !v); setShowPodSelector(false); }}>
@@ -404,6 +429,8 @@ export default function DamageReportScreen() {
                     </>
                   )}
                 </ScrollView>
+              )}
+                </>
               )}
             </View>
 
@@ -637,18 +664,14 @@ export default function DamageReportScreen() {
                   <MaterialIcons name="photo-camera" size={26} color={palette.white} />
                   <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chụp ảnh hư hại</Text>
                 </Pressable>
-                <Pressable
-                  style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: '#1f7aed', backgroundColor: '#1f7aed' }]}
-                  onPress={() => void pickPhotoFromLibrary()}>
-                  <MaterialIcons name="photo-library" size={26} color={palette.white} />
-                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chọn từ thư viện</Text>
-                </Pressable>
               </View>
 
               <View style={styles.requiredPhotosRow}>
                 {capturedPhotos.map((photo) => (
                   <View key={photo.id} style={styles.requiredThumbWrap}>
-                    <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
+                    <Pressable onPress={() => setLightboxUri(photo.uri)}>
+                      <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
+                    </Pressable>
                     <Pressable
                       style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
                       onPress={() => removePhoto(photo.id)}>
@@ -683,25 +706,39 @@ export default function DamageReportScreen() {
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
 
+      {/* ── Lightbox Modal ── */}
+      <Modal
+        visible={lightboxUri !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLightboxUri(null)}>
+        <View style={styles.lightboxOverlay}>
+          <Pressable style={styles.lightboxClose} onPress={() => setLightboxUri(null)}>
+            <MaterialIcons name="close" size={26} color="#fff" />
+          </Pressable>
+          {lightboxUri ? (
+            <Image source={{ uri: lightboxUri }} style={styles.lightboxImage} resizeMode="contain" />
+          ) : null}
+        </View>
+      </Modal>
+
       {/* ── Camera Modal ── */}
       <Modal visible={isCameraOpen} animationType="slide" statusBarTranslucent>
         <View style={styles.cameraModalRoot}>
           <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} />
-          <View style={styles.cameraModalOverlay}>
-            <Text style={[styles.cameraModalHint, { color: '#e2e8f0' }]}>Chụp ảnh hư hại</Text>
-            <View style={styles.cameraActions}>
-              <Pressable
-                style={[styles.cameraButton, { backgroundColor: palette.white }]}
-                onPress={() => void handleCapturePhoto()}>
-                <MaterialIcons name="photo-camera" size={20} color={palette.text} />
-                <Text style={[styles.cameraButtonText, { color: palette.text }]}>Chụp</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.cameraButton, { backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border }]}
-                onPress={() => setIsCameraOpen(false)}>
-                <Text style={[styles.cameraButtonText, { color: palette.textMuted }]}>Hủy</Text>
-              </Pressable>
-            </View>
+          {/* Top header */}
+          <View style={styles.cameraHeader}>
+            <Pressable style={styles.cameraBackBtn} onPress={() => setIsCameraOpen(false)}>
+              <MaterialIcons name="arrow-back" size={26} color="#fff" />
+            </Pressable>
+          </View>
+          {/* Bottom shutter */}
+          <View style={styles.cameraBottomBar}>
+            <Pressable
+              style={styles.shutterBtn}
+              onPress={() => void handleCapturePhoto()}>
+              <View style={styles.shutterInner} />
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -723,6 +760,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacingX._12,
     paddingVertical: spacingY._10,
     gap: spacingY._7,
+  },
+  lockedField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radius._12,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._10,
+  },
+  lockedFieldText: {
+    fontSize: 14,
+    fontFamily: Fonts.sans,
   },
   incidentDraftTitle: {
     fontSize: 15,
@@ -1010,38 +1059,76 @@ const styles = StyleSheet.create({
   cameraModalView: {
     flex: 1,
   },
-  cameraModalOverlay: {
+  cameraHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: spacingY._50,
+    paddingHorizontal: spacingX._15,
+    paddingBottom: spacingY._12,
+    backgroundColor: '#00000066',
+  },
+  cameraBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#00000060',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraBottomBar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
-    paddingHorizontal: spacingX._12,
-    paddingBottom: spacingY._20,
-    paddingTop: spacingY._10,
-    backgroundColor: '#00000088',
-    gap: spacingY._7,
-  },
-  cameraModalHint: {
-    textAlign: 'center',
-    fontSize: 12,
-    fontFamily: Fonts.sans,
-  },
-  cameraActions: {
-    flexDirection: 'row',
-    gap: spacingX._7,
-  },
-  cameraButton: {
-    flex: 1,
-    borderRadius: radius._10,
-    paddingVertical: spacingY._10,
+    bottom: spacingY._40,
     alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacingX._5,
   },
-  cameraButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    fontFamily: Fonts.sans,
+  shutterBtn: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+    borderColor: '#ffffff88',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  shutterInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+  },
+  lightboxOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lightboxClose: {
+    position: 'absolute',
+    top: 52,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#00000060',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  lightboxImage: {
+    width: '100%',
+    height: '80%',
   },
 });

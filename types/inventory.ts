@@ -89,6 +89,40 @@ export interface InventoryActivityLogQuery {
   to?: string;
 }
 
+export interface DailyTakenItemsSummaryQuery {
+  date?: string;
+  cleaner_id?: string;
+}
+
+export interface DailyTakenItemSummaryItem {
+  item_id: string;
+  item_name: string | null;
+  checkout_quantity: number;
+  return_quantity: number;
+  net_quantity: number;
+}
+
+export interface DailyTakenItemsSummaryCleaner {
+  cleaner_id: string;
+  cleaner_name: string | null;
+  cleaner_role: string | null;
+  total_checkout_quantity: number;
+  total_return_quantity: number;
+  total_net_quantity: number;
+  item_count: number;
+  items: DailyTakenItemSummaryItem[];
+}
+
+export interface DailyTakenItemsSummaryResponse {
+  date: string;
+  day_start: string;
+  day_end: string;
+  cleaner_count: number;
+  total_item_count: number;
+  total_net_quantity: number;
+  cleaners: DailyTakenItemsSummaryCleaner[];
+}
+
 // --- Daily activity log (GET /api/inventory-activity-logs/daily/:cleaner_id) ---
 
 export interface DailyActivityLogSummaryItem {

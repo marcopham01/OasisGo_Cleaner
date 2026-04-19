@@ -22,6 +22,10 @@ export default function RootLayout() {
             <Stack.Screen name="login" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="task/[id]" options={{ headerShown: false }} />
+            <Stack.Screen name="task/before-photo" options={{ title: 'Chụp ảnh trước khi dọn', headerBackTitle: 'Quay lại' }} />
+            <Stack.Screen name="task/checklist" options={{ title: 'Dọn dẹp & Báo cáo', headerBackTitle: 'Quay lại' }} />
+            <Stack.Screen name="task/after-photo" options={{ title: 'Chụp ảnh sau khi dọn', headerBackTitle: 'Quay lại' }} />
+            <Stack.Screen name="task/summary" options={{ title: 'Kết quả dọn dẹp', headerBackTitle: 'Quay lại' }} />
             <Stack.Screen
               name="edit-profile"
               options={{ title: 'Chỉnh sửa thông tin', headerBackTitle: 'Tài khoản' }}
@@ -32,7 +36,7 @@ export default function RootLayout() {
             />
             <Stack.Screen
               name="report-lost-found"
-              options={{ title: 'Báo cáo đồ tìm thấy', headerBackTitle: 'Sự cố' }}
+              options={{ title: 'Ghi nhận món đồ bị thất lạc', headerBackTitle: 'Sự cố' }}
             />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
           </Stack>

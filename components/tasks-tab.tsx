@@ -2,16 +2,16 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Animated,
-    Modal,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Animated,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
@@ -19,8 +19,8 @@ import { getBookingById, getMyCleaningTasks, getPodById } from '@/services/clean
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
 import type { CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import {
-    CLEANING_REQUEST_SOURCES,
-    CLEANING_TASK_STATUSES,
+  CLEANING_REQUEST_SOURCES,
+  CLEANING_TASK_STATUSES,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -422,7 +422,10 @@ export default function TasksTab({
 
   const visibleTasks = useMemo(() => {
     if (showAllTasks) return filteredTasks;
-    return filteredTasks.filter((task) => isTaskToday(task));
+    return filteredTasks.filter((task) => {
+      if (!isTaskToday(task)) return false;
+      return String(task.status || '').toUpperCase() !== 'CANCELLED';
+    });
   }, [filteredTasks, showAllTasks]);
 
   const hiddenTaskCount = useMemo(() => {
@@ -440,7 +443,11 @@ export default function TasksTab({
   }, [currentPage, totalPages, visibleTasks]);
 
   const todayTaskCount = useMemo(() => {
-    return tasks.filter((task) => isTaskToday(task)).length;
+    return tasks.filter((task) => {
+      if (!isTaskToday(task)) return false;
+      const status = String(task.status || '').toUpperCase();
+      return status !== 'DONE' && status !== 'CANCELLED' && status !== 'MISSED';
+    }).length;
   }, [tasks]);
 
   const doneTodayCount = useMemo(() => {
@@ -874,7 +881,13 @@ export default function TasksTab({
             return (
               <Pressable
                 key={key}
-                onPress={() => router.push({ pathname: '/task/[id]', params: { id: key } })}
+                onPress={() => {
+                  if (String(task.status || '').toUpperCase() === 'DONE') {
+                    router.push({ pathname: '/task/summary', params: { taskId: key } });
+                  } else {
+                    router.push({ pathname: '/task/[id]', params: { id: key } });
+                  }
+                }}
                 style={[
                   styles.card,
                   { backgroundColor: palette.card, borderColor: palette.border },
@@ -919,28 +932,30 @@ export default function TasksTab({
                           {requestSourceLabel(String(task.request_source || ''))}
                         </Text>
                       </View>
-                      {task.booking_status ? (
-                        <View style={styles.metaLine}>
-                          <MaterialIcons name="event" size={16} color={palette.neutral500} />
-                          <Text style={[styles.meta, { color: palette.textMuted }]}>
-                            Booking: {bookingStatusLabel(String(task.booking_status))}
-                          </Text>
-                        </View>
-                      ) : null}
-                      {task.pod_status ? (
-                        <View style={styles.metaLine}>
-                          <MaterialIcons name="meeting-room" size={16} color={palette.neutral500} />
-                          <Text style={[styles.meta, { color: palette.textMuted }]}>
-                            Pod: {podStatusLabel(String(task.pod_status))}
-                          </Text>
-                        </View>
-                      ) : null}
                       <View style={styles.metaLine}>
                         <MaterialIcons name="schedule" size={16} color={palette.neutral500} />
                         <Text style={[styles.meta, { color: palette.textMuted }]}>
                           {formatCompactTime(estimatedStartText)} – {formatCompactTime(dueText)}
                         </Text>
                       </View>
+                      {(task.booking_status || task.pod_status) ? (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6, justifyContent: 'center' }}>
+                          {task.booking_status ? (
+                            <View style={{ backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                              <Text style={{ color: '#2563EB', fontSize: 11, fontWeight: '600' }}>
+                                Booking: {bookingStatusLabel(String(task.booking_status))}
+                              </Text>
+                            </View>
+                          ) : null}
+                          {task.pod_status ? (
+                            <View style={{ backgroundColor: '#FFF7ED', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                              <Text style={{ color: '#EA580C', fontSize: 11, fontWeight: '600' }}>
+                                Pod: {podStatusLabel(String(task.pod_status))}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : null}
                     </View>
                   </View>
 

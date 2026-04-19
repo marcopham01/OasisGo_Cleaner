@@ -32,6 +32,8 @@ import type {
     MyCleanerKeyByTaskData,
     PodCluster,
     PodDetails,
+    PodItemEntry,
+    PodItemQuery,
     StaffAssignmentAttendanceStatus,
     StaffAttendanceLog,
     StaffAttendanceLogListResponse,
@@ -1101,7 +1103,26 @@ export async function getLostFoundItemById(token: string, itemId: string) {
 
 export async function createLostFoundItem(token: string, payload: CreateLostFoundItemPayload) {
   try {
-    const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', payload, {
+    if (payload.photo_local_uri) {
+      const formData = new FormData();
+      formData.append('item_name', payload.item_name);
+      if (payload.description) formData.append('description', payload.description);
+      if (payload.pod_id) formData.append('pod_id', payload.pod_id);
+      if (payload.booking_id) formData.append('booking_id', payload.booking_id);
+      if (payload.warehouse_id) formData.append('warehouse_id', payload.warehouse_id);
+      if (payload.found_at) formData.append('found_at', payload.found_at);
+      const photoFile = await toUploadFile(payload.photo_local_uri);
+      formData.append('photo', photoFile);
+      const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', formData, {
+        headers: { ...authHeader(token), 'Content-Type': 'multipart/form-data' },
+      });
+      const item = extractData<LostFoundItem>(response.data?.data ?? response.data);
+      if (!item) throw new Error('Tạo item thất lạc thất bại');
+      return item;
+    }
+
+    const { photo_local_uri: _omit, ...jsonPayload } = payload;
+    const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', jsonPayload, {
       headers: authHeader(token),
     });
 
@@ -1149,6 +1170,29 @@ export async function getMyLostFoundItems(token: string, query: LostFoundQuery =
     });
 
     return toArray<LostFoundItem>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getPodItems(token: string, query: PodItemQuery = {}) {
+  try {
+    if (query.pod_id) {
+      // Use the dedicated by-pod endpoint which returns enriched items with item_name flat
+      const response = await apiClient.get(`/pod-items/${query.pod_id}`, {
+        headers: authHeader(token),
+      });
+      const body = response.data?.data ?? response.data;
+      const items: PodItemEntry[] = Array.isArray(body?.items) ? (body.items as PodItemEntry[]) : [];
+      return items;
+    }
+
+    const response = await apiClient.get<ApiEnvelope<PodItemEntry[]>>('/pod-items', {
+      headers: authHeader(token),
+      params: compactParams(query),
+    });
+
+    return toArray<PodItemEntry>(response.data?.data ?? response.data);
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }

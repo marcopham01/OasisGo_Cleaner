@@ -1,36 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Modal,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Modal,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
 import {
-  bulkCreateInventoryActivityLogs,
-  getAllInventoryStocks,
-  getCleanerDailyActivityLogs,
-  getInventoryEstimate,
+    bulkCreateInventoryActivityLogs,
+    getAllInventoryStocks,
+    getCleanerDailyActivityLogs,
+    getDailyTakenItemsSummary,
+    getInventoryEstimate,
 } from '@/services/inventory.service';
 import type {
-  CheckoutDraftItem,
-  CleanerDailyActivityLogResponse,
-  DailyActivityLogEntry,
-  DailyActivityLogSummaryItem,
-  FreeCheckoutDraftItem,
-  InventoryEstimateResponse,
-  InventoryStockItem,
-  InventorySuggestedStock,
-  ReturnDraftItem,
+    CheckoutDraftItem,
+    CleanerDailyActivityLogResponse,
+    DailyActivityLogEntry,
+    DailyActivityLogSummaryItem,
+    DailyTakenItemsSummaryResponse,
+    FreeCheckoutDraftItem,
+    InventoryEstimateResponse,
+    InventoryStockItem,
+    InventorySuggestedStock,
+    ReturnDraftItem,
 } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -47,6 +49,26 @@ function todayISODate() {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function localDayRangeFromISO(isoDate: string) {
+  const [y, m, d] = String(isoDate || '')
+    .split('-')
+    .map((v) => Number(v));
+
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    const now = new Date();
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+
+  return {
+    start: new Date(y, m - 1, d, 0, 0, 0, 0),
+    end: new Date(y, m - 1, d, 23, 59, 59, 999),
+  };
 }
 
 /** Unique warehouses extracted from all suggested_stocks in an estimate */
@@ -136,10 +158,12 @@ function buildReturnDraftItems(
 
   for (const log of returnLogs) {
     const qty = Number(log.quantity || 0);
-    if (qty <= 0) continue;
+    // Normalize for display/math in case backend data format varies.
+    const returnedQty = Math.abs(qty);
+    if (returnedQty <= 0) continue;
     const key = `${log.inventory_stock_id}__${log.cleaning_task_id ?? ''}`;
     if (map.has(key)) {
-      map.get(key)!.already_returned += qty;
+      map.get(key)!.already_returned += returnedQty;
     }
   }
 
@@ -148,7 +172,69 @@ function buildReturnDraftItems(
     item.returnQuantity = maxReturnable;
   }
 
-  return [...map.values()];
+  return [...map.values()].filter((item) => (item.checked_out - item.already_returned) > 0);
+}
+
+interface HeldItemSummary {
+  item_id: string;
+  item_name: string | null;
+  checkout_quantity: number;
+  return_quantity: number;
+  net_quantity: number;
+}
+
+function buildHeldItems(
+  summary: DailyTakenItemsSummaryResponse | null,
+  fallbackSummaryByItem: DailyActivityLogSummaryItem[] = [],
+): HeldItemSummary[] {
+  if (!summary || !Array.isArray(summary.cleaners)) {
+    return (fallbackSummaryByItem ?? [])
+      .map((item) => {
+        const checkoutQty = Number(item.checkout_quantity || 0);
+        const returnQty = Number(item.return_quantity || 0);
+        return {
+          item_id: String(item.item_id || ''),
+          item_name: item.item_name ?? null,
+          checkout_quantity: checkoutQty,
+          return_quantity: returnQty,
+          net_quantity: checkoutQty - returnQty,
+        } satisfies HeldItemSummary;
+      })
+      .filter((item) => item.item_id && item.net_quantity > 0)
+      .sort((a, b) => String(a.item_name || a.item_id).localeCompare(String(b.item_name || b.item_id)));
+  }
+
+  const byItem = new Map<string, HeldItemSummary>();
+  for (const cleaner of summary.cleaners) {
+    for (const item of cleaner.items ?? []) {
+      const itemId = String(item.item_id || '').trim();
+      if (!itemId) continue;
+
+      const checkoutQty = Number(item.checkout_quantity || 0);
+      const returnQty = Number(item.return_quantity || 0);
+      const netQty = Number(item.net_quantity || 0);
+
+      if (!byItem.has(itemId)) {
+        byItem.set(itemId, {
+          item_id: itemId,
+          item_name: item.item_name ?? null,
+          checkout_quantity: 0,
+          return_quantity: 0,
+          net_quantity: 0,
+        });
+      }
+
+      const existing = byItem.get(itemId)!;
+      existing.checkout_quantity += checkoutQty;
+      existing.return_quantity += returnQty;
+      existing.net_quantity += netQty;
+      if (!existing.item_name && item.item_name) existing.item_name = item.item_name;
+    }
+  }
+
+  return [...byItem.values()]
+    .filter((item) => item.net_quantity > 0)
+    .sort((a, b) => String(a.item_name || a.item_id).localeCompare(String(b.item_name || b.item_id)));
 }
 
 interface ItemRowProps {
@@ -530,7 +616,8 @@ interface LogGroupCardProps {
 
 function LogGroupCard({ group, palette }: LogGroupCardProps) {
   const meta = actionMeta(group.actionType, palette);
-  const totalQty = group.logs.reduce((s, l) => s + Number(l.quantity || 0), 0);
+  const displayQuantity = (qty: number) => (group.actionType === 'RETURN' ? Math.abs(qty) : qty);
+  const totalQty = group.logs.reduce((s, l) => s + displayQuantity(Number(l.quantity || 0)), 0);
 
   return (
     <View style={[styles.logGroupCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
@@ -565,7 +652,7 @@ function LogGroupCard({ group, palette }: LogGroupCardProps) {
             flex={4}
           />
           <View style={styles.logGroupItemQtyWrap}>
-            <Text style={[styles.logGroupItemQty, { color: meta.color }]}>×{log.quantity}</Text>
+            <Text style={[styles.logGroupItemQty, { color: meta.color }]}>×{displayQuantity(Number(log.quantity || 0))}</Text>
           </View>
         </View>
       ))}
@@ -727,19 +814,25 @@ function CheckoutModal({ visible, token, userId, today, palette, onClose, onSucc
 
         setEstimate(est);
 
-        const todayStart = new Date(today);
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(today);
-        todayEnd.setHours(23, 59, 59, 999);
+        const { start: todayStart, end: todayEnd } = localDayRangeFromISO(today);
+        const assignmentSet = new Set((est.shift_assignment_ids ?? []).map((id) => String(id)));
 
-        const todayTasks = (Array.isArray(tasks) ? tasks : []).filter((t) => {
+        const allTasks = Array.isArray(tasks) ? tasks : [];
+        const assignmentMatched = allTasks.filter((t) => {
+          const shiftId = String(t.shift_assignment_id ?? '').trim();
+          if (!shiftId) return false;
+          if (assignmentSet.size === 0) return true;
+          return assignmentSet.has(shiftId);
+        });
+
+        const dateMatched = assignmentMatched.filter((t) => {
           const raw = t.estimated_start_time ?? t.start_time ?? t.due_at ?? '';
           if (!raw) return false;
           const ts = new Date(raw).getTime();
           return ts >= todayStart.getTime() && ts <= todayEnd.getTime();
         });
 
-        const firstTask = todayTasks[0] ?? null;
+        const firstTask = dateMatched[0] ?? assignmentMatched[0] ?? allTasks[0] ?? null;
         firstTaskIdRef.current = String(firstTask?.id ?? firstTask?._id ?? '').trim() || null;
 
         setDraftItems(buildDraftItems(est, warehouseId ?? null));
@@ -781,13 +874,6 @@ function CheckoutModal({ visible, token, userId, today, palette, onClose, onSucc
       return;
     }
     const cleaningTaskId = firstTaskIdRef.current;
-    if (!cleaningTaskId) {
-      Alert.alert(
-        'Không tìm thấy nhiệm vụ',
-        'Bạn không có nhiệm vụ dọn phòng nào trong ngày hôm nay để liên kết với phiếu xuất kho.',
-      );
-      return;
-    }
     Alert.alert(
       'Xác nhận xuất kho',
       `Bạn sẽ xuất ${submittable.length} loại vật tư. Tiếp tục?`,
@@ -805,7 +891,7 @@ function CheckoutModal({ visible, token, userId, today, palette, onClose, onSucc
                   inventory_stock_id: d.selectedStock!.inventory_stock_id,
                   quantity: d.checkoutQuantity,
                   action_type: 'CHECKOUT' as const,
-                  cleaning_task_id: cleaningTaskId,
+                  cleaning_task_id: cleaningTaskId ?? undefined,
                 })),
               });
               onSuccess();
@@ -1262,7 +1348,7 @@ interface ReturnModalProps {
 
 function ReturnModal({ visible, token, userId, today, palette, onClose, onSuccess }: ReturnModalProps) {
   const [draftItems, setDraftItems] = useState<ReturnDraftItem[]>([]);
-  const [summaryItems, setSummaryItems] = useState<DailyActivityLogSummaryItem[]>([]);
+  const [heldItems, setHeldItems] = useState<HeldItemSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1277,11 +1363,13 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
       );
       const returnLogs = (data.logs ?? []).filter((l) => l.action_type === 'RETURN');
       setDraftItems(buildReturnDraftItems(checkoutLogs, returnLogs));
-      setSummaryItems(
-        (data.summary_by_item ?? []).filter(
-          (s) => s.checkout_quantity > 0 || s.return_quantity > 0,
-        ),
-      );
+
+      try {
+        const takenSummary = await getDailyTakenItemsSummary(token, { date: today });
+        setHeldItems(buildHeldItems(takenSummary, data.summary_by_item ?? []));
+      } catch {
+        setHeldItems(buildHeldItems(null, data.summary_by_item ?? []));
+      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -1292,7 +1380,7 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
   useEffect(() => {
     if (visible) {
       setError(null);
-      setSummaryItems([]);
+      setHeldItems([]);
       loadLogs();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1328,7 +1416,7 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
                 staff_id: userId,
                 logs: submittable.map((d) => ({
                   inventory_stock_id: d.inventory_stock_id,
-                  quantity: d.returnQuantity,
+                  quantity: -Math.abs(d.returnQuantity),
                   action_type: 'RETURN' as const,
                   cleaning_task_id: d.cleaning_task_id ?? undefined,
                 })),
@@ -1382,35 +1470,35 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
               />
             }>
 
-            {summaryItems.length > 0 && (
-              <View style={[styles.checkoutBreakdownCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                <Text style={[styles.checkoutBreakdownTitle, { color: palette.primary }]}>Đồ đã lấy hôm nay</Text>
-                {summaryItems.map((s) => {
-                  const net = s.checkout_quantity - s.return_quantity;
-                  const netColor = net < 0 ? palette.error : net === 0 ? palette.textMuted : palette.primary;
-                  return (
-                    <View key={s.item_id} style={styles.checkoutBreakdownRow}>
-                      <Text style={[styles.checkoutBreakdownName, { color: palette.text }]} numberOfLines={1}>
-                        {s.item_name || s.item_id}
-                      </Text>
-                      <View style={[styles.checkoutBreakdownBadge, { backgroundColor: netColor + '18' }]}>
-                        <Text style={[styles.checkoutBreakdownQty, { color: netColor }]}>×{net}</Text>
-                      </View>
+            <View style={[styles.checkoutBreakdownCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <Text style={[styles.checkoutBreakdownTitle, { color: palette.primary }]}>Đồ đang giữ</Text>
+              {heldItems.length > 0 ? heldItems.map((s) => {
+                const net = Number(s.net_quantity || 0);
+                const netColor = net <= 0 ? palette.textMuted : palette.primary;
+                return (
+                  <View key={s.item_id} style={styles.checkoutBreakdownRow}>
+                    <Text style={[styles.checkoutBreakdownName, { color: palette.text }]} numberOfLines={1}>
+                      {s.item_name || s.item_id}
+                    </Text>
+                    <View style={[styles.checkoutBreakdownBadge, { backgroundColor: netColor + '18' }]}>
+                      <Text style={[styles.checkoutBreakdownQty, { color: netColor }]}>×{net}</Text>
                     </View>
-                  );
-                })}
-              </View>
-            )}
+                  </View>
+                );
+              }) : (
+                <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có món đồ nào đang giữ.</Text>
+              )}
+            </View>
 
             {draftItems.length === 0 ? (
               <View style={[styles.emptyBox, { backgroundColor: palette.card, borderColor: palette.border }]}>
                 <Text style={[styles.emptyText, { color: palette.textMuted }]}>
-                  Bạn chưa xuất kho lần nào hôm nay.
+                  Không có món đồ nào đang giữ.
                 </Text>
               </View>
             ) : (
               <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: palette.text }]}>Vật tư đã lấy hôm nay</Text>
+                <Text style={[styles.sectionTitle, { color: palette.text }]}>Vật tư đang giữ</Text>
                 {draftItems.map((item) => {
                   const key = `${item.inventory_stock_id}__${item.cleaning_task_id ?? ''}`;
                   return (
@@ -1479,6 +1567,7 @@ export default function SuppliesTab({ token, userId, palette }: SuppliesTabProps
   const [freeCheckoutModalVisible, setFreeCheckoutModalVisible] = useState(false);
   const [returnModalVisible, setReturnModalVisible] = useState(false);
   const [dailyLogs, setDailyLogs] = useState<CleanerDailyActivityLogResponse | null>(null);
+  const [dailyTakenSummary, setDailyTakenSummary] = useState<DailyTakenItemsSummaryResponse | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
@@ -1487,9 +1576,18 @@ export default function SuppliesTab({ token, userId, palette }: SuppliesTabProps
     setLoadingHistory(true);
     setHistoryError(null);
     try {
-      const data = await getCleanerDailyActivityLogs(token, userId, today);
-      setDailyLogs(data);
+      const dailyData = await getCleanerDailyActivityLogs(token, userId, today);
+      setDailyLogs(dailyData);
+
+      try {
+        const takenSummary = await getDailyTakenItemsSummary(token, { date: today });
+        setDailyTakenSummary(takenSummary);
+      } catch {
+        setDailyTakenSummary(null);
+      }
     } catch (err) {
+      setDailyLogs(null);
+      setDailyTakenSummary(null);
       setHistoryError(getErrorMessage(err));
     } finally {
       setLoadingHistory(false);
@@ -1548,45 +1646,43 @@ export default function SuppliesTab({ token, userId, palette }: SuppliesTabProps
         </View>
 
         {/* Daily summary strip */}
-        {dailyLogs && (() => {
-          const summaryItems = (dailyLogs.summary_by_item ?? []).filter(
-            (s) => s.checkout_quantity > 0 || s.return_quantity > 0,
-          );
-          const totalCheckedOut = summaryItems.reduce((sum, s) => sum + s.checkout_quantity, 0);
+        {(dailyLogs || dailyTakenSummary) && (() => {
+          const heldItems = buildHeldItems(dailyTakenSummary, dailyLogs?.summary_by_item ?? []);
+          const totalHeld = heldItems.reduce((sum, item) => sum + Number(item.net_quantity || 0), 0);
 
           return (
             <>
               <View style={[styles.daySummaryStrip, { backgroundColor: palette.card, borderColor: palette.border }]}>
                 <View style={styles.daySumItem}>
-                  <Text style={[styles.daySumNum, { color: palette.primary }]}>{dailyLogs.total_log_count}</Text>
+                  <Text style={[styles.daySumNum, { color: palette.primary }]}>{dailyLogs?.total_log_count ?? 0}</Text>
                   <Text style={[styles.daySumLabel, { color: palette.textMuted }]}>Tổng log</Text>
                 </View>
                 <View style={[styles.summaryDivider, { backgroundColor: palette.border }]} />
                 <View style={styles.daySumItem}>
-                  <Text style={[styles.daySumNum, { color: palette.success }]}>{totalCheckedOut}</Text>
-                  <Text style={[styles.daySumLabel, { color: palette.textMuted }]}>Đã lấy hôm nay</Text>
+                  <Text style={[styles.daySumNum, { color: palette.success }]}>{totalHeld}</Text>
+                  <Text style={[styles.daySumLabel, { color: palette.textMuted }]}>Đang giữ</Text>
                 </View>
               </View>
 
-              {summaryItems.length > 0 && (
-                <View style={[styles.checkoutBreakdownCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                  <Text style={[styles.checkoutBreakdownTitle, { color: palette.primary }]}>Đồ đã lấy hôm nay</Text>
-                  {summaryItems.map((s) => {
-                    const net = s.checkout_quantity - s.return_quantity;
-                    const netColor = net < 0 ? palette.error : net === 0 ? palette.textMuted : palette.primary;
-                    return (
-                      <View key={s.item_id} style={styles.checkoutBreakdownRow}>
-                        <Text style={[styles.checkoutBreakdownName, { color: palette.text }]} numberOfLines={1}>
-                          {s.item_name || s.item_id}
-                        </Text>
-                        <View style={[styles.checkoutBreakdownBadge, { backgroundColor: netColor + '18' }]}>
-                          <Text style={[styles.checkoutBreakdownQty, { color: netColor }]}>×{net}</Text>
-                        </View>
+              <View style={[styles.checkoutBreakdownCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                <Text style={[styles.checkoutBreakdownTitle, { color: palette.primary }]}>Đồ đang giữ</Text>
+                {heldItems.length > 0 ? heldItems.map((s) => {
+                  const net = Number(s.net_quantity || 0);
+                  const netColor = net <= 0 ? palette.textMuted : palette.primary;
+                  return (
+                    <View key={s.item_id} style={styles.checkoutBreakdownRow}>
+                      <Text style={[styles.checkoutBreakdownName, { color: palette.text }]} numberOfLines={1}>
+                        {s.item_name || s.item_id}
+                      </Text>
+                      <View style={[styles.checkoutBreakdownBadge, { backgroundColor: netColor + '18' }]}>
+                        <Text style={[styles.checkoutBreakdownQty, { color: netColor }]}>×{net}</Text>
                       </View>
-                    );
-                  })}
-                </View>
-              )}
+                    </View>
+                  );
+                }) : (
+                  <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có món đồ nào đang giữ.</Text>
+                )}
+              </View>
 
             </>
           );

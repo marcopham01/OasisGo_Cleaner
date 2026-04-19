@@ -1,11 +1,14 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Image,
     Keyboard,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -40,6 +43,21 @@ export default function ReportLostFoundScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const { token } = useAuth();
+  const router = useRouter();
+  const params = useLocalSearchParams<{
+    fromCleaningTask?: string;
+    cleaningTaskId?: string;
+    bookingId?: string;
+    podId?: string;
+    podName?: string;
+  }>();
+
+  const lockedFromCleaningTask =
+    params.fromCleaningTask === '1' || Boolean(String(params.cleaningTaskId || '').trim());
+  const lockedCleaningTaskId = String(params.cleaningTaskId || '').trim();
+  const lockedBookingId = String(params.bookingId || '').trim();
+  const lockedPodId = String(params.podId || '').trim();
+  const lockedPodName = String(params.podName || '').trim();
 
   // ── Form state ──
   const [itemName, setItemName] = useState('');
@@ -48,6 +66,36 @@ export default function ReportLostFoundScreen() {
   const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // ── Camera / photo ──
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [lightboxVisible, setLightboxVisible] = useState(false);
+  const cameraRef = useRef<CameraView | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+
+  const openCamera = async () => {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (!result.granted) {
+        Alert.alert('Không thể mở camera', 'Vui lòng cấp quyền camera để chụp ảnh.');
+        return;
+      }
+    }
+    setIsCameraOpen(true);
+  };
+
+  const handleCapturePhoto = async () => {
+    if (!cameraRef.current) return;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
+      if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.'); return; }
+      setPhotoUri(photo.uri);
+      setIsCameraOpen(false);
+    } catch {
+      Alert.alert('Lỗi', 'Không thể chụp ảnh, vui lòng thử lại.');
+    }
+  };
 
   // ── Selector lists ──
   const [clusterList, setClusterList] = useState<PodCluster[]>([]);
@@ -60,12 +108,18 @@ export default function ReportLostFoundScreen() {
   const [showPodSelector, setShowPodSelector] = useState(false);
   const [showWarehouseSelector, setShowWarehouseSelector] = useState(false);
 
+  useEffect(() => {
+    if (!lockedFromCleaningTask || !lockedPodId) return;
+    setSelectedPodId(lockedPodId);
+  }, [lockedFromCleaningTask, lockedPodId]);
+
   // ── Derived display names ──
   const selectedClusterName = selectedClusterId
     ? (clusterList.find((c) => String(c.id || '') === selectedClusterId)?.name ?? selectedClusterId)
     : 'Chưa chọn khu vực';
 
   const selectedPodName = (() => {
+    if (lockedFromCleaningTask && lockedPodName) return lockedPodName;
     if (!selectedPodId) return 'Chưa chọn pod';
     const pod = podListForCluster.find((p) => String(p.id || '') === selectedPodId);
     return pod?.name ?? (pod?.code ? `Pod ${pod.code}` : selectedPodId);
@@ -132,11 +186,18 @@ export default function ReportLostFoundScreen() {
     }
     if (!token) return;
 
+    const resolvedPodId = lockedFromCleaningTask
+      ? (lockedPodId || selectedPodId || null)
+      : (selectedPodId || null);
+    const resolvedBookingId = lockedFromCleaningTask ? (lockedBookingId || null) : null;
+
     const payload: CreateLostFoundItemPayload = {
       item_name: normalizedName,
       description: description.trim() || undefined,
-      pod_id: selectedPodId || null,
+      pod_id: resolvedPodId,
+      booking_id: resolvedBookingId,
       warehouse_id: selectedWarehouseId || null,
+      photo_local_uri: photoUri || null,
     };
 
     setCreating(true);
@@ -144,7 +205,18 @@ export default function ReportLostFoundScreen() {
 
     try {
       await createLostFoundItem(token, payload);
-      Alert.alert('Thành công', 'Đã báo cáo đồ tìm thấy.', [{ text: 'OK', onPress: () => router.back() }]);
+      Alert.alert('Thành công', 'Đã báo cáo đồ tìm thấy.', [
+        {
+          text: 'OK',
+          onPress: () => {
+            if (lockedFromCleaningTask && lockedCleaningTaskId) {
+              router.replace(`/task/checklist?taskId=${lockedCleaningTaskId}`);
+              return;
+            }
+            router.back();
+          },
+        },
+      ]);
     } catch (err) {
       setCreateError(getErrorMessage(err));
     } finally {
@@ -163,7 +235,7 @@ export default function ReportLostFoundScreen() {
 
             {/* ── Thông tin món đồ ── */}
             <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
-              <Text style={[styles.cardTitle, { color: palette.text }]}>Thông tin món đồ</Text>
+              <Text style={[styles.cardTitle, styles.itemInfoTitle, { color: '#1D4ED8' }]}>Thông tin món đồ</Text>
 
               <Text style={[styles.fieldLabel, { color: palette.text }]}>Tên món đồ *</Text>
               <TextInput
@@ -191,72 +263,85 @@ export default function ReportLostFoundScreen() {
               <Text style={[styles.cardTitle, { color: palette.text }]}>Vị trí tìm thấy</Text>
 
               {/* Cluster */}
-              <Text style={[styles.fieldLabel, { color: palette.text }]}>Khu vực (Cluster)</Text>
-              <Pressable
-                style={[styles.selector, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                onPress={() => {
-                  setShowClusterSelector((v) => !v);
-                  setShowPodSelector(false);
-                  setShowWarehouseSelector(false);
-                }}>
-                <Text style={[styles.selectorText, { color: selectedClusterId ? palette.text : palette.neutral500 }]}>
-                  {loadingLists ? 'Đang tải...' : selectedClusterName}
-                </Text>
-                <MaterialIcons
-                  name={showClusterSelector ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-                  size={20}
-                  color={palette.textMuted}
-                />
-              </Pressable>
-              {showClusterSelector && (
-                <ScrollView
-                  style={[styles.dropdownList, { borderColor: palette.border, backgroundColor: palette.background }]}
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled">
-                  {loadingLists ? (
-                    <ActivityIndicator color={palette.primary} style={{ padding: 12 }} />
-                  ) : (
-                    <>
-                      <Pressable
-                        style={[styles.dropdownItem, { borderColor: palette.border, backgroundColor: !selectedClusterId ? `${palette.primary}22` : palette.surface }]}
-                        onPress={() => { setSelectedClusterId(''); setPodListForCluster([]); setSelectedPodId(''); setShowClusterSelector(false); }}>
-                        <Text style={[styles.dropdownText, { color: palette.text }]}>Không chọn khu vực</Text>
-                      </Pressable>
-                      {clusterList.length === 0 ? (
-                        <Text style={[styles.emptyHint, { color: palette.textMuted }]}>Không có khu vực nào.</Text>
-                      ) : clusterList.map((cluster) => {
-                        const cId = String(cluster.id || '');
-                        if (!cId) return null;
-                        return (
+              {!lockedFromCleaningTask ? (
+                <>
+                  <Text style={[styles.fieldLabel, { color: palette.text }]}>Khu vực (Cluster)</Text>
+                  <Pressable
+                    style={[styles.selector, { borderColor: palette.border, backgroundColor: palette.surface }]}
+                    onPress={() => {
+                      setShowClusterSelector((v) => !v);
+                      setShowPodSelector(false);
+                      setShowWarehouseSelector(false);
+                    }}>
+                    <Text style={[styles.selectorText, { color: selectedClusterId ? palette.text : palette.neutral500 }]}>
+                      {loadingLists ? 'Đang tải...' : selectedClusterName}
+                    </Text>
+                    <MaterialIcons
+                      name={showClusterSelector ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                      size={20}
+                      color={palette.textMuted}
+                    />
+                  </Pressable>
+                  {showClusterSelector && (
+                    <ScrollView
+                      style={[styles.dropdownList, { borderColor: palette.border, backgroundColor: palette.background }]}
+                      nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled">
+                      {loadingLists ? (
+                        <ActivityIndicator color={palette.primary} style={{ padding: 12 }} />
+                      ) : (
+                        <>
                           <Pressable
-                            key={cId}
-                            style={[styles.dropdownItem, { borderColor: palette.border, backgroundColor: selectedClusterId === cId ? `${palette.primary}22` : palette.surface }]}
-                            onPress={() => { setSelectedClusterId(cId); setSelectedPodId(''); setShowClusterSelector(false); void loadPodsForCluster(cId); }}>
-                            <Text style={[styles.dropdownText, { color: palette.text }]}>{cluster.name || cId}</Text>
+                            style={[styles.dropdownItem, { borderColor: palette.border, backgroundColor: !selectedClusterId ? `${palette.primary}22` : palette.surface }]}
+                            onPress={() => { setSelectedClusterId(''); setPodListForCluster([]); setSelectedPodId(''); setShowClusterSelector(false); }}>
+                            <Text style={[styles.dropdownText, { color: palette.text }]}>Không chọn khu vực</Text>
                           </Pressable>
-                        );
-                      })}
-                    </>
+                          {clusterList.length === 0 ? (
+                            <Text style={[styles.emptyHint, { color: palette.textMuted }]}>Không có khu vực nào.</Text>
+                          ) : clusterList.map((cluster) => {
+                            const cId = String(cluster.id || '');
+                            if (!cId) return null;
+                            return (
+                              <Pressable
+                                key={cId}
+                                style={[styles.dropdownItem, { borderColor: palette.border, backgroundColor: selectedClusterId === cId ? `${palette.primary}22` : palette.surface }]}
+                                onPress={() => { setSelectedClusterId(cId); setSelectedPodId(''); setShowClusterSelector(false); void loadPodsForCluster(cId); }}>
+                                <Text style={[styles.dropdownText, { color: palette.text }]}>{cluster.name || cId}</Text>
+                              </Pressable>
+                            );
+                          })}
+                        </>
+                      )}
+                    </ScrollView>
                   )}
-                </ScrollView>
-              )}
+                </>
+              ) : null}
 
               {/* Pod */}
               <Text style={[styles.fieldLabel, { color: palette.text }]}>Pod tìm thấy</Text>
               <Pressable
-                style={[styles.selector, { borderColor: palette.border, backgroundColor: palette.surface, opacity: selectedClusterId ? 1 : 0.5 }]}
-                disabled={!selectedClusterId}
+                style={[
+                  styles.selector,
+                  {
+                    borderColor: palette.border,
+                    backgroundColor: palette.surface,
+                    opacity: lockedFromCleaningTask ? 0.75 : (selectedClusterId ? 1 : 0.5),
+                  },
+                ]}
+                disabled={lockedFromCleaningTask || !selectedClusterId}
                 onPress={() => { setShowPodSelector((v) => !v); setShowClusterSelector(false); setShowWarehouseSelector(false); }}>
                 <Text style={[styles.selectorText, { color: selectedPodId ? palette.text : palette.neutral500 }]}>
-                  {selectedClusterId ? selectedPodName : 'Chọn khu vực trước'}
+                  {lockedFromCleaningTask ? selectedPodName : (selectedClusterId ? selectedPodName : 'Chọn khu vực trước')}
                 </Text>
-                <MaterialIcons
-                  name={showPodSelector ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-                  size={20}
-                  color={palette.textMuted}
-                />
+                {!lockedFromCleaningTask ? (
+                  <MaterialIcons
+                    name={showPodSelector ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    size={20}
+                    color={palette.textMuted}
+                  />
+                ) : null}
               </Pressable>
-              {showPodSelector && (
+              {showPodSelector && !lockedFromCleaningTask && (
                 <ScrollView
                   style={[styles.dropdownList, { borderColor: palette.border, backgroundColor: palette.background }]}
                   nestedScrollEnabled
@@ -314,11 +399,6 @@ export default function ReportLostFoundScreen() {
                     <ActivityIndicator color={palette.primary} style={{ padding: 12 }} />
                   ) : (
                     <>
-                      <Pressable
-                        style={[styles.dropdownItem, { borderColor: palette.border, backgroundColor: !selectedWarehouseId ? `${palette.primary}22` : palette.surface }]}
-                        onPress={() => { setSelectedWarehouseId(''); setShowWarehouseSelector(false); }}>
-                        <Text style={[styles.dropdownText, { color: palette.text }]}>Không chọn kho</Text>
-                      </Pressable>
                       {warehouseList.length === 0 ? (
                         <Text style={[styles.emptyHint, { color: palette.textMuted }]}>Không có kho nào.</Text>
                       ) : warehouseList.map((wh) => {
@@ -336,6 +416,31 @@ export default function ReportLostFoundScreen() {
                     </>
                   )}
                 </ScrollView>
+              )}
+            </View>
+
+            {/* ── Ảnh món đồ ── */}
+            <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <Text style={[styles.cardTitle, { color: palette.text }]}>Ảnh món đồ</Text>
+              {photoUri ? (
+                <View style={{ gap: spacingY._10 }}>
+                  <Pressable onPress={() => setLightboxVisible(true)}>
+                    <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
+                  </Pressable>
+                  <Pressable
+                    style={[styles.photoRetakeBtn, { borderColor: palette.border, backgroundColor: palette.surface }]}
+                    onPress={() => void openCamera()}>
+                    <MaterialIcons name="photo-camera" size={16} color={palette.primary} />
+                    <Text style={[styles.photoRetakeText, { color: palette.primary }]}>Chụp lại</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  style={[styles.photoTriggerBtn, { borderColor: palette.primary, backgroundColor: `${palette.primary}10` }]}
+                  onPress={() => void openCamera()}>
+                  <MaterialIcons name="photo-camera" size={24} color={palette.primary} />
+                  <Text style={[styles.photoTriggerText, { color: palette.primary }]}>Chụp ảnh món đồ</Text>
+                </Pressable>
               )}
             </View>
 
@@ -361,6 +466,35 @@ export default function ReportLostFoundScreen() {
           </ScrollView>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
+
+      {/* ── Lightbox Modal ── */}
+      <Modal visible={lightboxVisible} transparent animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
+        <View style={styles.lightboxOverlay}>
+          <Pressable style={styles.lightboxClose} onPress={() => setLightboxVisible(false)}>
+            <MaterialIcons name="close" size={26} color="#fff" />
+          </Pressable>
+          {photoUri ? (
+            <Image source={{ uri: photoUri }} style={styles.lightboxImage} resizeMode="contain" />
+          ) : null}
+        </View>
+      </Modal>
+
+      {/* ── Camera Modal ── */}
+      <Modal visible={isCameraOpen} animationType="slide" statusBarTranslucent>
+        <View style={styles.cameraModalRoot}>
+          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} />
+          <View style={styles.cameraHeader}>
+            <Pressable style={styles.cameraBackBtn} onPress={() => setIsCameraOpen(false)}>
+              <MaterialIcons name="arrow-back" size={26} color="#fff" />
+            </Pressable>
+          </View>
+          <View style={styles.cameraBottomBar}>
+            <Pressable style={styles.shutterBtn} onPress={() => void handleCapturePhoto()}>
+              <View style={styles.shutterInner} />
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -383,6 +517,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+  },
+  itemInfoTitle: {
+    textAlign: 'center',
   },
   fieldLabel: {
     fontSize: 13,
@@ -456,5 +593,119 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+  },
+  photoPreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: radius._10,
+    backgroundColor: '#dbe3ef',
+  },
+  photoRetakeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacingX._5,
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingVertical: spacingY._10,
+  },
+  photoRetakeText: {
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  photoTriggerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacingX._10,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderRadius: radius._10,
+    paddingVertical: spacingY._25,
+  },
+  photoTriggerText: {
+    fontSize: 15,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  cameraModalRoot: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  cameraModalView: {
+    flex: 1,
+  },
+  cameraHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: spacingY._50,
+    paddingHorizontal: spacingX._15,
+    paddingBottom: spacingY._12,
+    backgroundColor: '#00000066',
+  },
+  cameraBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#00000060',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraBottomBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: spacingY._40,
+    alignItems: 'center',
+  },
+  shutterBtn: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+    borderColor: '#ffffff88',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  shutterInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+  },
+  lightboxOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lightboxClose: {
+    position: 'absolute',
+    top: 52,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#00000060',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  lightboxImage: {
+    width: '100%',
+    height: '80%',
   },
 });
