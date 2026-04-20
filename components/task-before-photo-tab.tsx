@@ -3,22 +3,22 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  createCleaningPhoto,
-  getCleaningPhotos,
-  getCleaningTaskById,
+    createCleaningPhoto,
+    getCleaningPhotos,
+    getCleaningTaskById,
 } from '@/services/cleaner-dashboard.service';
 import type { CleaningPhoto, CleaningTask } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
@@ -477,12 +477,12 @@ const styles = StyleSheet.create({
   },
   doneButton: {
     borderRadius: radius._10,
-    paddingVertical: 20,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
   doneButtonText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
     fontFamily: Fonts.sans,
     color: '#fff',

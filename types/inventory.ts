@@ -46,7 +46,7 @@ export interface Warehouse {
   [key: string]: unknown;
 }
 
-export type InventoryActionType = 'CHECKOUT' | 'RETURN' | 'WASTE' | 'INITIAL' | 'ADJUSTMENT';
+export type InventoryActionType = 'CHECKOUT' | 'RETURN' | 'WASTE' | 'INITIAL' | 'ADJUSTMENT' | 'CONSUMED';
 
 export interface InventoryActivityLogEntry {
   inventory_stock_id: string;

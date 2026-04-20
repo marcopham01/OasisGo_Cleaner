@@ -61,6 +61,7 @@ export const CLEANER_NOTIFICATION_EVENT_CODES = [
   'CLEANING_TASK_ASSIGNED',
   'CLEANING_TASK_SLA_REMINDER',
   'CLEANING_TASK_CANCELLED_NO_SHOW',
+  'CLEANING_TASK_CANCELLED_BOOKING_CANCELLED',
   'CLEANING_TASK_STATUS_CHANGED',
   'SUPPORT_CLEANING_REQUEST',
   'SHIFT_ASSIGNED',
@@ -311,8 +312,10 @@ export interface CleaningTask {
   pod_cluster_name?: string | null;
   location_id?: string | null;
   location_name?: string | null;
+  booking_order_id?: string | null;
   booking_guest_id?: string | null;
   booking_guest_name?: string | null;
+  booking_user_name?: string | null;
   booking_start_time?: string | null;
   booking_end_time?: string | null;
   booking_actual_end_time?: string | null;
@@ -607,6 +610,7 @@ export interface PodItemEntry {
   pod_id?: string;
   item_id?: string;
   item_name?: string | null;
+  item_type?: string | null;
   expected_quantity?: number;
   current_quantity?: number;
   status?: 'IN_STOCK' | 'MISSING' | 'OVERSTOCKED' | string;
@@ -615,8 +619,18 @@ export interface PodItemEntry {
   item?: {
     id?: string;
     name?: string;
+    item_type?: string;
     unit_price?: number;
   } | null;
+  [key: string]: unknown;
+}
+
+export interface PodItemsByPodData {
+  pod_id?: string;
+  pod_name?: string;
+  pod_code?: string;
+  count?: number;
+  items: PodItemEntry[];
   [key: string]: unknown;
 }
 

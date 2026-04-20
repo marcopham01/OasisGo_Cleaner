@@ -1,10 +1,8 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     FlatList,
     Pressable,
     RefreshControl,
@@ -18,21 +16,18 @@ import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
-    getDamageReports,
     getMyNotifications,
     getMyUnreadNotificationCount,
     markAllNotificationsAsRead,
     markNotificationAsRead,
 } from '@/services/cleaner-dashboard.service';
-import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
+import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import {
     decrementNotificationBadge,
     setNotificationBadgeCount,
     subscribeNotificationBadge,
 } from '@/services/notification-badge-bus';
-import type { CleanerNotification, DamageReportResponse } from '@/types/cleaner-dashboard';
-
-type HistoryTabKey = 'NOTIFICATIONS' | 'INCIDENTS';
+import type { CleanerNotification } from '@/types/cleaner-dashboard';
 
 function normalizeToken(value?: string | null) {
   return String(value || '')
@@ -40,35 +35,191 @@ function normalizeToken(value?: string | null) {
     .toUpperCase();
 }
 
-function getTypeBadge(type: unknown, palette: typeof Colors.light) {
+function isInternalCodeText(value: unknown) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return false;
+  }
+
+  const normalized = normalizeToken(text);
+  return /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(normalized);
+}
+
+function sanitizeNotificationText(value: unknown, fallback: string) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return fallback;
+  }
+
+  if (isInternalCodeText(text)) {
+    return fallback;
+  }
+
+  return text;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function resolveNotificationType(item: CleanerNotification) {
+  const normalizedType = normalizeToken(typeof item.type === 'string' ? item.type : null);
+  if (normalizedType) {
+    return normalizedType;
+  }
+
+  const data = toRecord(item.data);
+  const fallbackType = String(data.type || data.notification_type || data.category || '').trim();
+  return normalizeToken(fallbackType);
+}
+
+function resolveNotificationEventCode(item: CleanerNotification) {
+  const normalizedEventCode = normalizeToken(
+    typeof item.event_code === 'string' ? item.event_code : null,
+  );
+  if (normalizedEventCode) {
+    return normalizedEventCode;
+  }
+
+  const data = toRecord(item.data);
+  const fallbackEventCode = String(
+    item.event ||
+      item.code ||
+      data.event_code ||
+      data.event ||
+      data.code ||
+      data.notification_event ||
+      '',
+  ).trim();
+
+  return normalizeToken(fallbackEventCode);
+}
+
+function getTypeVisual(type: unknown, eventCode: unknown, palette: typeof Colors.light) {
   const normalized = normalizeToken(typeof type === 'string' ? type : null);
+  const normalizedEventCode = normalizeToken(typeof eventCode === 'string' ? eventCode : null);
 
   if (normalized === 'SHIFT') {
-    return { label: 'Ca làm', textColor: palette.primaryDark, bgColor: palette.primaryBg };
+    return {
+      iconName: 'schedule' as const,
+      iconColor: '#1d4ed8',
+      iconBgColor: 'rgba(37, 99, 235, 0.16)',
+      cardBgColor: 'rgba(37, 99, 235, 0.08)',
+      cardBorderColor: 'rgba(37, 99, 235, 0.22)',
+      unreadBorderColor: 'rgba(37, 99, 235, 0.45)',
+    };
   }
+
   if (normalized === 'CLEANING') {
-    return { label: 'Vệ sinh', textColor: palette.success, bgColor: palette.secondaryBg };
+    if (
+      normalizedEventCode === 'CLEANING_TASK_CANCELLED_NO_SHOW' ||
+      normalizedEventCode === 'CLEANING_TASK_CANCELLED_BOOKING_CANCELLED' ||
+      normalizedEventCode === 'CLEANING_TASK_CANCENLLED_BOOKING_CANCELLED'
+    ) {
+      return {
+        iconName: 'event-busy' as const,
+        iconColor: '#334155',
+        iconBgColor: 'rgba(100, 116, 139, 0.18)',
+        cardBgColor: 'rgba(148, 163, 184, 0.12)',
+        cardBorderColor: 'rgba(100, 116, 139, 0.3)',
+        unreadBorderColor: 'rgba(51, 65, 85, 0.5)',
+      };
+    }
+
+    if (normalizedEventCode === 'CLEANING_TASK_ASSIGNED') {
+      return {
+        iconName: 'assignment-late' as const,
+        iconColor: '#0f766e',
+        iconBgColor: 'rgba(20, 184, 166, 0.16)',
+        cardBgColor: 'rgba(20, 184, 166, 0.08)',
+        cardBorderColor: 'rgba(20, 184, 166, 0.22)',
+        unreadBorderColor: 'rgba(20, 184, 166, 0.45)',
+      };
+    }
+
+    if (normalizedEventCode === 'CLEANING_TASK_SLA_REMINDER') {
+      return {
+        iconName: 'warning-amber' as const,
+        iconColor: '#b45309',
+        iconBgColor: 'rgba(245, 158, 11, 0.2)',
+        cardBgColor: 'rgba(245, 158, 11, 0.1)',
+        cardBorderColor: 'rgba(245, 158, 11, 0.28)',
+        unreadBorderColor: 'rgba(180, 83, 9, 0.5)',
+      };
+    }
+
+    return {
+      iconName: 'cleaning-services' as const,
+      iconColor: '#15803d',
+      iconBgColor: 'rgba(22, 163, 74, 0.16)',
+      cardBgColor: 'rgba(22, 163, 74, 0.08)',
+      cardBorderColor: 'rgba(22, 163, 74, 0.22)',
+      unreadBorderColor: 'rgba(22, 163, 74, 0.45)',
+    };
   }
+
   if (normalized === 'INCIDENT') {
-    return { label: 'Sự cố', textColor: palette.error, bgColor: 'rgba(244, 63, 94, 0.14)' };
+    return {
+      iconName: 'warning-amber' as const,
+      iconColor: '#e11d48',
+      iconBgColor: 'rgba(244, 63, 94, 0.16)',
+      cardBgColor: 'rgba(244, 63, 94, 0.08)',
+      cardBorderColor: 'rgba(244, 63, 94, 0.22)',
+      unreadBorderColor: 'rgba(244, 63, 94, 0.45)',
+    };
   }
+
   if (normalized === 'BOOKING') {
-    return { label: 'Đặt chỗ', textColor: palette.warning, bgColor: 'rgba(245, 158, 11, 0.16)' };
+    return {
+      iconName: 'event-note' as const,
+      iconColor: '#b45309',
+      iconBgColor: 'rgba(245, 158, 11, 0.18)',
+      cardBgColor: 'rgba(245, 158, 11, 0.08)',
+      cardBorderColor: 'rgba(245, 158, 11, 0.24)',
+      unreadBorderColor: 'rgba(245, 158, 11, 0.5)',
+    };
   }
+
+  if (normalized === 'SUPPORT') {
+    return {
+      iconName: 'support-agent' as const,
+      iconColor: '#0369a1',
+      iconBgColor: 'rgba(14, 165, 233, 0.16)',
+      cardBgColor: 'rgba(14, 165, 233, 0.08)',
+      cardBorderColor: 'rgba(14, 165, 233, 0.22)',
+      unreadBorderColor: 'rgba(14, 165, 233, 0.45)',
+    };
+  }
+
   if (normalized === 'INVENTORY') {
-    return { label: 'Vật tư', textColor: '#7c3aed', bgColor: 'rgba(124, 58, 237, 0.12)' };
+    return {
+      iconName: 'inventory-2' as const,
+      iconColor: '#6d28d9',
+      iconBgColor: 'rgba(124, 58, 237, 0.16)',
+      cardBgColor: 'rgba(124, 58, 237, 0.08)',
+      cardBorderColor: 'rgba(124, 58, 237, 0.22)',
+      unreadBorderColor: 'rgba(124, 58, 237, 0.45)',
+    };
   }
-  if (normalized === 'SHIFT') {
-    return { label: 'Ca làm', textColor: palette.primaryDark, bgColor: palette.primaryBg };
-  }
+
   if (normalized === 'SYSTEM') {
-    return { label: 'Hệ thống', textColor: palette.textMuted, bgColor: palette.border };
+    return {
+      iconName: 'settings' as const,
+      iconColor: palette.textMuted,
+      iconBgColor: palette.border,
+      cardBgColor: palette.surface,
+      cardBorderColor: palette.border,
+      unreadBorderColor: palette.primary,
+    };
   }
 
   return {
-    label: normalized || 'Khác',
-    textColor: palette.textMuted,
-    bgColor: palette.border,
+    iconName: 'notifications-active' as const,
+    iconColor: palette.primary,
+    iconBgColor: palette.primaryBg,
+    cardBgColor: palette.surface,
+    cardBorderColor: palette.border,
+    unreadBorderColor: palette.primary,
   };
 }
 
@@ -130,6 +281,11 @@ function getEventCodeLabel(eventCode: unknown) {
       return 'Cảnh báo sắp quá hạn SLA';
     case 'CLEANING_TASK_CANCELLED_NO_SHOW':
       return 'Hủy nhiệm vụ do NO_SHOW';
+    case 'CLEANING_TASK_CANCELLED_BOOKING_CANCELLED':
+      return 'Nhiệm vụ đã hủy do đặt phòng bị hủy';
+    // Backward compatibility for backend typo variant.
+    case 'CLEANING_TASK_CANCENLLED_BOOKING_CANCELLED':
+      return 'Nhiệm vụ đã hủy do đặt phòng bị hủy';
     case 'CLEANING_TASK_STATUS_CHANGED':
       return 'Trạng thái nhiệm vụ đã thay đổi';
     case 'SUPPORT_CLEANING_REQUEST':
@@ -156,8 +312,10 @@ function getEventCodeLabel(eventCode: unknown) {
       return 'Yêu cầu đã được escalation';
     case 'SUPPORT_ROOM_CHANGED':
       return 'Phòng đã thay đổi';
+    case 'ROOM_CHANGE_VACATED':
+      return 'Khách đã đổi phòng (dọn pod cũ)';
     default:
-      return code || 'Thông báo hệ thống';
+      return '';
   }
 }
 
@@ -169,14 +327,6 @@ function sortByNewest(items: CleanerNotification[]) {
     const bTime =
       new Date(String(b.createdAt || b.sent_at || b.updatedAt || 0)).getTime() ||
       0;
-    return bTime - aTime;
-  });
-}
-
-function sortIncidentsByNewest(items: DamageReportResponse[]) {
-  return [...items].sort((a, b) => {
-    const aTime = new Date(String(a.created_at || a.updated_at || 0)).getTime() || 0;
-    const bTime = new Date(String(b.created_at || b.updated_at || 0)).getTime() || 0;
     return bTime - aTime;
   });
 }
@@ -197,61 +347,6 @@ function formatDateTime(value?: string | null) {
   });
 }
 
-function formatCurrencyVnd(value?: number | null) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return null;
-  }
-
-  return `${new Intl.NumberFormat('vi-VN').format(value)} đ`;
-}
-
-function getIncidentStatusBadge(status: unknown, palette: typeof Colors.light) {
-  const normalized = normalizeToken(typeof status === 'string' ? status : null);
-
-  if (normalized === 'PENDING') {
-    return { label: 'Đang chờ duyệt', textColor: palette.warning, bgColor: 'rgba(245, 158, 11, 0.16)' };
-  }
-
-  if (normalized === 'RESOLVED') {
-    return { label: 'Đã xử lý', textColor: palette.success, bgColor: palette.secondaryBg };
-  }
-
-  if (normalized === 'DISMISSED') {
-    return { label: 'Bị bác bỏ', textColor: palette.error, bgColor: 'rgba(244, 63, 94, 0.14)' };
-  }
-
-  return {
-    label: normalized || 'Không xác định',
-    textColor: palette.textMuted,
-    bgColor: palette.border,
-  };
-}
-
-function getIncidentSeverityBadge(severity: unknown, palette: typeof Colors.light) {
-  const normalized = normalizeToken(typeof severity === 'string' ? severity : null);
-
-  if (normalized === 'LOW') {
-    return { label: 'Thấp', textColor: palette.success, bgColor: palette.secondaryBg };
-  }
-
-  if (normalized === 'MEDIUM') {
-    return { label: 'Trung bình', textColor: palette.warning, bgColor: 'rgba(245, 158, 11, 0.16)' };
-  }
-
-  if (normalized === 'HIGH') {
-    return { label: 'Cao', textColor: '#b45309', bgColor: 'rgba(251, 191, 36, 0.2)' };
-  }
-
-  if (normalized === 'CRITICAL') {
-    return { label: 'Nghiêm trọng', textColor: palette.error, bgColor: 'rgba(244, 63, 94, 0.14)' };
-  }
-
-  return {
-    label: normalized || 'Không xác định',
-    textColor: palette.textMuted,
-    bgColor: palette.border,
-  };
-}
 
 function resolveNotificationTaskId(item: CleanerNotification) {
   const data = (item.data || {}) as Record<string, unknown>;
@@ -270,26 +365,28 @@ function resolveNotificationTaskId(item: CleanerNotification) {
 }
 
 function isCleaningNotification(item: CleanerNotification) {
-  const type = normalizeToken(typeof item.type === 'string' ? item.type : null);
-  const event = normalizeToken(typeof item.event_code === 'string' ? item.event_code : null);
+  const type = resolveNotificationType(item);
+  const event = resolveNotificationEventCode(item);
 
   return (
     type === 'CLEANING' ||
     event.startsWith('CLEANING_TASK_') ||
-    event === 'SUPPORT_CLEANING_REQUEST'
+    event === 'SUPPORT_CLEANING_REQUEST' ||
+    event === 'ROOM_CHANGE_VACATED' ||
+    event === 'SUPPORT_ROOM_CHANGED'
   );
 }
 
 function isShiftNotification(item: CleanerNotification) {
-  const type = normalizeToken(typeof item.type === 'string' ? item.type : null);
-  const event = normalizeToken(typeof item.event_code === 'string' ? item.event_code : null);
+  const type = resolveNotificationType(item);
+  const event = resolveNotificationEventCode(item);
 
   return type === 'SHIFT' || event.startsWith('SHIFT_');
 }
 
 function isInventoryNotification(item: CleanerNotification) {
-  const type = normalizeToken(typeof item.type === 'string' ? item.type : null);
-  const event = normalizeToken(typeof item.event_code === 'string' ? item.event_code : null);
+  const type = resolveNotificationType(item);
+  const event = resolveNotificationEventCode(item);
 
   return type === 'INVENTORY' || event.startsWith('INVENTORY_');
 }
@@ -300,9 +397,7 @@ export default function HistoryScreen() {
   const palette = Colors[theme];
   const { user, token } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<HistoryTabKey>('NOTIFICATIONS');
   const [items, setItems] = useState<CleanerNotification[]>([]);
-  const [incidentItems, setIncidentItems] = useState<DamageReportResponse[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -335,14 +430,12 @@ export default function HistoryScreen() {
       }
 
       try {
-        const [listResult, unread, reportResult] = await Promise.all([
+        const [listResult, unread] = await Promise.all([
           getMyNotifications(token, { page: 1, limit: 50 }),
           getMyUnreadNotificationCount(token),
-          getDamageReports(token, { page: 1, limit: 50 }),
         ]);
 
         setItems(sortByNewest(listResult.data));
-        setIncidentItems(sortIncidentsByNewest(reportResult.items));
         setNotificationBadgeCount(unread);
       } finally {
         if (isRefresh) {
@@ -369,22 +462,18 @@ export default function HistoryScreen() {
   }, [canLoad, loadHistoryData]);
 
   useEffect(() => {
-    if (!token || !user?.id) {
+    if (!token) {
       return;
     }
 
-    const disconnect = connectCleanerNotificationSocket({
-      token,
-      cleanerId: user.id,
-      onNotification: () => {
-        loadHistoryData({ silent: true }).catch(() => null);
-      },
+    const unsubscribe = subscribeCleanerRealtimeEvent(() => {
+      loadHistoryData({ silent: true }).catch(() => null);
     });
 
     return () => {
-      disconnect();
+      unsubscribe();
     };
-  }, [loadHistoryData, token, user?.id]);
+  }, [loadHistoryData, token]);
 
   const handleMarkAsRead = useCallback(
     async (item: CleanerNotification) => {
@@ -443,12 +532,8 @@ export default function HistoryScreen() {
       return 'Vui lòng đăng nhập để xem lịch sử.';
     }
 
-    if (activeTab === 'INCIDENTS') {
-      return 'Bạn chưa gửi incident nào.';
-    }
-
     return 'Chưa có thông báo nào.';
-  }, [activeTab, canLoad]);
+  }, [canLoad]);
 
   const handleNotificationPress = useCallback(
     async (item: CleanerNotification) => {
@@ -464,12 +549,13 @@ export default function HistoryScreen() {
         return;
       }
 
-      if (!isCleaningNotification(item)) {
+      const taskId = resolveNotificationTaskId(item);
+      if (!taskId && !isCleaningNotification(item)) {
         return;
       }
 
-      const taskId = resolveNotificationTaskId(item);
       if (!taskId) {
+        router.push('/(tabs)/history');
         return;
       }
 
@@ -484,7 +570,11 @@ export default function HistoryScreen() {
   const renderItem = useCallback(
     ({ item }: { item: CleanerNotification }) => {
       const isUnread = item.is_read === false;
-      const typeBadge = getTypeBadge(item.type, palette);
+      const resolvedType = resolveNotificationType(item);
+      const resolvedEventCode = resolveNotificationEventCode(item);
+      const titleText = sanitizeNotificationText(item.title, 'Thông báo mới');
+      const messageText = sanitizeNotificationText(item.message, 'Bạn có cập nhật mới cần xem.');
+      const typeVisual = getTypeVisual(resolvedType, resolvedEventCode, palette);
       const deliveryBadge = getDeliveryStatusBadge(item.delivery_status, palette);
 
       return (
@@ -495,119 +585,48 @@ export default function HistoryScreen() {
           style={[
             styles.itemCard,
             {
-              backgroundColor: palette.surface,
-              borderColor: isUnread ? palette.primary : palette.border,
+              backgroundColor: typeVisual.cardBgColor,
+              borderColor: isUnread ? typeVisual.unreadBorderColor : typeVisual.cardBorderColor,
             },
           ]}>
-          <View style={styles.itemHeaderRow}>
-            <Text style={[styles.itemTitle, { color: palette.text }]} numberOfLines={2}>
-              {item.title || 'Thông báo'}
-            </Text>
-            {isUnread ? (
-              <View style={[styles.unreadDot, { backgroundColor: palette.primary }]} />
-            ) : null}
-          </View>
-
-          <Text style={[styles.itemMessage, { color: palette.textMuted }]}>{item.message || '-'}</Text>
-
-          <View style={styles.badgeRow}>
-            <View style={[styles.badgeChip, { backgroundColor: typeBadge.bgColor }]}> 
-              <Text style={[styles.badgeText, { color: typeBadge.textColor }]}>{typeBadge.label}</Text>
+          <View style={styles.itemMainRow}>
+            <View style={[styles.itemTypeIconWrap, { backgroundColor: typeVisual.iconBgColor }]}>
+              <MaterialIcons name={typeVisual.iconName} size={18} color={typeVisual.iconColor} />
             </View>
-            {deliveryBadge ? (
-              <View style={[styles.badgeChip, { backgroundColor: deliveryBadge.bgColor }]}>
-                <Text style={[styles.badgeText, { color: deliveryBadge.textColor }]}>
-                  {deliveryBadge.label}
+
+            <View style={styles.itemContentWrap}>
+              <View style={styles.itemHeaderRow}>
+                <Text style={[styles.itemTitle, { color: palette.text }]} numberOfLines={2}>
+                  {titleText}
+                </Text>
+                {isUnread ? (
+                  <View style={[styles.unreadDot, { backgroundColor: typeVisual.iconColor }]} />
+                ) : null}
+              </View>
+
+              <Text style={[styles.itemMessage, { color: palette.textMuted }]}>{messageText}</Text>
+
+              {deliveryBadge ? (
+                <View style={styles.badgeRow}>
+                  <View style={[styles.badgeChip, { backgroundColor: deliveryBadge.bgColor }]}>
+                    <Text style={[styles.badgeText, { color: deliveryBadge.textColor }]}>
+                      {deliveryBadge.label}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={[styles.metaRow, styles.metaRowOnlyDate]}>
+                <Text style={[styles.metaText, { color: palette.textMuted }]}>
+                  {formatDateTime(item.createdAt || item.sent_at)}
                 </Text>
               </View>
-            ) : null}
-          </View>
-
-          <View style={styles.metaRow}>
-            <Text style={[styles.metaText, { color: palette.textMuted }]}>
-              {getEventCodeLabel(item.event_code)}
-            </Text>
-            <Text style={[styles.metaText, { color: palette.textMuted }]}>
-              {formatDateTime(item.createdAt || item.sent_at)}
-            </Text>
+            </View>
           </View>
         </Pressable>
       );
     },
     [handleNotificationPress, palette],
-  );
-
-  const renderIncidentItem = useCallback(
-    ({ item }: { item: DamageReportResponse }) => {
-      const statusBadge = getIncidentStatusBadge(item.status, palette);
-      const severityBadge = getIncidentSeverityBadge(item.severity, palette);
-      const totalValue = formatCurrencyVnd(item.pricing?.estimated_total_value);
-      const podName = item.context?.pod_name || item.context?.pod_id || 'Không rõ Pod';
-      const incidentId = String(item.report_id || '').trim();
-      const photoCount = Array.isArray(item.photo_urls) ? item.photo_urls.length : 0;
-      const copyIncidentId = () => {
-        if (!incidentId) return;
-        Clipboard.setStringAsync(incidentId)
-          .then(() => {
-            Alert.alert('Đã sao chép', `Mã báo cáo: ${incidentId}`);
-          })
-          .catch(() => {
-            Alert.alert('Không thể sao chép', 'Vui lòng thử lại.');
-          });
-      };
-
-      return (
-        <View
-          style={[
-            styles.itemCard,
-            {
-              backgroundColor: palette.surface,
-              borderColor: palette.border,
-            },
-          ]}>
-          <View style={styles.itemHeaderRow}>
-            <Text style={[styles.itemTitle, { color: palette.text }]} numberOfLines={2}>
-              {item.description || 'Báo cáo sự cố'}
-            </Text>
-          </View>
-
-          <View style={styles.badgeRow}>
-            <View style={[styles.badgeChip, { backgroundColor: statusBadge.bgColor }]}> 
-              <Text style={[styles.badgeText, { color: statusBadge.textColor }]}>{statusBadge.label}</Text>
-            </View>
-            <View style={[styles.badgeChip, { backgroundColor: severityBadge.bgColor }]}> 
-              <Text style={[styles.badgeText, { color: severityBadge.textColor }]}>{severityBadge.label}</Text>
-            </View>
-          </View>
-
-          <View style={styles.incidentMetaWrap}>
-            <Text style={[styles.metaText, { color: palette.textMuted }]}>Pod: {podName}</Text>
-            {totalValue ? (
-              <Text style={[styles.metaText, { color: palette.textMuted }]}>Ước tính: {totalValue}</Text>
-            ) : null}
-            <Text style={[styles.metaText, { color: palette.textMuted }]}>Ảnh đính kèm: {photoCount}</Text>
-            {incidentId ? (
-              <View style={styles.reportIdRow}>
-                <Text style={[styles.metaText, { color: palette.textMuted }]}>Mã báo cáo:</Text>
-                <Text
-                  style={[styles.metaText, styles.reportIdText, { color: palette.textMuted }]}
-                  numberOfLines={1}
-                  ellipsizeMode="head">
-                  {incidentId}
-                </Text>
-                <Pressable onPress={copyIncidentId} style={styles.copyReportButton} hitSlop={8}>
-                  <MaterialIcons name="content-copy" size={14} color={palette.textMuted} />
-                </Pressable>
-              </View>
-            ) : null}
-            <Text style={[styles.metaText, { color: palette.textMuted }]}>
-              {formatDateTime(item.created_at || item.updated_at)}
-            </Text>
-          </View>
-        </View>
-      );
-    },
-    [palette],
   );
 
   return (
@@ -621,81 +640,33 @@ export default function HistoryScreen() {
               borderColor: palette.border,
             },
           ]}>
-          <Text style={[styles.headerTitle, { color: palette.text }]}>
+          <Text style={[styles.headerTitle, { color: palette.primary }]}>
             Thông báo của {user?.name || 'Cleaner'}
-          </Text>
-          <Text style={[styles.headerSubtitle, { color: palette.textMuted }]}>
-            Xin chào, {user?.name || 'Cleaner'}.
           </Text>
           <View style={styles.summaryRow}>
             <View style={styles.summaryStats}>
-              <Text style={[styles.unreadText, { color: palette.primary }]}>Chưa đọc: {unreadCount}</Text>
-              <Text style={[styles.unreadText, { color: palette.textMuted }]}>Incident: {incidentItems.length}</Text>
+              <Text style={[styles.unreadText, { color: palette.white }]}>Chưa đọc: {unreadCount}</Text>
             </View>
             <Pressable
-              disabled={activeTab !== 'NOTIFICATIONS' || isMarkingAll || unreadCount <= 0}
+              disabled={isMarkingAll || unreadCount <= 0}
               onPress={() => {
                 handleMarkAllAsRead().catch(() => null);
               }}
               style={[
                 styles.markAllButton,
                 {
-                  backgroundColor:
-                    activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primaryBg : palette.border,
+                  backgroundColor: unreadCount > 0 ? palette.primaryBg : palette.border,
                 },
               ]}>
               <Text
                 style={[
                   styles.markAllText,
                   {
-                    color:
-                      activeTab === 'NOTIFICATIONS' && unreadCount > 0 ? palette.primary : palette.textMuted,
+                    color: unreadCount > 0 ? palette.primary : palette.textMuted,
                   },
                 ]}
                 numberOfLines={1}>
                 Đánh dấu đã đọc
-              </Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.switchRow}>
-            <Pressable
-              onPress={() => {
-                setActiveTab('NOTIFICATIONS');
-              }}
-              style={[
-                styles.switchButton,
-                {
-                  backgroundColor: activeTab === 'NOTIFICATIONS' ? palette.primaryBg : palette.surface,
-                  borderColor: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.border,
-                },
-              ]}>
-              <Text
-                style={[
-                  styles.switchButtonText,
-                  { color: activeTab === 'NOTIFICATIONS' ? palette.primary : palette.textMuted },
-                ]}>
-                Thông báo
-              </Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => {
-                setActiveTab('INCIDENTS');
-              }}
-              style={[
-                styles.switchButton,
-                {
-                  backgroundColor: activeTab === 'INCIDENTS' ? palette.primaryBg : palette.surface,
-                  borderColor: activeTab === 'INCIDENTS' ? palette.primary : palette.border,
-                },
-              ]}>
-              <Text
-                style={[
-                  styles.switchButtonText,
-                  { color: activeTab === 'INCIDENTS' ? palette.primary : palette.textMuted },
-                ]}>
-                Báo cáo hư hại
               </Text>
             </Pressable>
           </View>
@@ -706,41 +677,12 @@ export default function HistoryScreen() {
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={palette.primary} />
         </View>
-      ) : activeTab === 'NOTIFICATIONS' ? (
-        <FlatList
-          data={items}
-          keyExtractor={(item) => String(item.id || item._id || `${item.event_code}-${item.createdAt}`)}
-          contentContainerStyle={styles.listContainer}
-          renderItem={renderItem}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              tintColor={palette.primary}
-              onRefresh={() => {
-                loadHistoryData({ isRefresh: true }).catch(() => null);
-              }}
-            />
-          }
-          ListEmptyComponent={
-            <View
-              style={[
-                styles.infoCard,
-                {
-                  backgroundColor: palette.surface,
-                  borderColor: palette.border,
-                },
-              ]}>
-              <Text style={[styles.infoTitle, { color: palette.text }]}>Chưa có dữ liệu</Text>
-              <Text style={[styles.infoDescription, { color: palette.textMuted }]}>{emptyText}</Text>
-            </View>
-          }
-        />
       ) : (
         <FlatList
-          data={incidentItems}
-          keyExtractor={(item) => String(item.report_id || `${item.created_at}-${item.description}`)}
+          data={items}
+          keyExtractor={(item) => String(item.id || item._id || `${resolveNotificationEventCode(item)}-${item.createdAt}`)}
           contentContainerStyle={styles.listContainer}
-          renderItem={renderIncidentItem}
+          renderItem={renderItem}
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
@@ -776,6 +718,7 @@ const styles = StyleSheet.create({
   headerWrap: {
     paddingTop: spacingY._12,
     paddingHorizontal: spacingX._20,
+    paddingBottom: spacingY._10,
   },
   loadingWrap: {
     flex: 1,
@@ -797,11 +740,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     fontFamily: Fonts.sans,
-  },
-  headerSubtitle: {
-    marginTop: spacingY._7,
-    fontSize: 13,
-    fontFamily: Fonts.sans,
+    textAlign: 'center',
   },
   summaryRow: {
     marginTop: spacingY._10,
@@ -818,26 +757,6 @@ const styles = StyleSheet.create({
     gap: spacingX._10,
     flexShrink: 1,
     minWidth: 0,
-  },
-  switchRow: {
-    marginTop: spacingY._10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacingX._10,
-  },
-  switchButton: {
-    flex: 1,
-    borderRadius: radius._10,
-    borderWidth: 1,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._7,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  switchButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
   },
   unreadText: {
     fontSize: 13,
@@ -860,6 +779,24 @@ const styles = StyleSheet.create({
     borderRadius: radius._15,
     borderWidth: 1,
     padding: spacingX._15,
+  },
+  itemMainRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacingX._10,
+  },
+  itemTypeIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginTop: spacingY._5,
+  },
+  itemContentWrap: {
+    flex: 1,
+    minWidth: 0,
     gap: spacingY._7,
   },
   itemHeaderRow: {
@@ -907,29 +844,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacingX._10,
   },
+  metaRowOnlyDate: {
+    justifyContent: 'flex-end',
+  },
   metaText: {
     fontSize: 11,
     fontFamily: Fonts.mono,
-  },
-  incidentMetaWrap: {
-    marginTop: spacingY._5,
-    gap: spacingY._5,
-  },
-  reportIdRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacingX._7,
-  },
-  reportIdText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  copyReportButton: {
-    width: 22,
-    height: 22,
-    borderRadius: radius._6,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   infoCard: {
     borderRadius: radius._15,

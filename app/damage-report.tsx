@@ -139,19 +139,33 @@ export default function DamageReportScreen() {
       getDamageServiceCatalogs(token).catch((): DamageServiceCatalogItem[] => []),
     ])
       .then(([assignments, clusters, drItems, drServices]) => {
-        setClusterList(clusters);
+        const assignmentLocationIds = new Set(
+          assignments
+            .map((assignment) => String(assignment.location?.id || '').trim())
+            .filter(Boolean),
+        );
+
+        const scopedClusters = assignmentLocationIds.size > 0
+          ? clusters.filter((cluster) => assignmentLocationIds.has(String(cluster.location_id || '').trim()))
+          : [];
+
+        setClusterList(scopedClusters);
         setItems(drItems.filter((it) => String(it.id || '').trim()));
         setServices(drServices);
 
-        const shiftLocationId = (assignments[0] as StaffShiftAssignment | undefined)?.location?.id;
+        const shiftLocationId = String((assignments[0] as StaffShiftAssignment | undefined)?.location?.id || '').trim();
         const matched = shiftLocationId
-          ? clusters.find((c) => String(c.location_id || '') === String(shiftLocationId))
+          ? scopedClusters.find((c) => String(c.location_id || '').trim() === shiftLocationId)
           : undefined;
-        const def = matched ?? clusters[0];
+        const def = matched ?? scopedClusters[0];
         if (def?.id) {
           const id = String(def.id);
           setSelectedClusterId(id);
           void loadPodsForCluster(id);
+        } else {
+          setSelectedClusterId('');
+          setSelectedPodId('');
+          setPodList([]);
         }
       })
       .catch(() => null)

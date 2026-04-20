@@ -1,11 +1,12 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Clipboard from 'expo-clipboard';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Image,
+    Modal,
     Pressable,
     RefreshControl,
     ScrollView,
@@ -15,6 +16,7 @@ import {
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
+import { apiClient } from '@/services/api';
 import {
     getDamageReports,
     getMyLostFoundItems,
@@ -56,6 +58,22 @@ interface LostFoundTabProps {
   onErrorChange?: (error: string | null) => void;
 }
 
+function resolveMediaBaseUrl() {
+  const envBase = String(process.env.EXPO_PUBLIC_API_URL || '').trim().replace(/\/+$/, '');
+  if (envBase) {
+    return envBase;
+  }
+
+  const clientBase = String(apiClient.defaults.baseURL || '').trim().replace(/\/+$/, '');
+  if (!clientBase) {
+    return '';
+  }
+
+  return clientBase.replace(/\/api$/i, '');
+}
+
+const MEDIA_BASE_URL = resolveMediaBaseUrl();
+
 const LOST_FOUND_STATUS_TRANSITIONS: Record<string, LostFoundStatus[]> = {
   FOUND: ['CLAIMED', 'DISPOSED', 'RETURNED_TO_USER'],
   CLAIMED: ['RETURNED_TO_USER'],
@@ -75,6 +93,65 @@ function formatDateTime(dateText?: string | null) {
         hour: '2-digit',
         minute: '2-digit',
       });
+}
+
+function toPhotoUrl(value: unknown) {
+  const url = String(value || '').trim();
+  if (!url) return '';
+
+  if (/^https?:\/\//i.test(url) || /^data:image\//i.test(url) || /^file:\/\//i.test(url)) {
+    return url;
+  }
+
+  if ((url.startsWith('/') || url.startsWith('./')) && MEDIA_BASE_URL) {
+    const normalizedPath = url.startsWith('./') ? url.slice(1) : url;
+    return `${MEDIA_BASE_URL}${normalizedPath.startsWith('/') ? '' : '/'}${normalizedPath}`;
+  }
+
+  return '';
+}
+
+function resolveLostFoundPhotoUrls(item: LostFoundItem) {
+  const bucket = new Set<string>();
+
+  const pushIfValid = (candidate: unknown) => {
+    const resolved = toPhotoUrl(candidate);
+    if (resolved) {
+      bucket.add(resolved);
+    }
+  };
+
+  pushIfValid(item.photo_url);
+
+  const genericRecord = item as Record<string, unknown>;
+
+  const photoUrls = genericRecord.photo_urls;
+  if (Array.isArray(photoUrls)) {
+    photoUrls.forEach((entry) => pushIfValid(entry));
+  }
+
+  const photos = genericRecord.photos;
+  if (Array.isArray(photos)) {
+    photos.forEach((entry) => {
+      if (typeof entry === 'string') {
+        pushIfValid(entry);
+        return;
+      }
+
+      if (entry && typeof entry === 'object') {
+        const photoObj = entry as Record<string, unknown>;
+        pushIfValid(photoObj.photo_url);
+        pushIfValid(photoObj.url);
+        pushIfValid(photoObj.secure_url);
+        pushIfValid(photoObj.uri);
+      }
+    });
+  }
+
+  pushIfValid(genericRecord.image_url);
+  pushIfValid(genericRecord.image);
+
+  return Array.from(bucket);
 }
 
 function itemId(item: LostFoundItem) {
@@ -122,14 +199,33 @@ function drSeverityInfo(severity: string, palette: typeof Colors.light) {
 }
 
 export default function LostFoundTab({ token, isDark, palette, onErrorChange }: LostFoundTabProps) {
+  const params = useLocalSearchParams<{
+    listTab?: string;
+    tab?: string;
+    section?: string;
+  }>();
   const [items, setItems] = useState<LostFoundItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   // List sub-tab
   const [activeListTab, setActiveListTab] = useState<'LOST_FOUND' | 'DAMAGE'>('LOST_FOUND');
   const [damageReports, setDamageReports] = useState<DamageReportResponse[]>([]);
+
+  useEffect(() => {
+    const requestedTab = String(params.listTab || params.tab || params.section || '')
+      .trim()
+      .toUpperCase();
+    if (requestedTab === 'DAMAGE') {
+      setActiveListTab('DAMAGE');
+      return;
+    }
+    if (requestedTab === 'LOST_FOUND') {
+      setActiveListTab('LOST_FOUND');
+    }
+  }, [params.listTab, params.section, params.tab]);
 
   const loadItems = useCallback(async (opts?: { isRefresh?: boolean }) => {
     if (opts?.isRefresh) {
@@ -186,6 +282,10 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
     } finally {
       setUpdatingItemId(null);
     }
+  };
+
+  const closeImagePreview = () => {
+    setPreviewImageUri(null);
   };
 
   return (
@@ -270,6 +370,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
               const status = String(item.status || 'FOUND').toUpperCase();
               const nextStatuses = (LOST_FOUND_STATUS_TRANSITIONS[status] ?? []) as LostFoundStatus[];
               const id = itemId(item);
+              const photos = resolveLostFoundPhotoUrls(item);
 
               return (
                 <View
@@ -290,6 +391,30 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                     <Text style={[styles.meta, { color: palette.textMuted }]}>
                       {String(item.description)}
                     </Text>
+                  ) : null}
+
+                  {photos.length > 0 ? (
+                    <View>
+                      <Text style={[styles.meta, { color: palette.textMuted, marginBottom: spacingY._5 }]}>
+                        Ảnh món đồ ({photos.length})
+                      </Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <View style={styles.photoRow}>
+                          {photos.map((uri, idx) => (
+                            <Pressable
+                              key={`${id || 'lost-found'}_photo_${idx}`}
+                              style={styles.photoThumbPressable}
+                              onPress={() => setPreviewImageUri(uri)}>
+                              <Image
+                                source={{ uri }}
+                                style={styles.photoThumb}
+                                resizeMode="cover"
+                              />
+                            </Pressable>
+                          ))}
+                        </View>
+                      </ScrollView>
+                    </View>
                   ) : null}
 
                   <View style={styles.metaGrid}>
@@ -346,7 +471,9 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             damageReports.map((report) => {
               const incidentId = String(report.report_id || '').trim();
               const podName = report.context?.pod_name || report.context?.pod_id || 'Không rõ Pod';
-              const photos = Array.isArray(report.photo_urls) ? report.photo_urls.filter(Boolean) : [];
+              const photos = Array.isArray(report.photo_urls)
+                ? report.photo_urls.map((uri) => toPhotoUrl(uri)).filter(Boolean)
+                : [];
               const totalValue = (() => {
                 const v = report.pricing?.estimated_total_value;
                 return typeof v === 'number' && Number.isFinite(v) ? formatVnd(v) : null;
@@ -389,12 +516,16 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View style={styles.photoRow}>
                           {photos.map((uri, idx) => (
-                            <Image
-                              key={`${incidentId}_photo_${idx}`}
-                              source={{ uri }}
-                              style={styles.photoThumb}
-                              resizeMode="cover"
-                            />
+                            <Pressable
+                              key={`${incidentId || 'damage'}_photo_${idx}`}
+                              style={styles.photoThumbPressable}
+                              onPress={() => setPreviewImageUri(uri)}>
+                              <Image
+                                source={{ uri }}
+                                style={styles.photoThumb}
+                                resizeMode="cover"
+                              />
+                            </Pressable>
                           ))}
                         </View>
                       </ScrollView>
@@ -423,6 +554,24 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
           )}
         </ScrollView>
       )}
+
+      <Modal
+        visible={Boolean(previewImageUri)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeImagePreview}>
+        <View style={styles.lightboxOverlay}>
+          <Pressable style={styles.lightboxBackdrop} onPress={closeImagePreview} />
+
+          <Pressable style={styles.lightboxClose} onPress={closeImagePreview} hitSlop={8}>
+            <MaterialIcons name="close" size={26} color="#fff" />
+          </Pressable>
+
+          {previewImageUri ? (
+            <Image source={{ uri: previewImageUri }} style={styles.lightboxImage} resizeMode="contain" />
+          ) : null}
+        </View>
+      </Modal>
 
     </View>
   );
@@ -728,10 +877,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacingX._7,
   },
+  photoThumbPressable: {
+    borderRadius: radius._10,
+    overflow: 'hidden',
+  },
   photoThumb: {
     width: 80,
     height: 80,
     borderRadius: radius._10,
     backgroundColor: '#dbe3ef',
+  },
+  lightboxOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.92)',
+  },
+  lightboxBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  lightboxClose: {
+    position: 'absolute',
+    top: 52,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#00000060',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  lightboxImage: {
+    width: '100%',
+    height: '80%',
   },
 });

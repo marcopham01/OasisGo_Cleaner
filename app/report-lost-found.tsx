@@ -158,18 +158,32 @@ export default function ReportLostFoundScreen() {
     ])
       .then(async ([assignments, warehouses, clusters]) => {
         setWarehouseList(warehouses);
-        setClusterList(clusters);
+        const assignmentLocationIds = new Set(
+          assignments
+            .map((assignment) => String(assignment.location?.id || '').trim())
+            .filter(Boolean),
+        );
 
-        const shiftLocationId = (assignments[0] as StaffShiftAssignment | undefined)?.location?.id;
+        const scopedClusters = assignmentLocationIds.size > 0
+          ? clusters.filter((cluster) => assignmentLocationIds.has(String(cluster.location_id || '').trim()))
+          : [];
+
+        setClusterList(scopedClusters);
+
+        const shiftLocationId = String((assignments[0] as StaffShiftAssignment | undefined)?.location?.id || '').trim();
         const matchedCluster = shiftLocationId
-          ? clusters.find((c) => String(c.location_id || '') === String(shiftLocationId))
+          ? scopedClusters.find((c) => String(c.location_id || '').trim() === shiftLocationId)
           : undefined;
-        const defaultCluster = matchedCluster ?? clusters[0];
+        const defaultCluster = matchedCluster ?? scopedClusters[0];
 
         if (defaultCluster?.id) {
           const defaultId = String(defaultCluster.id);
           setSelectedClusterId(defaultId);
           await loadPodsForCluster(defaultId);
+        } else {
+          setSelectedClusterId('');
+          setSelectedPodId('');
+          setPodListForCluster([]);
         }
       })
       .catch(() => null)

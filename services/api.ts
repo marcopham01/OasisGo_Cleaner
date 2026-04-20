@@ -3,6 +3,18 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 const API_PORT = process.env.EXPO_PUBLIC_API_PORT ?? '3000';
+const DEFAULT_API_TIMEOUT_MS = 30000;
+
+function resolveTimeoutMs(): number {
+  const rawTimeout = process.env.EXPO_PUBLIC_API_TIMEOUT_MS?.trim();
+  const parsed = Number(rawTimeout);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_API_TIMEOUT_MS;
+  }
+
+  return parsed;
+}
 
 function normalizeUrl(url: string) {
   return url.replace(/\/+$/, '');
@@ -51,14 +63,16 @@ function resolveBaseUrl(): string | undefined {
 }
 
 const resolvedBaseUrl = resolveBaseUrl();
+const resolvedTimeoutMs = resolveTimeoutMs();
 
 if (__DEV__) {
   console.info(`[api] baseURL = ${resolvedBaseUrl ?? 'undefined'}`);
+  console.info(`[api] timeoutMs = ${resolvedTimeoutMs}`);
 }
 
 export const apiClient = axios.create({
   baseURL: resolvedBaseUrl ? `${resolvedBaseUrl}/api` : undefined,
-  timeout: 10000,
+  timeout: resolvedTimeoutMs,
   headers: {
     'Content-Type': 'application/json',
   },

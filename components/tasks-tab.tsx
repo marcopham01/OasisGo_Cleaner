@@ -15,12 +15,11 @@ import {
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
-import { getBookingById, getMyCleaningTasks, getPodById } from '@/services/cleaner-dashboard.service';
-import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
+import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
+import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type { CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import {
   CLEANING_REQUEST_SOURCES,
-  CLEANING_TASK_STATUSES,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -81,6 +80,21 @@ function shouldHidePermissionMessage(message: string) {
   return message.toLowerCase().includes('không có quyền');
 }
 
+function isInvalidStatusErrorMessage(message: string) {
+  const normalized = String(message || '').toLowerCase();
+  return normalized.includes('invalid status') || normalized.includes('must be one of');
+}
+
+function isTerminalStatus(status: string | undefined) {
+  if (!status) return false;
+  return TERMINAL_TASK_STATUSES.has(status.toUpperCase() as CleaningTaskStatus);
+}
+
+function isApiCleaningTaskStatus(status: string | undefined): status is ApiCleaningTaskStatus {
+  if (!status) return false;
+  return (API_CLEANING_TASK_STATUSES as readonly string[]).includes(status);
+}
+
 function taskPodDisplayName(task: CleaningTask) {
   const podRecord = task.pod as { name?: string; code?: string } | undefined;
   return String(task.pod_name || podRecord?.name || task.pod_code || podRecord?.code || '').trim();
@@ -123,6 +137,7 @@ function taskUserDisplayName(task: CleaningTask) {
 
   return String(
     task.user_name ||
+      task.booking_user_name ||
       task.booking_guest_name ||
       bookingRecord?.user_name ||
       bookingRecord?.guest_name ||
@@ -223,16 +238,65 @@ function resolvedEstimatedStartText(task: CleaningTask, bookingWindow: BookingTi
 }
 
 const TASKS_PAGE_SIZE = 8;
+const LOAD_MORE_TRIGGER_PX = 160;
+const API_CLEANING_TASK_STATUSES = [
+  'ASSIGNED',
+  'ACCEPTED',
+  'IN_PROGRESS',
+  'DONE',
+  'CANCELLED',
+  'MISSED',
+] as const;
+type ApiCleaningTaskStatus = (typeof API_CLEANING_TASK_STATUSES)[number];
+const TERMINAL_TASK_STATUSES = new Set<CleaningTaskStatus>(['DONE', 'CANCELLED', 'MISSED']);
+const DEFAULT_NON_TERMINAL_FETCH_STATUSES = API_CLEANING_TASK_STATUSES.filter(
+  (status) => !TERMINAL_TASK_STATUSES.has(status),
+);
+const UTC_PLUS_7_OFFSET_MINUTES = 7 * 60;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+type TaskWindowMode = 'TODAY' | 'WEEK_WINDOW';
 
-function dateKey(value?: string) {
+function toUtcPlus7DayRange(dayOffset = 0, baseDate = new Date()) {
+  const offsetMs = UTC_PLUS_7_OFFSET_MINUTES * 60 * 1000;
+  const shiftedDate = new Date(baseDate.getTime() + offsetMs + dayOffset * ONE_DAY_MS);
+
+  const year = shiftedDate.getUTCFullYear();
+  const month = shiftedDate.getUTCMonth();
+  const day = shiftedDate.getUTCDate();
+
+  const startUtcMs = Date.UTC(year, month, day, 0, 0, 0, 0) - offsetMs;
+  const endUtcMs = Date.UTC(year, month, day, 23, 59, 59, 999) - offsetMs;
+
+  return {
+    start: new Date(startUtcMs),
+    end: new Date(endUtcMs),
+  };
+}
+
+function toUtcPlus7DateKey(value?: string) {
   if (!value) return '';
+
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return '';
 
-  const year = parsed.getFullYear();
-  const month = String(parsed.getMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getDate()).padStart(2, '0');
+  const shiftedDate = new Date(parsed.getTime() + UTC_PLUS_7_OFFSET_MINUTES * 60 * 1000);
+  const year = shiftedDate.getUTCFullYear();
+  const month = String(shiftedDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(shiftedDate.getUTCDate()).padStart(2, '0');
+
   return `${year}-${month}-${day}`;
+}
+
+function formatUtcPlus7DateLabel(baseDate = new Date()) {
+  const shiftedDate = new Date(baseDate.getTime() + UTC_PLUS_7_OFFSET_MINUTES * 60 * 1000);
+  const day = String(shiftedDate.getUTCDate()).padStart(2, '0');
+  const month = String(shiftedDate.getUTCMonth() + 1).padStart(2, '0');
+  const year = shiftedDate.getUTCFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function dateKey(value?: string) {
+  return toUtcPlus7DateKey(value);
 }
 
 function resolveTaskDateTime(task: CleaningTask) {
@@ -304,6 +368,44 @@ function bookingStatusLabel(status?: string | null) {
   return s.replace(/_/g, ' ');
 }
 
+const KNOWN_BOOKING_STATUSES = ['BOOKED', 'IN_USE', 'COMPLETED', 'CANCELLED', 'NO_SHOW'] as const;
+
+function bookingStatusFilterLabel(status: string) {
+  if (status === 'ALL') return 'Tất cả';
+  return bookingStatusLabel(status) || status.replace(/_/g, ' ');
+}
+
+function clusterFilterLabel(clusterName: string) {
+  if (clusterName === 'ALL') return 'Tất cả';
+  return clusterName;
+}
+
+function taskClusterFilterValue(task: CleaningTask, podClusterNameMap: Record<string, string>) {
+  const podId = String(task.pod_id || '').trim();
+  return String(podClusterNameMap[podId] || taskClusterDisplayName(task) || '').trim();
+}
+
+function taskTodayPriority(task: CleaningTask) {
+  const source = String(task.request_source || '').trim().toUpperCase();
+  if (source === 'USER_REQUEST') return 0;
+
+  const bookingStatus = String(task.booking_status || '').trim().toUpperCase();
+  if (bookingStatus === 'COMPLETED' || bookingStatus === 'CHECKOUT' || bookingStatus === 'CHECKED_OUT') {
+    return 1;
+  }
+
+  return 2;
+}
+
+function estimatedStartMs(task: CleaningTask, bookingTimeMap: Record<string, BookingTimeWindow>) {
+  const estimatedStart = resolvedEstimatedStartText(task, taskBookingWindow(task, bookingTimeMap));
+  const estimatedTime = new Date(estimatedStart).getTime();
+  if (!Number.isNaN(estimatedTime)) return estimatedTime;
+
+  const fallbackTime = new Date(resolveTaskDateTime(task)).getTime();
+  return Number.isNaN(fallbackTime) ? 0 : fallbackTime;
+}
+
 function podStatusLabel(status?: string | null) {
   const s = String(status || '').toUpperCase();
   if (s === 'AVAILABLE') return 'Sẵn sàng';
@@ -345,13 +447,10 @@ export default function TasksTab({
 }: TasksTabProps) {
   const router = useRouter();
   const [tasks, setTasks] = useState<CleaningTask[]>([]);
-  const [podNameMap, setPodNameMap] = useState<Record<string, string>>({});
-  const [podClusterNameMap, setPodClusterNameMap] = useState<Record<string, string>>({});
-  const [bookingNameMap, setBookingNameMap] = useState<Record<string, string>>({});
-  const [bookingTimeMap, setBookingTimeMap] = useState<Record<string, BookingTimeWindow>>({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [doneTodayCount, setDoneTodayCount] = useState(0);
 
   const [statusFilter, setStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
   const [sourceFilter, setSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
@@ -362,14 +461,139 @@ export default function TasksTab({
   const [draftStatusFilter, setDraftStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
   const [draftSourceFilter, setDraftSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
   const [draftSortFilter, setDraftSortFilter] = useState<'newest' | 'oldest'>('newest');
-  const [showAllTasks, setShowAllTasks] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [clusterFilter, setClusterFilter] = useState<string[]>(['ALL']);
+  const [draftClusterFilter, setDraftClusterFilter] = useState<string[]>(['ALL']);
+  const [bookingStatusFilter, setBookingStatusFilter] = useState<string[]>(['ALL']);
+  const [draftBookingStatusFilter, setDraftBookingStatusFilter] = useState<string[]>(['ALL']);
+  const [taskWindowMode, setTaskWindowMode] = useState<TaskWindowMode>('TODAY');
+  const [includeTerminalStatuses] = useState(false);
+  const [visibleTaskLimit, setVisibleTaskLimit] = useState(TASKS_PAGE_SIZE);
   const searchAnimation = useRef(new Animated.Value(0)).current;
   const realtimeReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unsupportedStatusesRef = useRef<Set<string>>(new Set());
+  const lastLoadMoreAtRef = useRef(0);
+
+  const taskWindowRange = useMemo(() => {
+    if (taskWindowMode === 'WEEK_WINDOW') {
+      const from = toUtcPlus7DayRange(-7).start;
+      const to = toUtcPlus7DayRange(7).end;
+
+      return {
+        dueFrom: from.toISOString(),
+        dueTo: to.toISOString(),
+        label: `${formatUtcPlus7DateLabel(from)} - ${formatUtcPlus7DateLabel(to)}`,
+      };
+    }
+
+    const todayRange = toUtcPlus7DayRange(0);
+    return {
+      dueFrom: todayRange.start.toISOString(),
+      dueTo: todayRange.end.toISOString(),
+      label: formatUtcPlus7DateLabel(todayRange.start),
+    };
+  }, [taskWindowMode]);
+
+  const bookingStatusOptions = useMemo(() => {
+    const dynamicStatuses = [
+      ...new Set(
+        tasks
+          .map((task) => String(task.booking_status || '').trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    ];
+
+    const knownSet = new Set(KNOWN_BOOKING_STATUSES);
+    const extraStatuses = dynamicStatuses.filter((status) => !knownSet.has(status as typeof KNOWN_BOOKING_STATUSES[number]));
+
+    return ['ALL', ...KNOWN_BOOKING_STATUSES, ...extraStatuses];
+  }, [tasks]);
+
+  const podNameMap = useMemo<Record<string, string>>(() => {
+    return Object.fromEntries(
+      tasks
+        .map((task) => [String(task.pod_id || '').trim(), taskPodDisplayName(task)] as const)
+        .filter(([id, label]) => Boolean(id && label)),
+    );
+  }, [tasks]);
+
+  const podClusterNameMap = useMemo<Record<string, string>>(() => {
+    return Object.fromEntries(
+      tasks
+        .map((task) => [String(task.pod_id || '').trim(), taskClusterDisplayName(task)] as const)
+        .filter(([id, label]) => Boolean(id && label)),
+    );
+  }, [tasks]);
+
+  const bookingNameMap = useMemo<Record<string, string>>(() => {
+    return Object.fromEntries(
+      tasks
+        .map(
+          (task) =>
+            [
+              String(task.booking_id || '').trim(),
+              taskUserDisplayName(task) || taskBookingDisplayName(task),
+            ] as const,
+        )
+        .filter(([id, label]) => Boolean(id && label)),
+    );
+  }, [tasks]);
+
+  const bookingTimeMap = useMemo<Record<string, BookingTimeWindow>>(() => {
+    return Object.fromEntries(
+      tasks
+        .map((task) => {
+          const booking = task.booking as { start_time?: string; end_time?: string } | undefined;
+          const bookingId = String(task.booking_id || '').trim();
+
+          if (!bookingId) {
+            return null;
+          }
+
+          const start = String(task.booking_start_time || booking?.start_time || '').trim();
+          const end = String(task.booking_end_time || booking?.end_time || '').trim();
+
+          if (!start && !end) {
+            return null;
+          }
+
+          return [bookingId, { start_time: start || undefined, end_time: end || undefined }] as const;
+        })
+        .filter(Boolean) as Array<readonly [string, BookingTimeWindow]>,
+    );
+  }, [tasks]);
+
+  const clusterOptions = useMemo(() => {
+    const labels = [
+      ...new Set(
+        tasks
+          .map((task) => taskClusterFilterValue(task, podClusterNameMap))
+          .filter(Boolean),
+      ),
+    ].sort((a, b) => a.localeCompare(b, 'vi'));
+
+    return ['ALL', ...labels];
+  }, [tasks, podClusterNameMap]);
 
   const filteredTasks = useMemo<CleaningTask[]>(() => {
     const search = searchQuery.trim().toLowerCase();
-    const bySearch = tasks.filter((task) => {
+    const byWindowMode = tasks.filter((task) => {
+      if (taskWindowMode !== 'WEEK_WINDOW') return true;
+      return String(task.status || '').trim().toUpperCase() !== 'CANCELLED';
+    });
+
+    const byBookingStatus = byWindowMode.filter((task) => {
+      if (bookingStatusFilter.includes('ALL')) return true;
+      const taskBookingStatus = String(task.booking_status || '').trim().toUpperCase();
+      return bookingStatusFilter.includes(taskBookingStatus);
+    });
+
+    const byCluster = byBookingStatus.filter((task) => {
+      if (clusterFilter.includes('ALL')) return true;
+      const clusterValue = taskClusterFilterValue(task, podClusterNameMap);
+      return clusterFilter.includes(clusterValue);
+    });
+
+    const bySearch = byCluster.filter((task) => {
       if (!search) return true;
 
       const podDisplay = String(
@@ -403,6 +627,20 @@ export default function TasksTab({
     });
 
     return [...bySearch].sort((a, b) => {
+      if (taskWindowMode === 'TODAY') {
+        const priorityDiff = taskTodayPriority(a) - taskTodayPriority(b);
+        if (priorityDiff !== 0) return priorityDiff;
+
+        const startDiff = estimatedStartMs(a, bookingTimeMap) - estimatedStartMs(b, bookingTimeMap);
+        if (startDiff !== 0) return startDiff;
+
+        const aTime = new Date(resolveTaskDateTime(a)).getTime() || 0;
+        const bTime = new Date(resolveTaskDateTime(b)).getTime() || 0;
+        if (aTime !== bTime) return aTime - bTime;
+
+        return taskId(a).localeCompare(taskId(b));
+      }
+
       const aIsToday = isTaskToday(a);
       const bIsToday = isTaskToday(b);
 
@@ -414,33 +652,28 @@ export default function TasksTab({
       const bTime = new Date(resolveTaskDateTime(b)).getTime() || 0;
       return sortFilter === 'newest' ? bTime - aTime : aTime - bTime;
     });
-  }, [tasks, searchQuery, sortFilter, podNameMap, podClusterNameMap, bookingNameMap]);
-
-  const todayFilteredTaskCount = useMemo(() => {
-    return filteredTasks.filter((task) => isTaskToday(task)).length;
-  }, [filteredTasks]);
+  }, [
+    tasks,
+    searchQuery,
+    sortFilter,
+    clusterFilter,
+    bookingStatusFilter,
+    podNameMap,
+    podClusterNameMap,
+    bookingNameMap,
+    taskWindowMode,
+    bookingTimeMap,
+  ]);
 
   const visibleTasks = useMemo(() => {
-    if (showAllTasks) return filteredTasks;
-    return filteredTasks.filter((task) => {
-      if (!isTaskToday(task)) return false;
-      return String(task.status || '').toUpperCase() !== 'CANCELLED';
-    });
-  }, [filteredTasks, showAllTasks]);
+    return filteredTasks;
+  }, [filteredTasks]);
 
-  const hiddenTaskCount = useMemo(() => {
-    return Math.max(0, filteredTasks.length - todayFilteredTaskCount);
-  }, [filteredTasks.length, todayFilteredTaskCount]);
+  const displayedTasks = useMemo(() => {
+    return visibleTasks.slice(0, visibleTaskLimit);
+  }, [visibleTasks, visibleTaskLimit]);
 
-  const totalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(visibleTasks.length / TASKS_PAGE_SIZE));
-  }, [visibleTasks.length]);
-
-  const pagedTasks = useMemo(() => {
-    const safePage = Math.max(1, Math.min(currentPage, totalPages));
-    const start = (safePage - 1) * TASKS_PAGE_SIZE;
-    return visibleTasks.slice(start, start + TASKS_PAGE_SIZE);
-  }, [currentPage, totalPages, visibleTasks]);
+  const hasMoreToDisplay = displayedTasks.length < visibleTasks.length;
 
   const todayTaskCount = useMemo(() => {
     return tasks.filter((task) => {
@@ -450,19 +683,8 @@ export default function TasksTab({
     }).length;
   }, [tasks]);
 
-  const doneTodayCount = useMemo(() => {
-    return tasks.filter((task) => {
-      const status = String(task.status || '').toUpperCase();
-      return isTaskToday(task) && status === 'DONE';
-    }).length;
-  }, [tasks]);
-
   const todayDateLabel = useMemo(() => {
-    return new Date().toLocaleDateString('vi-VN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
+    return formatUtcPlus7DateLabel();
   }, []);
 
   const loadTasks = useCallback(async (silent = false) => {
@@ -473,12 +695,107 @@ export default function TasksTab({
     setError(null);
 
     try {
-      const data = await getMyCleaningTasks(token, {
-        status: statusFilter === 'ALL' ? undefined : statusFilter,
+      const todayRange = toUtcPlus7DayRange(0);
+      const doneCountPromise = getMyCleaningTasks(token, {
+        status: 'DONE',
         request_source: sourceFilter === 'ALL' ? undefined : sourceFilter,
-      });
+        due_from: todayRange.start.toISOString(),
+        due_to: todayRange.end.toISOString(),
+      })
+        .then((doneTasks) => doneTasks.length)
+        .catch((error) => {
+          const message = getErrorMessage(error);
+          if (shouldHidePermissionMessage(message) || isInvalidStatusErrorMessage(message)) {
+            return 0;
+          }
+          return null;
+        });
 
-      setTasks(data);
+      const commonQuery = {
+        request_source: sourceFilter === 'ALL' ? undefined : sourceFilter,
+        due_from: taskWindowRange.dueFrom,
+        due_to: taskWindowRange.dueTo,
+      };
+
+      let data: CleaningTask[] = [];
+      const selectedStatus = statusFilter === 'ALL' ? undefined : statusFilter;
+      const selectedApiStatus = isApiCleaningTaskStatus(selectedStatus) ? selectedStatus : undefined;
+      const shouldFetchAllStatusesForWeekWindow = taskWindowMode === 'WEEK_WINDOW' && statusFilter === 'ALL';
+
+      if (shouldFetchAllStatusesForWeekWindow) {
+        data = await getMyCleaningTasks(token, {
+          ...commonQuery,
+        });
+      } else if (selectedApiStatus) {
+        data = await getMyCleaningTasks(token, {
+          ...commonQuery,
+          status: selectedApiStatus,
+        });
+      } else if (includeTerminalStatuses) {
+        data = await getMyCleaningTasks(token, {
+          ...commonQuery,
+        });
+      } else {
+        const statusesToFetch = DEFAULT_NON_TERMINAL_FETCH_STATUSES.filter(
+          (status) => !unsupportedStatusesRef.current.has(status),
+        );
+
+        const settledResults = await Promise.allSettled(
+          statusesToFetch.map((status) =>
+            getMyCleaningTasks(token, {
+              ...commonQuery,
+              status,
+            }),
+          ),
+        );
+
+        const mergedTasks: CleaningTask[] = [];
+        let firstFatalError: unknown = null;
+
+        settledResults.forEach((result, index) => {
+          const requestStatus = statusesToFetch[index];
+
+          if (result.status === 'fulfilled') {
+            mergedTasks.push(...result.value);
+            return;
+          }
+
+          const message = getErrorMessage(result.reason);
+          if (isInvalidStatusErrorMessage(message)) {
+            unsupportedStatusesRef.current.add(requestStatus);
+            return;
+          }
+
+          if (!firstFatalError) {
+            firstFatalError = result.reason;
+          }
+        });
+
+        if (firstFatalError) {
+          throw firstFatalError;
+        }
+
+        const uniqueTaskMap = new Map<string, CleaningTask>();
+        mergedTasks.forEach((task, index) => {
+          const key = taskId(task) || `fallback-${index}`;
+          if (!uniqueTaskMap.has(key)) {
+            uniqueTaskMap.set(key, task);
+          }
+        });
+
+        data = Array.from(uniqueTaskMap.values());
+      }
+
+      const normalizedTasks =
+        taskWindowMode === 'WEEK_WINDOW'
+          ? data.filter((task) => String(task.status || '').trim().toUpperCase() !== 'CANCELLED')
+          : data;
+
+      setTasks(normalizedTasks);
+      const nextDoneTodayCount = await doneCountPromise;
+      if (nextDoneTodayCount !== null) {
+        setDoneTodayCount(nextDoneTodayCount);
+      }
       onErrorChange?.(null);
     } catch (err) {
       const msg = getErrorMessage(err);
@@ -499,6 +816,10 @@ export default function TasksTab({
     token,
     statusFilter,
     sourceFilter,
+    includeTerminalStatuses,
+    taskWindowMode,
+    taskWindowRange.dueFrom,
+    taskWindowRange.dueTo,
     onLoadingChange,
     onErrorChange,
   ]);
@@ -508,26 +829,22 @@ export default function TasksTab({
   }, [loadTasks]);
 
   useEffect(() => {
-    if (!token || !userId) {
+    if (!token) {
       return;
     }
 
-    const disconnect = connectCleanerNotificationSocket({
-      token,
-      cleanerId: userId,
-      onNotification: (event) => {
-        if (!shouldRefreshTasksFromEvent(event)) {
-          return;
-        }
+    const unsubscribe = subscribeCleanerRealtimeEvent((event) => {
+      if (!shouldRefreshTasksFromEvent(event)) {
+        return;
+      }
 
-        if (realtimeReloadTimer.current) {
-          clearTimeout(realtimeReloadTimer.current);
-        }
-        realtimeReloadTimer.current = setTimeout(() => {
-          realtimeReloadTimer.current = null;
-          void loadTasks(true);
-        }, 350);
-      },
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+      }
+      realtimeReloadTimer.current = setTimeout(() => {
+        realtimeReloadTimer.current = null;
+        void loadTasks(true);
+      }, 350);
     });
 
     return () => {
@@ -536,9 +853,9 @@ export default function TasksTab({
         realtimeReloadTimer.current = null;
       }
 
-      disconnect();
+      unsubscribe();
     };
-  }, [loadTasks, token, userId]);
+  }, [loadTasks, token]);
 
   useEffect(() => {
     Animated.timing(searchAnimation, {
@@ -549,181 +866,58 @@ export default function TasksTab({
   }, [isSearchOpen, searchAnimation]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, statusFilter, sourceFilter, sortFilter, showAllTasks]);
+    setVisibleTaskLimit(TASKS_PAGE_SIZE);
+  }, [searchQuery, statusFilter, sourceFilter, sortFilter, clusterFilter, bookingStatusFilter, taskWindowMode, includeTerminalStatuses]);
 
   useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
+    setVisibleTaskLimit((prev) => {
+      const nextMax = Math.max(TASKS_PAGE_SIZE, visibleTasks.length);
+      return Math.min(prev, nextMax);
+    });
+  }, [visibleTasks.length]);
 
   useEffect(() => {
-    let isMounted = true;
+    unsupportedStatusesRef.current.clear();
+  }, [token]);
 
-    const loadNames = async () => {
-      const podIds = [...new Set(tasks.map((task) => String(task.pod_id || '').trim()).filter(Boolean))];
-      const bookingIds = [
-        ...new Set(tasks.map((task) => String(task.booking_id || '').trim()).filter(Boolean)),
-      ];
-
-      const initialPodMap = Object.fromEntries(
-        tasks
-          .map((task) => [String(task.pod_id || '').trim(), taskPodDisplayName(task)] as const)
-          .filter(([id, label]) => Boolean(id && label)),
-      );
-      const initialClusterMap = Object.fromEntries(
-        tasks
-          .map((task) => [String(task.pod_id || '').trim(), taskClusterDisplayName(task)] as const)
-          .filter(([id, label]) => Boolean(id && label)),
-      );
-      const initialBookingMap = Object.fromEntries(
-        tasks
-          .map(
-            (task) =>
-              [
-                String(task.booking_id || '').trim(),
-                taskUserDisplayName(task) || taskBookingDisplayName(task),
-              ] as const,
-          )
-          .filter(([id, label]) => Boolean(id && label)),
-      );
-      const initialBookingTimeMap = Object.fromEntries(
-        tasks
-          .map((task) => {
-            const booking = task.booking as { start_time?: string; end_time?: string } | undefined;
-            const bookingId = String(task.booking_id || '').trim();
-
-            if (!bookingId) {
-              return null;
-            }
-
-            const start = String(task.booking_start_time || booking?.start_time || '').trim();
-            const end = String(task.booking_end_time || booking?.end_time || '').trim();
-
-            if (!start && !end) {
-              return null;
-            }
-
-            return [bookingId, { start_time: start || undefined, end_time: end || undefined }] as const;
-          })
-          .filter(Boolean) as Array<readonly [string, BookingTimeWindow]>,
-      );
-
-      if (isMounted) {
-        setPodNameMap(initialPodMap);
-        setPodClusterNameMap(initialClusterMap);
-        setBookingNameMap(initialBookingMap);
-        setBookingTimeMap(initialBookingTimeMap);
+  const loadMoreDisplayedTasks = useCallback(() => {
+    setVisibleTaskLimit((prev) => {
+      if (prev >= visibleTasks.length) {
+        return prev;
       }
 
-      if (podIds.length === 0 && bookingIds.length === 0) {
-        if (isMounted) {
-          setPodNameMap(initialPodMap);
-          setPodClusterNameMap(initialClusterMap);
-          setBookingNameMap(initialBookingMap);
-          setBookingTimeMap(initialBookingTimeMap);
-        }
+      return Math.min(prev + TASKS_PAGE_SIZE, visibleTasks.length);
+    });
+  }, [visibleTasks.length]);
+
+  const handleTaskListScroll = useCallback(
+    (event: any) => {
+      if (loading || !hasMoreToDisplay) {
         return;
       }
 
-      try {
-        const [pods, bookings] = await Promise.all([
-          Promise.all(
-            podIds.map(async (podId) => {
-              try {
-                const pod = await getPodById(token, podId);
-
-                if (!pod) {
-                  return [podId, { podName: '', clusterName: '' }] as const;
-                }
-
-                const podRecord = pod as {
-                  name?: string;
-                  code?: string;
-                  cluster_name?: string;
-                  cluster?: { name?: string; code?: string };
-                };
-
-                return [
-                  podId,
-                  {
-                    podName: String(podRecord.name || podRecord.code || '').trim(),
-                    clusterName: String(
-                      podRecord.cluster_name ||
-                        podRecord.cluster?.name ||
-                        podRecord.cluster?.code ||
-                        '',
-                    ).trim(),
-                  },
-                ] as const;
-              } catch {
-                return [podId, { podName: '', clusterName: '' }] as const;
-              }
-            }),
-          ),
-          Promise.all(
-            bookingIds.map(async (bookingId) => {
-              try {
-                const booking = await getBookingById(token, bookingId);
-                return [
-                  bookingId,
-                  {
-                    label: String(booking.order_id || booking.id || '').trim(),
-                    start_time: String(booking.start_time || '').trim(),
-                    end_time: String(booking.end_time || '').trim(),
-                  },
-                ] as const;
-              } catch {
-                return [bookingId, { label: '', start_time: '', end_time: '' }] as const;
-              }
-            }),
-          ),
-        ]);
-
-        if (!isMounted) return;
-
-        setPodNameMap({
-          ...initialPodMap,
-          ...Object.fromEntries(pods.map(([id, pod]) => [id, pod.podName])),
-        });
-        setPodClusterNameMap({
-          ...initialClusterMap,
-          ...Object.fromEntries(pods.map(([id, pod]) => [id, pod.clusterName])),
-        });
-        setBookingNameMap({
-          ...initialBookingMap,
-          ...Object.fromEntries(
-            bookings.map(([id, booking]) => [id, String(initialBookingMap[id] || booking.label || '').trim()]),
-          ),
-        });
-        setBookingTimeMap({
-          ...initialBookingTimeMap,
-          ...Object.fromEntries(
-            bookings.map(([id, booking]) => [
-              id,
-              {
-                start_time: booking.start_time || undefined,
-                end_time: booking.end_time || undefined,
-              },
-            ]),
-          ),
-        });
-      } catch {
-        if (!isMounted) return;
-        setPodNameMap(initialPodMap);
-        setPodClusterNameMap(initialClusterMap);
-        setBookingNameMap(initialBookingMap);
-        setBookingTimeMap(initialBookingTimeMap);
+      const nativeEvent = event?.nativeEvent;
+      if (!nativeEvent) {
+        return;
       }
-    };
 
-    void loadNames();
+      const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+      const distanceToBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [tasks, token]);
+      if (distanceToBottom > LOAD_MORE_TRIGGER_PX) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastLoadMoreAtRef.current < 300) {
+        return;
+      }
+
+      lastLoadMoreAtRef.current = now;
+      loadMoreDisplayedTasks();
+    },
+    [hasMoreToDisplay, loadMoreDisplayedTasks, loading],
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -735,6 +929,8 @@ export default function TasksTab({
     setDraftStatusFilter(statusFilter);
     setDraftSourceFilter(sourceFilter);
     setDraftSortFilter(sortFilter);
+    setDraftClusterFilter([...clusterFilter]);
+    setDraftBookingStatusFilter([...bookingStatusFilter]);
     setIsFilterModalOpen(true);
   };
 
@@ -742,6 +938,8 @@ export default function TasksTab({
     setStatusFilter(draftStatusFilter);
     setSourceFilter(draftSourceFilter);
     setSortFilter(draftSortFilter);
+    setClusterFilter(draftClusterFilter.length > 0 ? [...draftClusterFilter] : ['ALL']);
+    setBookingStatusFilter(draftBookingStatusFilter.length > 0 ? [...draftBookingStatusFilter] : ['ALL']);
     setIsFilterModalOpen(false);
   };
 
@@ -749,6 +947,36 @@ export default function TasksTab({
     setDraftStatusFilter('ALL');
     setDraftSourceFilter('ALL');
     setDraftSortFilter('newest');
+    setDraftClusterFilter(['ALL']);
+    setDraftBookingStatusFilter(['ALL']);
+  };
+
+  const toggleDraftCluster = (clusterName: string) => {
+    setDraftClusterFilter((prev) => {
+      if (clusterName === 'ALL') {
+        return ['ALL'];
+      }
+
+      const withoutAll = prev.filter((item) => item !== 'ALL');
+      const exists = withoutAll.includes(clusterName);
+      const next = exists ? withoutAll.filter((item) => item !== clusterName) : [...withoutAll, clusterName];
+
+      return next.length > 0 ? next : ['ALL'];
+    });
+  };
+
+  const toggleDraftBookingStatus = (status: string) => {
+    setDraftBookingStatusFilter((prev) => {
+      if (status === 'ALL') {
+        return ['ALL'];
+      }
+
+      const withoutAll = prev.filter((item) => item !== 'ALL');
+      const exists = withoutAll.includes(status);
+      const next = exists ? withoutAll.filter((item) => item !== status) : [...withoutAll, status];
+
+      return next.length > 0 ? next : ['ALL'];
+    });
   };
 
   const searchContainerHeight = searchAnimation.interpolate({
@@ -769,6 +997,8 @@ export default function TasksTab({
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: palette.background }}
+      onScroll={handleTaskListScroll}
+      scrollEventThrottle={16}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}>
       <View style={styles.container}>
         <View
@@ -783,12 +1013,16 @@ export default function TasksTab({
             </View>
             <View style={styles.summaryRight}>
               <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐÃ HOÀN THÀNH</Text>
-              <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>{doneTodayCount}</Text>
+              <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>
+                {doneTodayCount}
+              </Text>
             </View>
           </View>
 
           <Text style={[styles.subtitle, { color: palette.primaryLight }]}>
-            Theo dõi công việc trong ngày {todayDateLabel}
+            {taskWindowMode === 'TODAY'
+              ? `Theo dõi công việc trong ngày ${todayDateLabel}`
+              : `Đang hiển thị task theo khoảng ${taskWindowRange.label}`}
           </Text>
         </View>
 
@@ -836,22 +1070,17 @@ export default function TasksTab({
           />
         </Animated.View>
 
-        <View style={styles.paginationSummaryRow}>
-          <Text style={[styles.paginationSummaryText, { color: palette.textMuted }]}>Đang hiển thị: {visibleTasks.length} task</Text>
-          <Text style={[styles.paginationSummaryText, { color: palette.primary }]}>Hôm nay: {todayFilteredTaskCount}</Text>
-        </View>
-
-        {hiddenTaskCount > 0 ? (
-          <Pressable
-            style={[styles.viewToggleButton, { borderColor: palette.primary, backgroundColor: palette.surface }]}
-            onPress={() => setShowAllTasks((prev) => !prev)}>
-            <Text style={[styles.viewToggleText, { color: palette.primary }]}>
-              {showAllTasks
-                ? 'Chỉ xem nhiệm vụ hôm nay'
-                : `Xem toàn bộ nhiệm vụ hiện có (${hiddenTaskCount} nhiệm vụ còn lại)`}
-            </Text>
-          </Pressable>
-        ) : null}
+        <Pressable
+          style={[styles.viewToggleButton, { borderColor: palette.primary, backgroundColor: palette.surface }]}
+          onPress={() => {
+            setTaskWindowMode((prev) => (prev === 'TODAY' ? 'WEEK_WINDOW' : 'TODAY'));
+          }}>
+          <Text style={[styles.viewToggleText, { color: palette.primary }]}>
+            {taskWindowMode === 'TODAY'
+              ? 'Xem nhiệm vụ trong vòng một tuần'
+              : 'Quay về xem nhiệm vụ hôm nay của tôi'}
+          </Text>
+        </Pressable>
 
         {error && (
           <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error }]}>
@@ -863,12 +1092,12 @@ export default function TasksTab({
           <ActivityIndicator color={palette.primary} style={styles.loader} />
         ) : visibleTasks.length === 0 ? (
           <Text style={[styles.emptyText, { color: palette.textMuted }]}>
-            {filteredTasks.length > 0 && !showAllTasks
+            {taskWindowMode === 'TODAY'
               ? 'Không có task nào trong hôm nay.'
-              : 'Không có task nào.'}
+              : 'Không có task nào trong khoảng ±1 tuần.'}
           </Text>
         ) : (
-          pagedTasks.map((task) => {
+          displayedTasks.map((task) => {
             const status = String(task.status || 'UNKNOWN');
             const key = taskId(task);
             const bookingWindow = taskBookingWindow(task, bookingTimeMap);
@@ -967,39 +1196,11 @@ export default function TasksTab({
 
         {!loading && visibleTasks.length > 0 ? (
           <View style={styles.paginationRow}>
-            <Pressable
-              style={[
-                styles.pageButton,
-                {
-                  backgroundColor: currentPage <= 1 ? palette.neutral300 : palette.surface,
-                  borderColor: palette.border,
-                },
-              ]}
-              disabled={currentPage <= 1}
-              onPress={() => setCurrentPage((prev) => Math.max(1, prev - 1))}>
-              <Text style={[styles.pageButtonText, { color: currentPage <= 1 ? palette.textMuted : palette.text }]}>Trang trước</Text>
-            </Pressable>
-
-            <Text style={[styles.pageText, { color: palette.text }]}>Trang {Math.min(currentPage, totalPages)}/{totalPages}</Text>
-
-            <Pressable
-              style={[
-                styles.pageButton,
-                {
-                  backgroundColor: currentPage >= totalPages ? palette.neutral300 : palette.surface,
-                  borderColor: palette.border,
-                },
-              ]}
-              disabled={currentPage >= totalPages}
-              onPress={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}>
-              <Text
-                style={[
-                  styles.pageButtonText,
-                  { color: currentPage >= totalPages ? palette.textMuted : palette.text },
-                ]}>
-                Trang sau
-              </Text>
-            </Pressable>
+            <Text style={[styles.pageText, { color: palette.textMuted }]}>
+              {hasMoreToDisplay
+                ? `Kéo xuống để tải thêm (${displayedTasks.length}/${visibleTasks.length})`
+                : `Đã hiển thị tất cả ${visibleTasks.length} task`}
+            </Text>
           </View>
         ) : null}
       </View>
@@ -1016,7 +1217,7 @@ export default function TasksTab({
 
             <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Trạng thái</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-              {(['ALL', ...CLEANING_TASK_STATUSES] as const).map((status) => {
+              {(['ALL', ...API_CLEANING_TASK_STATUSES] as const).map((status) => {
                 const active = draftStatusFilter === status;
                 return (
                   <Pressable
@@ -1054,6 +1255,52 @@ export default function TasksTab({
                     onPress={() => setDraftSourceFilter(source)}>
                     <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
                       {source === 'ALL' ? 'Tất cả' : requestSourceLabel(source)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Pod cluster</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {clusterOptions.map((opt) => {
+                const active = draftClusterFilter.includes(opt);
+                return (
+                  <Pressable
+                    key={opt}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: active ? palette.primary : palette.surface,
+                        borderColor: active ? palette.primary : palette.border,
+                      },
+                    ]}
+                    onPress={() => toggleDraftCluster(opt)}>
+                    <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
+                      {clusterFilterLabel(opt)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Trạng thái booking</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {bookingStatusOptions.map((opt) => {
+                const active = draftBookingStatusFilter.includes(opt);
+                return (
+                  <Pressable
+                    key={opt}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: active ? palette.primary : palette.surface,
+                        borderColor: active ? palette.primary : palette.border,
+                      },
+                    ]}
+                    onPress={() => toggleDraftBookingStatus(opt)}>
+                    <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
+                      {bookingStatusFilterLabel(opt)}
                     </Text>
                   </Pressable>
                 );
@@ -1197,22 +1444,12 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.sans,
     fontWeight: '600',
   },
-  paginationSummaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  paginationSummaryText: {
-    fontSize: 12,
-    fontFamily: Fonts.sans,
-    fontWeight: '600',
-  },
   viewToggleButton: {
     borderWidth: 1,
     borderRadius: radius._10,
     paddingHorizontal: spacingX._12,
     paddingVertical: spacingY._7,
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
   },
   viewToggleText: {
     fontSize: 12,
@@ -1315,21 +1552,9 @@ const styles = StyleSheet.create({
   paginationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     gap: spacingX._10,
     marginTop: spacingY._5,
-  },
-  pageButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: radius._10,
-    paddingVertical: spacingY._10,
-    alignItems: 'center',
-  },
-  pageButtonText: {
-    fontSize: 12,
-    fontFamily: Fonts.sans,
-    fontWeight: '700',
   },
   pageText: {
     fontSize: 12,

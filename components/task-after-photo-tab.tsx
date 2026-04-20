@@ -3,25 +3,31 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningPhoto,
-    getCleaningPhotos,
-    getCleaningTaskById,
-    updateCleaningTask,
+  createCleaningPhoto,
+  getCleaningPhotos,
+  getCleaningTaskById,
+  getPodItemsByPodId,
+  updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
-import type { CleaningPhoto, CleaningTask } from '@/types/cleaner-dashboard';
+import {
+  bulkCreateInventoryActivityLogs,
+  getCleanerDailyActivityLogs,
+} from '@/services/inventory.service';
+import type { CleaningPhoto, CleaningTask, PodItemEntry } from '@/types/cleaner-dashboard';
+import type { InventoryActivityLogEntry } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
 
 interface TaskAfterPhotoTabProps {
@@ -34,6 +40,26 @@ interface TaskAfterPhotoTabProps {
 }
 
 type PendingPhoto = { id: string; uri: string };
+
+function normalizeActionType(actionType?: string) {
+  return String(actionType || '').trim().toUpperCase();
+}
+
+function toPositiveInt(value: unknown) {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed);
+}
+
+function isInvalidActionTypeError(error: unknown) {
+  const message = String((error as { message?: string })?.message || '').toLowerCase();
+  return message.includes('invalid action_type') || message.includes('action_type');
+}
+
+function isConsumablePodItem(podItem: PodItemEntry) {
+  const itemType = String(podItem.item_type || podItem.item?.item_type || '').trim().toUpperCase();
+  return itemType === 'CONSUMABLE';
+}
 
 export default function TaskAfterPhotoTab({
   token,
@@ -51,9 +77,17 @@ export default function TaskAfterPhotoTab({
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
+  const isCompletingRef = useRef(false);
+  const hasNavigatedToSummaryRef = useRef(false);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
+
+  const navigateToSummaryOnce = useCallback(() => {
+    if (hasNavigatedToSummaryRef.current) return;
+    hasNavigatedToSummaryRef.current = true;
+    onCompleted();
+  }, [onCompleted]);
 
   const loadDetail = useCallback(async () => {
     if (!taskId || !token) return;
@@ -137,7 +171,8 @@ export default function TaskAfterPhotoTab({
   };
 
   const handleComplete = async () => {
-    if (!taskId) return;
+    if (isCompletingRef.current || hasNavigatedToSummaryRef.current) return;
+    if (!taskId || !task) return;
 
     const savedAfterPhotos = savedPhotos.filter(
       (p) => String(p.type || '').toUpperCase() === 'AFTER',
@@ -148,6 +183,7 @@ export default function TaskAfterPhotoTab({
       return;
     }
 
+    isCompletingRef.current = true;
     setCompleting(true);
     setError(null);
     try {
@@ -160,18 +196,136 @@ export default function TaskAfterPhotoTab({
         });
       }
 
+      // Auto-log consumed inventory based on pod standard items vs cleaner-held quantities.
+      const cleanerId = String(task.cleaner_id || '').trim();
+      const podId = String(task.pod_id || '').trim();
+
+      if (cleanerId && podId) {
+        const [podItemsData, dailyLogs] = await Promise.all([
+          getPodItemsByPodId(token, podId),
+          getCleanerDailyActivityLogs(token, cleanerId),
+        ]);
+
+        const existingConsumedForTask = (dailyLogs.logs || []).some((log) => {
+          return (
+            normalizeActionType(String(log.action_type || '')) === 'CONSUMED' &&
+            String(log.cleaning_task_id || '').trim() === taskId
+          );
+        });
+
+        if (!existingConsumedForTask) {
+          const requiredByItem = new Map<string, number>();
+          for (const podItem of podItemsData.items || []) {
+            if (!isConsumablePodItem(podItem)) continue;
+            const itemId = String(podItem.item_id || '').trim();
+            const requiredQuantity = toPositiveInt(podItem.expected_quantity);
+            if (!itemId || requiredQuantity <= 0) continue;
+            requiredByItem.set(itemId, (requiredByItem.get(itemId) || 0) + requiredQuantity);
+          }
+
+          const heldByStock = new Map<
+            string,
+            {
+              inventory_stock_id: string;
+              item_id: string;
+              net_quantity: number;
+              created_at?: string;
+            }
+          >();
+
+          for (const log of dailyLogs.logs || []) {
+            const inventoryStockId = String(log.inventory_stock_id || '').trim();
+            const itemId = String(log.item_id || '').trim();
+            const quantity = toPositiveInt(log.quantity);
+            if (!inventoryStockId || !itemId || quantity <= 0) continue;
+
+            const action = normalizeActionType(String(log.action_type || ''));
+            const sign = action === 'CHECKOUT' ? 1 : (action === 'RETURN' || action === 'WASTE' || action === 'CONSUMED' ? -1 : 0);
+            if (sign === 0) continue;
+
+            const key = `${inventoryStockId}::${itemId}`;
+            const existing = heldByStock.get(key) || {
+              inventory_stock_id: inventoryStockId,
+              item_id: itemId,
+              net_quantity: 0,
+              created_at: String(log.created_at || ''),
+            };
+
+            existing.net_quantity += sign * quantity;
+            if (!existing.created_at && log.created_at) {
+              existing.created_at = String(log.created_at);
+            }
+
+            heldByStock.set(key, existing);
+          }
+
+          const consumedLogs: InventoryActivityLogEntry[] = [];
+
+          for (const [itemId, requiredQuantity] of requiredByItem.entries()) {
+            let remainingToConsume = requiredQuantity;
+
+            const stockCandidates = [...heldByStock.values()]
+              .filter((entry) => entry.item_id === itemId && entry.net_quantity > 0)
+              .sort((a, b) => {
+                const aTime = new Date(a.created_at || '').getTime() || 0;
+                const bTime = new Date(b.created_at || '').getTime() || 0;
+                return aTime - bTime;
+              });
+
+            for (const stock of stockCandidates) {
+              if (remainingToConsume <= 0) break;
+
+              const consumeQty = Math.min(stock.net_quantity, remainingToConsume);
+              if (consumeQty <= 0) continue;
+
+              consumedLogs.push({
+                inventory_stock_id: stock.inventory_stock_id,
+                quantity: consumeQty,
+                action_type: 'CONSUMED',
+                cleaning_task_id: taskId,
+                reason: `Auto consumed for cleaning task ${taskId}`,
+              });
+
+              stock.net_quantity -= consumeQty;
+              remainingToConsume -= consumeQty;
+            }
+          }
+
+          if (consumedLogs.length > 0) {
+            try {
+              await bulkCreateInventoryActivityLogs(token, {
+                staff_id: cleanerId,
+                logs: consumedLogs,
+              });
+            } catch (inventoryLogError) {
+              // Fallback for environments where backend has not yet allowed CONSUMED.
+              if (!isInvalidActionTypeError(inventoryLogError)) {
+                throw inventoryLogError;
+              }
+
+              await bulkCreateInventoryActivityLogs(token, {
+                staff_id: cleanerId,
+                logs: consumedLogs.map((entry) => ({
+                  ...entry,
+                  action_type: 'WASTE',
+                  reason: `${String(entry.reason || '')} (fallback: WASTE do backend chưa hỗ trợ CONSUMED)`,
+                })),
+              });
+            }
+          }
+        }
+      }
+
       // Mark task as DONE
       const now = new Date().toISOString();
       await updateCleaningTask(token, taskId, { status: 'DONE' as const, end_time: now });
-
-      Alert.alert('Hoàn thành!', 'Nhiệm vụ đã được hoàn thành thành công.', [
-        { text: 'OK', onPress: onCompleted },
-      ]);
+      navigateToSummaryOnce();
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
       Alert.alert('Lỗi', msg);
     } finally {
+      isCompletingRef.current = false;
       setCompleting(false);
     }
   };
@@ -309,8 +463,8 @@ export default function TaskAfterPhotoTab({
             <ActivityIndicator color="#fff" size="large" />
           ) : (
             <>
-              <MaterialIcons name="check-circle" size={26} color="#fff" />
-              <Text style={styles.completeButtonText}>Lưu ảnh và tiếp tục</Text>
+              <MaterialIcons name="check-circle" size={22} color="#fff" />
+              <Text style={styles.completeButtonText}>Hoàn thành dọn dẹp</Text>
             </>
           )}
         </Pressable>
@@ -477,7 +631,7 @@ const styles = StyleSheet.create({
   },
   completeButton: {
     borderRadius: radius._15,
-    paddingVertical: 20,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -489,7 +643,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   completeButtonText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
     fontFamily: Fonts.sans,
     color: '#fff',

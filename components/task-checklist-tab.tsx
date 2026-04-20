@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View
 } from 'react-native';
 
@@ -17,7 +18,7 @@ import {
   getCleaningTaskById,
   getIncidentsByCleaningTaskId,
   getMyLostFoundItems,
-  getPodItems,
+  getPodItemsByPodId,
 } from '@/services/cleaner-dashboard.service';
 import type {
   CleaningTask,
@@ -101,6 +102,16 @@ function podItemStatusColor(status: string | undefined, palette: typeof Colors.l
   return palette.textMuted;
 }
 
+function toBoundedInt(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function isConsumablePodItem(podItem: PodItemEntry) {
+  const itemType = String(podItem.item_type || podItem.item?.item_type || '').trim().toUpperCase();
+  return itemType === 'CONSUMABLE';
+}
+
 export default function TaskChecklistTab({
   token,
   taskId,
@@ -116,7 +127,9 @@ export default function TaskChecklistTab({
   const [lostFoundItems, setLostFoundItems] = useState<LostFoundItem[]>([]);
   const [loadingLostFound, setLoadingLostFound] = useState(false);
   const [podItems, setPodItems] = useState<PodItemEntry[]>([]);
+  const [podItemsPodName, setPodItemsPodName] = useState('');
   const [loadingPodItems, setLoadingPodItems] = useState(false);
+  const [supplyInputByItemKey, setSupplyInputByItemKey] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
@@ -182,22 +195,45 @@ export default function TaskChecklistTab({
 
   const refreshPodItems = useCallback(async () => {
     if (!token || !task) return;
-    const podId = String(task.pod_id ?? '').trim();
+    const podRecord = (task.pod && typeof task.pod === 'object')
+      ? (task.pod as { id?: string })
+      : undefined;
+    const podId = String(task.pod_id || podRecord?.id || '').trim();
     if (!podId) {
       setPodItems([]);
+      setPodItemsPodName('');
       return;
     }
 
     setLoadingPodItems(true);
     try {
-      const items = await getPodItems(token, { pod_id: podId });
-      setPodItems(items);
+      const podItemsData = await getPodItemsByPodId(token, podId);
+      const consumableItems = (podItemsData.items || []).filter((item) => isConsumablePodItem(item));
+      setPodItems(consumableItems);
+      setPodItemsPodName(String(podItemsData.pod_name || task.pod_name || ''));
     } catch {
       setPodItems([]);
+      setPodItemsPodName('');
     } finally {
       setLoadingPodItems(false);
     }
   }, [token, task]);
+
+  const updateSupplyQuantity = useCallback(
+    (itemKey: string, expectedQuantity: number, nextValue: number | string) => {
+      const max = Math.max(0, Math.floor(expectedQuantity || 0));
+      const parsedFromText =
+        typeof nextValue === 'string'
+          ? Number(nextValue.replace(/[^0-9]/g, '') || 0)
+          : Number(nextValue || 0);
+      const bounded = toBoundedInt(parsedFromText, 0, max);
+      setSupplyInputByItemKey((prev) => ({
+        ...prev,
+        [itemKey]: bounded,
+      }));
+    },
+    [],
+  );
 
   useEffect(() => {
     void refreshLostFoundItems();
@@ -403,15 +439,24 @@ export default function TaskChecklistTab({
           {/* Pod items — standard quantity reference */}
           <View
             style={{
-              backgroundColor: '#f8fafc',
+              backgroundColor: palette.card,
               borderRadius: 16,
               padding: 16,
               borderWidth: 1,
-              borderColor: '#e2e8f0',
+              borderColor: palette.border,
             }}>
-            <Text style={[styles.sectionTitle, { color: '#0f172a', marginBottom: 8 }]}>
-              Đồ dùng chuẩn trong pod
+            <Text
+              style={[
+                styles.sectionTitle,
+                { color: '#0284c7', marginBottom: 8, textAlign: 'center' },
+              ]}>
+              Danh sách bổ sung vật tư
             </Text>
+            {podItemsPodName ? (
+              <Text style={[styles.info, { color: palette.textMuted, marginBottom: 8, textAlign: 'center' }]}>
+                Pod: {podItemsPodName}
+              </Text>
+            ) : null}
 
             {loadingPodItems ? (
               <ActivityIndicator color={palette.primary} />
@@ -420,11 +465,17 @@ export default function TaskChecklistTab({
                 Chưa có dữ liệu đồ dùng cho pod này.
               </Text>
             ) : (
-              podItems.map((podItem) => {
+              podItems.map((podItem, index) => {
                 const itemName = String(
                   podItem.item_name || podItem.item?.name || podItem.item_id || 'Item',
                 );
-                const expectedQuantity = Number(podItem.expected_quantity || 0);
+                const expectedQuantity = Math.max(0, Math.floor(Number(podItem.expected_quantity || 0)));
+                const itemKey = String(podItem.item_id || podItem.id || `pod-item-${index}`).trim();
+                const hasInputValue = Object.prototype.hasOwnProperty.call(supplyInputByItemKey, itemKey);
+                const defaultQuantity = hasInputValue
+                  ? Number(supplyInputByItemKey[itemKey] || 0)
+                  : expectedQuantity;
+                const inputQuantity = toBoundedInt(defaultQuantity, 0, expectedQuantity);
 
                 return (
                   <View
@@ -435,32 +486,52 @@ export default function TaskChecklistTab({
                       justifyContent: 'space-between',
                       paddingVertical: 10,
                       borderBottomWidth: 1,
-                      borderBottomColor: '#e2e8f0',
+                      borderBottomColor: palette.border,
                     }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0, marginRight: 12 }}>
-                      <View
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          backgroundColor: palette.primary,
-                          marginRight: 10,
-                          flexShrink: 0,
-                        }}
-                      />
+                    <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
                       <Text
-                        style={{ flex: 1, fontSize: 14, fontWeight: '500', color: palette.text }}
+                        style={{ fontSize: 14, fontWeight: '500', color: palette.text }}
                         numberOfLines={2}>
                         {itemName}
                       </Text>
+                      <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 3 }}>
+                        Chuẩn: <Text style={{ fontWeight: '700', color: palette.primary }}>{expectedQuantity}</Text>
+                      </Text>
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0 }}>
-                      <Text style={{ fontSize: 13, color: palette.textMuted, marginRight: 4 }}>
-                        Chuẩn:
-                      </Text>
-                      <Text style={{ fontSize: 14, fontWeight: '700', color: palette.primary }}>
-                        {expectedQuantity}
-                      </Text>
+                    <View style={styles.supplyQtyWrap}>
+                      <Pressable
+                        style={[
+                          styles.supplyQtyButton,
+                          {
+                            backgroundColor: inputQuantity <= 0 ? palette.neutral200 : '#e0f2fe',
+                          },
+                        ]}
+                        disabled={inputQuantity <= 0}
+                        onPress={() => updateSupplyQuantity(itemKey, expectedQuantity, inputQuantity - 1)}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: '#0369a1' }}>-</Text>
+                      </Pressable>
+
+                      <TextInput
+                        style={[styles.supplyQtyInput, { color: palette.text, borderColor: palette.border }]}
+                        value={String(inputQuantity)}
+                        onChangeText={(text) => updateSupplyQuantity(itemKey, expectedQuantity, text)}
+                        keyboardType="number-pad"
+                        maxLength={3}
+                        textAlign="center"
+                      />
+
+                      <Pressable
+                        style={[
+                          styles.supplyQtyButton,
+                          {
+                            backgroundColor:
+                              inputQuantity >= expectedQuantity ? palette.neutral200 : '#d1fae5',
+                          },
+                        ]}
+                        disabled={inputQuantity >= expectedQuantity}
+                        onPress={() => updateSupplyQuantity(itemKey, expectedQuantity, inputQuantity + 1)}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: '#15803d' }}>+</Text>
+                      </Pressable>
                     </View>
                   </View>
                 );
@@ -479,10 +550,7 @@ export default function TaskChecklistTab({
                 },
               ]}>
               <Text style={[styles.sectionTitle, { color: palette.secondary, alignSelf: 'center' }]}>
-                Báo cáo sự cố
-              </Text>
-              <Text style={[styles.info, { color: palette.textMuted }]}> 
-                Chọn loại sự cố cần ghi nhận cho nhiệm vụ này.
+                Báo cáo vấn đề
               </Text>
 
               <View style={styles.actionButtonRow}>
@@ -509,7 +577,7 @@ export default function TaskChecklistTab({
                       podName: String(task?.pod_name ?? ''),
                     })}>
                     <Text style={[styles.actionButtonText, { color: palette.white }]}> 
-                      Ghi nhận món đồ thất lạc
+                      Ghi nhận đồ thất lạc
                     </Text>
                   </Pressable>
                 ) : null}
@@ -524,7 +592,7 @@ export default function TaskChecklistTab({
                 styles.incidentSection,
                 { backgroundColor: `${palette.error}12`, borderColor: palette.error },
               ]}>
-              <Text style={[styles.sectionTitle, { color: palette.error }]}>
+              <Text style={[styles.sectionTitle, { color: palette.error, alignSelf: 'center' }]}>
                 Hư hại
               </Text>
               {incidents.map((incident) => {
@@ -535,11 +603,6 @@ export default function TaskChecklistTab({
                   CRITICAL: palette.error,
                 }[String(incident.severity || 'MEDIUM')] ?? palette.textMuted;
 
-                const incidentTypeLabel =
-                  incident.incident_type === 'DAMAGE_REPORT' ? 'Hư hại vật tư' : 'Sự cố chung';
-                const incidentTypeColor =
-                  incident.incident_type === 'DAMAGE_REPORT' ? palette.error : palette.secondary;
-
                 return (
                   <View
                     key={String(incident.id || Math.random())}
@@ -548,13 +611,6 @@ export default function TaskChecklistTab({
                       <View>
                         <Text style={[styles.incidentSeverity, { color: severityColor }]}>
                           {severityVi(String(incident.severity || 'MEDIUM'))}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.incidentStatus,
-                            { color: incidentTypeColor, fontSize: 11, marginTop: 2 },
-                          ]}>
-                          {incidentTypeLabel}
                         </Text>
                       </View>
                       <Text style={[styles.incidentStatus, { color: palette.textMuted }]}>
@@ -587,51 +643,49 @@ export default function TaskChecklistTab({
           ) : null}
 
           {/* Existing lost-found reports */}
-          <View
-            style={[
-              styles.incidentSection,
-              { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' },
-            ]}>
-            <Text style={[styles.sectionTitle, { color: '#0369a1' }]}>
-              Đồ thất lạc
-            </Text>
-
-            {loadingLostFound ? (
-              <ActivityIndicator color="#0284c7" />
-            ) : lostFoundItems.length === 0 ? (
-              <Text style={[styles.info, { color: palette.textMuted }]}>
-                Chưa có báo cáo đồ thất lạc cho nhiệm vụ này.
+          {lostFoundItems.length > 0 ? (
+            <View
+              style={[
+                styles.incidentSection,
+                { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' },
+              ]}>
+              <Text style={[styles.sectionTitle, { color: '#0369a1', alignSelf: 'center' }]}>
+                Đồ thất lạc
               </Text>
-            ) : (
-              lostFoundItems.map((item) => (
-                <View
-                  key={String(item.id || item._id || Math.random())}
-                  style={[styles.incidentItem, { borderColor: '#38bdf8', backgroundColor: '#f0f9ff' }]}>
-                  <View style={styles.incidentHeader}>
-                    <Text style={[styles.lostFoundItemName, { color: '#0f172a' }]}>
-                      {String(item.item_name || '-')}
-                    </Text>
-                    <Text style={[styles.incidentStatus, { color: '#0284c7', fontSize: 11 }]}>
-                      {lostFoundStatusVi(String(item.status || 'FOUND'))}
+
+              {loadingLostFound ? (
+                <ActivityIndicator color="#0284c7" />
+              ) : (
+                lostFoundItems.map((item) => (
+                  <View
+                    key={String(item.id || item._id || Math.random())}
+                    style={[styles.incidentItem, { borderColor: '#38bdf8', backgroundColor: '#f0f9ff' }]}>
+                    <View style={styles.incidentHeader}>
+                      <Text style={[styles.lostFoundItemName, { color: '#0f172a' }]}>
+                        {String(item.item_name || '-')}
+                      </Text>
+                      <Text style={[styles.incidentStatus, { color: '#0284c7', fontSize: 11 }]}>
+                        {lostFoundStatusVi(String(item.status || 'FOUND'))}
+                      </Text>
+                    </View>
+                    {item.description ? (
+                      <Text style={[styles.incidentDescription, { color: palette.textMuted }]}>
+                        {String(item.description)}
+                      </Text>
+                    ) : null}
+                    {item.photo_url ? (
+                      <Pressable onPress={() => setSelectedImageUri(String(item.photo_url))}>
+                        <Image source={{ uri: String(item.photo_url) }} style={styles.incidentThumb} resizeMode="cover" />
+                      </Pressable>
+                    ) : null}
+                    <Text style={[styles.incidentTime, { color: palette.textMuted }]}> 
+                      {formatDateTime(String(item.found_at || item.created_at || ''))}
                     </Text>
                   </View>
-                  {item.description ? (
-                    <Text style={[styles.incidentDescription, { color: palette.textMuted }]}>
-                      {String(item.description)}
-                    </Text>
-                  ) : null}
-                  {item.photo_url ? (
-                    <Pressable onPress={() => setSelectedImageUri(String(item.photo_url))}>
-                      <Image source={{ uri: String(item.photo_url) }} style={styles.incidentThumb} resizeMode="cover" />
-                    </Pressable>
-                  ) : null}
-                  <Text style={[styles.incidentTime, { color: palette.textMuted }]}> 
-                    {formatDateTime(String(item.found_at || item.created_at || ''))}
-                  </Text>
-                </View>
-              ))
-            )}
-          </View>
+                ))
+              )}
+            </View>
+          ) : null}
 
           {!isChecklistComplete ? (
             <Text style={{ textAlign: 'center', color: palette.textMuted, fontSize: 13, marginBottom: 4 }}>
@@ -642,7 +696,7 @@ export default function TaskChecklistTab({
             style={[styles.workDoneButton, { backgroundColor: isChecklistComplete ? palette.success : palette.neutral400 }]}
             disabled={!isChecklistComplete}
             onPress={onWorkDone}>
-            <Text style={styles.workDoneButtonText}>Hoàn thành việc làm</Text>
+            <Text style={styles.workDoneButtonText}>Hoàn thành dọn dẹp</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -918,6 +972,33 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+  },
+  supplyQtyWrap: {
+    width: 108,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    flexShrink: 0,
+  },
+  supplyQtyButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supplyQtyInput: {
+    flex: 1,
+    height: 32,
+    borderWidth: 1,
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    paddingVertical: 0,
+    paddingHorizontal: 4,
+    includeFontPadding: false,
   },
   incidentSection: {
     borderWidth: 1,

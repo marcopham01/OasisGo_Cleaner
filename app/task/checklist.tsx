@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -10,6 +11,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 export default function ChecklistScreen() {
   const { taskId } = useLocalSearchParams<{ taskId?: string }>();
   const router = useRouter();
+  const lastWorkDoneNavigateAtRef = useRef(0);
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const { token } = useAuth();
@@ -28,6 +30,16 @@ export default function ChecklistScreen() {
 
   const resolvedTaskId = String(taskId || '').trim() || null;
 
+  const handleWorkDone = useCallback(() => {
+    const now = Date.now();
+    if (now - lastWorkDoneNavigateAtRef.current < 700) {
+      return;
+    }
+
+    lastWorkDoneNavigateAtRef.current = now;
+    router.push(`/task/after-photo?taskId=${resolvedTaskId}`);
+  }, [resolvedTaskId, router]);
+
   return (
     <SafeAreaView
       style={[styles.safeArea, { backgroundColor: palette.background }]}
@@ -44,9 +56,7 @@ export default function ChecklistScreen() {
             router.replace('/(tabs)');
           }
         }}
-        onWorkDone={() => {
-          router.push(`/task/after-photo?taskId=${resolvedTaskId}`);
-        }}
+        onWorkDone={handleWorkDone}
         onReportDamage={({ podId, bookingId, podName }) => {
           const params = new URLSearchParams();
           if (resolvedTaskId) params.set('cleaningTaskId', resolvedTaskId);

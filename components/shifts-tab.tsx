@@ -23,7 +23,7 @@ import {
     getMyShiftAssignments,
     getMyTodayAttendanceStatus,
 } from '@/services/cleaner-dashboard.service';
-import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
+import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type {
     CleanerRealtimeNotification,
     CleaningTask,
@@ -111,6 +111,15 @@ function shiftLabel(assignment: StaffShiftAssignment) {
   );
 }
 
+function hasClearShiftAssignment(assignment: StaffShiftAssignment) {
+  const shiftName = String(assignment.shift?.shift_name || assignment.shift?.name || '').trim();
+  const startTime = String(assignment.start_time || assignment.shift?.start_time || '').trim();
+  const endTime = String(assignment.end_time || assignment.shift?.end_time || '').trim();
+
+  if (shiftName) return true;
+  return Boolean(startTime && endTime);
+}
+
 function displayStatus(assignment: StaffShiftAssignment, attendance?: AssignmentAttendanceState) {
   if (assignment.checkout_at || attendance?.checkout_at) return 'COMPLETED';
   if (assignment.checkin_at || attendance?.checkin_at) return 'CHECKED_IN';
@@ -141,6 +150,33 @@ function assignmentDateWithCurrentLabel(assignment: StaffShiftAssignment, shiftD
   const current = formatDate(shiftDate);
   const range = assignmentDateLabel(assignment);
   return `${current} (${range})`;
+}
+
+function assignmentStatusRank(status: string) {
+  const normalized = String(status || '').toUpperCase();
+  if (normalized === 'CHECKED_IN') return 0;
+  if (normalized === 'ASSIGNED') return 1;
+  if (normalized === 'COMPLETED') return 2;
+  if (normalized === 'ABSENT') return 3;
+  return 4;
+}
+
+function assignmentDateSortValue(assignment: StaffShiftAssignment, fallbackDate?: string) {
+  const dateText = String(
+    assignment.work_date || assignment.start_date || assignment.end_date || fallbackDate || '',
+  ).trim();
+  const parsed = new Date(dateText);
+  if (Number.isNaN(parsed.getTime())) return Number.MAX_SAFE_INTEGER;
+
+  parsed.setHours(0, 0, 0, 0);
+  return parsed.getTime();
+}
+
+function assignmentStartMinutes(assignment: StaffShiftAssignment) {
+  const timeText = String(assignment.start_time || assignment.shift?.start_time || '').trim();
+  const parts = parseTimeParts(timeText);
+  if (!parts) return Number.MAX_SAFE_INTEGER;
+  return parts.hours * 60 + parts.minutes;
 }
 
 type AssignmentAttendanceState = {
@@ -479,11 +515,13 @@ function taskDateValue(task: CleaningTask) {
   ).trim();
 }
 
-function taskLabel(task: CleaningTask) {
-  const id = String(task.id || task._id || '').trim();
-  const status = String(task.status || 'UNKNOWN').toUpperCase();
-  const pod = String(task.pod_id || '-').trim();
-  return `${id || '(khong co id)'} | ${status} | Pod ${pod}`;
+function pendingTaskStatusLabel(status: string) {
+  const normalized = String(status || '').toUpperCase();
+  if (normalized === 'ASSIGNED') return 'Đã phân công';
+  if (normalized === 'ACCEPTED') return 'Đã nhận';
+  if (normalized === 'IN_PROGRESS') return 'Đang dọn';
+  if (!normalized) return 'Không xác định';
+  return normalized.replace(/_/g, ' ');
 }
 
 function confirmCheckoutWithPendingTasks(pendingTasks: CleaningTask[]) {
@@ -491,25 +529,46 @@ function confirmCheckoutWithPendingTasks(pendingTasks: CleaningTask[]) {
     return confirmShiftAction('checkout');
   }
 
-  const preview = pendingTasks.slice(0, 6).map((task, index) => `${index + 1}. ${taskLabel(task)}`);
-  const extra = pendingTasks.length > 6 ? `\n... va ${pendingTasks.length - 6} task khac` : '';
-  const message =
-    `Hom nay ban con ${pendingTasks.length} task chua xong:\n\n${preview.join('\n')}${extra}\n\nBan van muon tan ca?`;
+  const uniquePods = new Set(
+    pendingTasks
+      .map((task) => String(task.pod_id || '').trim())
+      .filter(Boolean),
+  ).size;
+
+  const statusSummary = Object.entries(
+    pendingTasks.reduce<Record<string, number>>((acc, task) => {
+      const status = String(task.status || 'UNKNOWN').toUpperCase();
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {}),
+  )
+    .sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => `${pendingTaskStatusLabel(status)}: ${count}`)
+    .join(', ');
+
+  const message = [
+    `Hôm nay bạn còn ${pendingTasks.length} task chưa hoàn thành${uniquePods > 0 ? ` tại ${uniquePods} pod` : ''}.`,
+    statusSummary ? `Trạng thái hiện tại: ${statusSummary}.` : '',
+    'Nếu tan ca lúc này, bạn có thể bỏ sót công việc.',
+    'Bạn vẫn muốn tan ca?',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 
   if (Platform.OS === 'web') {
-    const confirmed = window.confirm(`Canh bao task chua xong\n\n${message}`);
+    const confirmed = window.confirm(`Cảnh báo task chưa xong\n\n${message}`);
     return Promise.resolve(Boolean(confirmed));
   }
 
   return new Promise<boolean>((resolve) => {
-    Alert.alert('Canh bao task chua xong', message, [
+    Alert.alert('Cảnh báo task chưa xong', message, [
       {
-        text: 'Quay lai task',
+        text: 'Quay lại task',
         style: 'cancel',
         onPress: () => resolve(false),
       },
       {
-        text: 'Van tan ca',
+        text: 'Vẫn tan ca',
         style: 'destructive',
         onPress: () => resolve(true),
       },
@@ -616,6 +675,31 @@ export default function ShiftsTab({
     }, {});
   }, [assignments, attendanceLogs, assignmentAttendanceMap]);
 
+  const sortedAssignments = useMemo(() => {
+    const next = [...assignments];
+
+    next.sort((left, right) => {
+      const leftAttendance = attendanceByAssignmentId[assignmentId(left)];
+      const rightAttendance = attendanceByAssignmentId[assignmentId(right)];
+      const leftStatus = displayStatus(left, leftAttendance);
+      const rightStatus = displayStatus(right, rightAttendance);
+
+      const statusDiff = assignmentStatusRank(leftStatus) - assignmentStatusRank(rightStatus);
+      if (statusDiff !== 0) return statusDiff;
+
+      const dateDiff =
+        assignmentDateSortValue(left, shiftDate) - assignmentDateSortValue(right, shiftDate);
+      if (dateDiff !== 0) return dateDiff;
+
+      const timeDiff = assignmentStartMinutes(left) - assignmentStartMinutes(right);
+      if (timeDiff !== 0) return timeDiff;
+
+      return shiftLabel(left).localeCompare(shiftLabel(right), 'vi');
+    });
+
+    return next;
+  }, [assignments, attendanceByAssignmentId, shiftDate]);
+
   const loadShifts = useCallback(async (silent = false) => {
     if (!silent) {
       setLoading(true);
@@ -641,6 +725,8 @@ export default function ShiftsTab({
           assignmentOverlapsDate(assignment, shiftDate),
         );
       }
+
+      assignmentData = assignmentData.filter(hasClearShiftAssignment);
 
       let myAttendanceLogs: StaffAttendanceLog[] = [];
       const byAssignmentStatus: Record<string, AssignmentAttendanceState> = {};
@@ -801,26 +887,22 @@ export default function ShiftsTab({
   }, [loadShifts]);
 
   useEffect(() => {
-    if (!token || !userId) {
+    if (!token) {
       return;
     }
 
-    const disconnect = connectCleanerNotificationSocket({
-      token,
-      cleanerId: userId,
-      onNotification: (event) => {
-        if (!shouldRefreshShiftsFromEvent(event)) {
-          return;
-        }
+    const unsubscribe = subscribeCleanerRealtimeEvent((event) => {
+      if (!shouldRefreshShiftsFromEvent(event)) {
+        return;
+      }
 
-        if (realtimeReloadTimer.current) {
-          clearTimeout(realtimeReloadTimer.current);
-        }
-        realtimeReloadTimer.current = setTimeout(() => {
-          realtimeReloadTimer.current = null;
-          void loadShifts(true);
-        }, 350);
-      },
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+      }
+      realtimeReloadTimer.current = setTimeout(() => {
+        realtimeReloadTimer.current = null;
+        void loadShifts(true);
+      }, 350);
     });
 
     return () => {
@@ -829,9 +911,9 @@ export default function ShiftsTab({
         realtimeReloadTimer.current = null;
       }
 
-      disconnect();
+      unsubscribe();
     };
-  }, [loadShifts, token, userId]);
+  }, [loadShifts, token]);
 
   const loadHistoryPage = useCallback(
     async (page: number, append: boolean) => {
@@ -924,10 +1006,10 @@ export default function ShiftsTab({
 
         {loading ? (
           <ActivityIndicator color={palette.primary} style={styles.loader} />
-        ) : assignments.length === 0 ? (
+        ) : sortedAssignments.length === 0 ? (
           <Text style={[styles.emptyText, { color: palette.textMuted }]}>Không có ca làm việc nào.</Text>
         ) : (
-          assignments.map((assignment) => {
+          sortedAssignments.map((assignment) => {
             const attendanceState = attendanceByAssignmentId[assignmentId(assignment)];
             const status = displayStatus(assignment, attendanceState);
             const statusBadge = statusBadgeMeta(status, isDark);

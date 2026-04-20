@@ -34,6 +34,7 @@ import type {
     PodDetails,
     PodItemEntry,
     PodItemQuery,
+    PodItemsByPodData,
     StaffAssignmentAttendanceStatus,
     StaffAttendanceLog,
     StaffAttendanceLogListResponse,
@@ -115,6 +116,27 @@ function extractData<T>(value: unknown): T | null {
   }
 
   return value as T;
+}
+
+function normalizePodItemEntries(items: unknown): PodItemEntry[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((raw) => {
+    const item = raw as PodItemEntry;
+    const itemRecord = (item.item && typeof item.item === 'object')
+      ? (item.item as { name?: string; item_type?: string })
+      : null;
+    const normalizedItemName = String(item.item_name || itemRecord?.name || '').trim();
+    const normalizedItemType = String(item.item_type || itemRecord?.item_type || '').trim();
+
+    return {
+      ...item,
+      item_name: normalizedItemName || undefined,
+      item_type: normalizedItemType || undefined,
+    };
+  });
 }
 
 function authHeader(token: string) {
@@ -1178,12 +1200,12 @@ export async function getMyLostFoundItems(token: string, query: LostFoundQuery =
 export async function getPodItems(token: string, query: PodItemQuery = {}) {
   try {
     if (query.pod_id) {
-      // Use the dedicated by-pod endpoint which returns enriched items with item_name flat
-      const response = await apiClient.get(`/pod-items/${query.pod_id}`, {
+      // Use the dedicated by-pod endpoint.
+      const response = await apiClient.get<ApiEnvelope<PodItemsByPodData>>(`/pod-items/pod/${query.pod_id}`, {
         headers: authHeader(token),
       });
-      const body = response.data?.data ?? response.data;
-      const items: PodItemEntry[] = Array.isArray(body?.items) ? (body.items as PodItemEntry[]) : [];
+      const body = extractData<PodItemsByPodData>(response.data?.data ?? response.data);
+      const items = normalizePodItemEntries(body?.items);
       return items;
     }
 
@@ -1193,6 +1215,25 @@ export async function getPodItems(token: string, query: PodItemQuery = {}) {
     });
 
     return toArray<PodItemEntry>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getPodItemsByPodId(token: string, podId: string) {
+  try {
+    const response = await apiClient.get<ApiEnvelope<PodItemsByPodData>>(`/pod-items/pod/${encodeURIComponent(podId)}`, {
+      headers: authHeader(token),
+    });
+
+    const body = extractData<PodItemsByPodData>(response.data?.data ?? response.data);
+    return {
+      pod_id: String(body?.pod_id || podId),
+      pod_name: String(body?.pod_name || ''),
+      pod_code: String(body?.pod_code || ''),
+      count: Number(body?.count || 0),
+      items: normalizePodItemEntries(body?.items),
+    } as PodItemsByPodData;
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }

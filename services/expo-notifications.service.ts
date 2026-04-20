@@ -12,6 +12,10 @@ type NotificationTarget =
     }
   | {
       type: 'HISTORY';
+    }
+  | {
+      type: 'INCIDENT';
+      route: 'LIST' | 'REPORT_FORM';
     };
 
 const DEFAULT_ANDROID_CHANNEL_ID = 'queanh_test_noti';
@@ -41,6 +45,19 @@ function getProjectId() {
 
 function toText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeToken(value: unknown) {
+  return toText(value).toUpperCase();
+}
+
+function isInternalCodeText(value: unknown) {
+  const text = toText(value);
+  if (!text) {
+    return false;
+  }
+
+  return /^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(normalizeToken(text));
 }
 
 function toObject(value: unknown): Record<string, unknown> {
@@ -73,6 +90,14 @@ function parseTargetFromUrl(url: string): NotificationTarget | null {
     return null;
   }
 
+  if (url === '/damage-report') {
+    return { type: 'INCIDENT', route: 'REPORT_FORM' };
+  }
+
+  if (url.startsWith('/(tabs)/lost-found') || url.startsWith('/lost-found')) {
+    return { type: 'INCIDENT', route: 'LIST' };
+  }
+
   if (url === '/history' || url === '/(tabs)/history') {
     return { type: 'HISTORY' };
   }
@@ -85,11 +110,28 @@ function parseTargetFromUrl(url: string): NotificationTarget | null {
     };
   }
 
+  const queryTaskIdMatch = url.match(/[?&](taskId|task_id|cleaningTaskId|cleaning_task_id)=([^&#]+)/i);
+  if (queryTaskIdMatch?.[2]) {
+    return {
+      type: 'TASK',
+      taskId: decodeURIComponent(queryTaskIdMatch[2]),
+    };
+  }
+
   return null;
 }
 
 function resolveTaskIdFromData(data: Record<string, unknown>) {
-  const keys = ['cleaning_task_id', 'task_id', 'taskId', 'cleaningTaskId', 'entity_id', 'id'];
+  const keys = [
+    'cleaning_task_id',
+    'task_id',
+    'taskId',
+    'cleaningTaskId',
+    'cleaning_task',
+    'task',
+    'entity_id',
+    'id',
+  ];
 
   for (const key of keys) {
     const value = toText(data[key]);
@@ -99,6 +141,165 @@ function resolveTaskIdFromData(data: Record<string, unknown>) {
   }
 
   return '';
+}
+
+function isIncidentPayload(data: Record<string, unknown>) {
+  const typeToken = toText(data.type || data.notification_type || data.category).toUpperCase();
+  if (typeToken === 'INCIDENT' || typeToken === 'DAMAGE_REPORT') {
+    return true;
+  }
+
+  const eventToken = toText(data.event_code || data.event || data.code).toUpperCase();
+  return eventToken.startsWith('INCIDENT_') || eventToken.includes('DAMAGE_REPORT');
+}
+
+function resolveRealtimeEventCode(event: CleanerRealtimeNotification, payload: Record<string, unknown>) {
+  const payloadData = toObject(parseJsonString(payload.data));
+
+  return normalizeToken(
+    payload.event_code ||
+      payload.notification_event ||
+      payload.event ||
+      payload.code ||
+      payloadData.event_code ||
+      payloadData.event ||
+      event.event ||
+      (event as Record<string, unknown>).event_code ||
+      (event as Record<string, unknown>).code,
+  );
+}
+
+function resolveRealtimeTaskStatus(event: CleanerRealtimeNotification, payload: Record<string, unknown>) {
+  const payloadData = toObject(parseJsonString(payload.data));
+
+  return normalizeToken(
+    payload.new_status ||
+      payload.status ||
+      payload.to_status ||
+      payload.next_status ||
+      payload.task_status ||
+      payload.cleaning_task_status ||
+      payloadData.new_status ||
+      payloadData.status ||
+      payloadData.to_status ||
+      payloadData.next_status ||
+      payloadData.task_status ||
+      payloadData.cleaning_task_status ||
+      (event as Record<string, unknown>).new_status ||
+      (event as Record<string, unknown>).status,
+  );
+}
+
+const SUPPRESSED_CLEANING_TASK_STATUSES = new Set(['ACCEPTED', 'IN_PROGRESS', 'DONE']);
+const SUPPRESSED_CLEANING_TASK_EVENT_CODES = new Set([
+  'CLEANING_TASK_ACCEPTED',
+  'CLEANING_TASK_STARTED',
+  'CLEANING_TASK_IN_PROGRESS',
+  'CLEANING_TASK_DONE',
+  'CLEANING_TASK_COMPLETED',
+]);
+
+export function shouldSuppressCleanerRealtimeNotification(event: CleanerRealtimeNotification) {
+  const payload = toObject(event.payload);
+  const eventCode = resolveRealtimeEventCode(event, payload);
+  const taskStatus = resolveRealtimeTaskStatus(event, payload);
+
+  if (SUPPRESSED_CLEANING_TASK_EVENT_CODES.has(eventCode)) {
+    return true;
+  }
+
+  if (eventCode === 'CLEANING_TASK_STATUS_CHANGED' && SUPPRESSED_CLEANING_TASK_STATUSES.has(taskStatus)) {
+    return true;
+  }
+
+  return false;
+}
+
+function defaultTitleByEventCode(eventCode: string) {
+  if (eventCode === 'CLEANING_TASK_ASSIGNED') return 'Nhiệm vụ dọn dẹp mới';
+  if (eventCode === 'CLEANING_TASK_STATUS_CHANGED') return 'Cập nhật nhiệm vụ dọn dẹp';
+  if (eventCode === 'CLEANING_TASK_SLA_REMINDER') return 'Nhắc xử lý nhiệm vụ dọn dẹp';
+  if (eventCode === 'CLEANING_TASK_CANCELLED_NO_SHOW') return 'Nhiệm vụ dọn dẹp đã hủy';
+  if (eventCode === 'CLEANING_TASK_CANCELLED_BOOKING_CANCELLED') return 'Nhiệm vụ dọn dẹp đã hủy';
+  if (eventCode === 'CLEANING_TASK_CANCENLLED_BOOKING_CANCELLED') return 'Nhiệm vụ dọn dẹp đã hủy';
+  if (eventCode.startsWith('CLEANING_TASK_')) return 'Thông báo nhiệm vụ dọn dẹp';
+  if (eventCode.startsWith('SHIFT_')) return 'Thông báo ca làm';
+  if (eventCode.startsWith('INCIDENT_')) return 'Thông báo sự cố';
+  if (eventCode.startsWith('INVENTORY_')) return 'Thông báo vật tư';
+  return 'Thông báo mới';
+}
+
+function defaultBodyByEventCode(eventCode: string) {
+  if (eventCode === 'CLEANING_TASK_ASSIGNED') {
+    return 'Bạn vừa được phân công một nhiệm vụ dọn dẹp mới.';
+  }
+  if (eventCode === 'CLEANING_TASK_STATUS_CHANGED') {
+    return 'Trạng thái nhiệm vụ dọn dẹp vừa được cập nhật.';
+  }
+  if (eventCode === 'CLEANING_TASK_SLA_REMINDER') {
+    return 'Nhiệm vụ dọn dẹp sắp quá hạn, vui lòng xử lý sớm.';
+  }
+  if (eventCode === 'CLEANING_TASK_CANCELLED_NO_SHOW') {
+    return 'Nhiệm vụ dọn dẹp đã bị hủy do khách không đến.';
+  }
+  if (eventCode === 'CLEANING_TASK_CANCELLED_BOOKING_CANCELLED') {
+    return 'Nhiệm vụ dọn dẹp đã bị hủy do đặt phòng bị hủy.';
+  }
+  if (eventCode === 'CLEANING_TASK_CANCENLLED_BOOKING_CANCELLED') {
+    return 'Nhiệm vụ dọn dẹp đã bị hủy do đặt phòng bị hủy.';
+  }
+  if (eventCode.startsWith('CLEANING_TASK_')) {
+    return 'Bạn có cập nhật mới liên quan đến nhiệm vụ dọn dẹp.';
+  }
+  if (eventCode.startsWith('SHIFT_')) {
+    return 'Bạn có cập nhật mới liên quan đến ca làm việc.';
+  }
+  if (eventCode.startsWith('INCIDENT_')) {
+    return 'Bạn có cập nhật mới liên quan đến sự cố.';
+  }
+  if (eventCode.startsWith('INVENTORY_')) {
+    return 'Bạn có cập nhật mới liên quan đến vật tư.';
+  }
+  return 'Bạn có cập nhật mới cần xem.';
+}
+
+function resolveRealtimeNotificationText(event: CleanerRealtimeNotification, payload: Record<string, unknown>) {
+  const payloadData = toObject(parseJsonString(payload.data));
+
+  const rawTitle =
+    toText(payload.title) ||
+    toText(payload.notification_title) ||
+    toText(payload.subject) ||
+    toText(payloadData.title) ||
+    toText(payloadData.notification_title) ||
+    toText((event as Record<string, unknown>).title) ||
+    toText((event as Record<string, unknown>).notification_title);
+
+  const rawBody =
+    toText(payload.message) ||
+    toText(payload.body) ||
+    toText(payload.content) ||
+    toText(payloadData.message) ||
+    toText(payloadData.body) ||
+    toText(payloadData.content) ||
+    toText((event as Record<string, unknown>).message) ||
+    toText((event as Record<string, unknown>).body) ||
+    toText((event as Record<string, unknown>).content);
+
+  const eventCode = resolveRealtimeEventCode(event, payload);
+  const title =
+    rawTitle && !isInternalCodeText(rawTitle)
+      ? rawTitle
+      : defaultTitleByEventCode(eventCode);
+  const body =
+    rawBody && !isInternalCodeText(rawBody)
+      ? rawBody
+      : defaultBodyByEventCode(eventCode);
+
+  return {
+    title,
+    body,
+  };
 }
 
 export function resolveNotificationTargetFromData(dataValue: unknown): NotificationTarget {
@@ -126,6 +327,25 @@ export function resolveNotificationTargetFromData(dataValue: unknown): Notificat
     if (targetTaskId) {
       return { type: 'TASK', taskId: targetTaskId };
     }
+  }
+
+  if (
+    targetType === 'INCIDENT' ||
+    targetType === 'DAMAGE_REPORT' ||
+    toText(mergedData.target_type).toUpperCase() === 'INCIDENT'
+  ) {
+    const openReportForm =
+      toText(mergedData.route).toUpperCase() === 'REPORT_FORM' ||
+      toText(mergedData.screen).toUpperCase() === 'DAMAGE_REPORT' ||
+      toText(mergedData.pathname) === '/damage-report';
+    return {
+      type: 'INCIDENT',
+      route: openReportForm ? 'REPORT_FORM' : 'LIST',
+    };
+  }
+
+  if (isIncidentPayload(mergedData)) {
+    return { type: 'INCIDENT', route: 'LIST' };
   }
 
   const taskId = resolveTaskIdFromData(mergedData);
@@ -189,12 +409,15 @@ export async function registerForPushNotificationsAsync() {
 
 export async function presentRealtimeNotificationAsync(event: CleanerRealtimeNotification) {
   if (Platform.OS === 'web') {
-    return;
+    return false;
+  }
+
+  if (shouldSuppressCleanerRealtimeNotification(event)) {
+    return false;
   }
 
   const payload = toObject(event.payload);
-  const title = toText(payload.title) || 'Thông báo mới';
-  const body = toText(payload.message) || 'Bạn có cập nhật mới cần xem.';
+  const { title, body } = resolveRealtimeNotificationText(event, payload);
   const target = resolveNotificationTargetFromData({
     ...event,
     ...payload,
@@ -207,6 +430,11 @@ export async function presentRealtimeNotificationAsync(event: CleanerRealtimeNot
 
   if (target.type === 'TASK') {
     data.url = `/task/${target.taskId}`;
+  } else if (target.type === 'INCIDENT') {
+    data.url =
+      target.route === 'REPORT_FORM'
+        ? '/damage-report'
+        : '/(tabs)/lost-found?listTab=DAMAGE';
   } else {
     data.url = '/(tabs)/history';
   }
@@ -225,6 +453,8 @@ export async function presentRealtimeNotificationAsync(event: CleanerRealtimeNot
           }
         : null,
   });
+
+  return true;
 }
 
 export function observeNotificationResponses(

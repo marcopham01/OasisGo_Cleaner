@@ -11,6 +11,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { updateDevicePushToken } from '@/services/auth.service';
 import { getMyUnreadNotificationCount } from '@/services/cleaner-dashboard.service';
 import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
+import { publishCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import {
     observeNotificationResponses,
     presentRealtimeNotificationAsync,
@@ -108,8 +109,14 @@ export default function TabLayout() {
       token,
       cleanerId: user.id,
       onNotification: (event) => {
-        incrementNotificationBadge(1);
-        presentRealtimeNotificationAsync(event).catch(() => null);
+        publishCleanerRealtimeEvent(event);
+        presentRealtimeNotificationAsync(event)
+          .then((isDisplayed) => {
+            if (isDisplayed) {
+              incrementNotificationBadge(1);
+            }
+          })
+          .catch(() => null);
       },
     });
 

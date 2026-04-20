@@ -34,6 +34,7 @@ export default function TaskSummaryScreen() {
         options={{
           headerLeft: () => null,
           headerBackVisible: false,
+          gestureEnabled: false,
         }}
       />
       <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>

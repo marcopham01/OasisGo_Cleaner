@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -7,9 +8,12 @@ import { Colors, Fonts, spacingX } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
+let completionNavigationLock = false;
+
 export default function AfterPhotoScreen() {
   const { taskId } = useLocalSearchParams<{ taskId?: string }>();
   const router = useRouter();
+  const hasCompletedNavigationRef = useRef(false);
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const { token } = useAuth();
@@ -28,6 +32,32 @@ export default function AfterPhotoScreen() {
 
   const resolvedTaskId = String(taskId || '').trim() || null;
 
+  const handleCompleted = useCallback(() => {
+    if (hasCompletedNavigationRef.current) {
+      return;
+    }
+
+    if (completionNavigationLock) {
+      return;
+    }
+
+    hasCompletedNavigationRef.current = true;
+    completionNavigationLock = true;
+
+    if (resolvedTaskId) {
+      router.replace(`/task/summary?taskId=${encodeURIComponent(resolvedTaskId)}`);
+      setTimeout(() => {
+        completionNavigationLock = false;
+      }, 1200);
+      return;
+    }
+
+    router.replace('/(tabs)');
+    setTimeout(() => {
+      completionNavigationLock = false;
+    }, 1200);
+  }, [resolvedTaskId, router]);
+
   return (
     <SafeAreaView
       style={[styles.safeArea, { backgroundColor: palette.background }]}
@@ -44,13 +74,7 @@ export default function AfterPhotoScreen() {
             router.replace('/(tabs)');
           }
         }}
-        onCompleted={() => {
-          if (resolvedTaskId) {
-            router.replace(`/task/summary?taskId=${resolvedTaskId}`);
-          } else {
-            router.replace('/(tabs)');
-          }
-        }}
+        onCompleted={handleCompleted}
       />
     </SafeAreaView>
   );

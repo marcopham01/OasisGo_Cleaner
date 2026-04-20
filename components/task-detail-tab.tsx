@@ -1,33 +1,33 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  getBookingById,
-  getCleaningTaskById,
-  getIncidentsByCleaningTaskId,
-  getMyCleanerKeyByBookingId,
-  getMyCleanerKeyByTaskId,
-  getPodById,
-  updateCleaningTask,
+    getBookingById,
+    getCleaningTaskById,
+    getIncidentsByCleaningTaskId,
+    getMyCleanerKeyByBookingId,
+    getMyCleanerKeyByTaskId,
+    getPodById,
+    updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
-import { connectCleanerNotificationSocket } from '@/services/cleaner-notification-socket';
+import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type {
-  CleanerOnlineKey,
-  CleanerRealtimeNotification,
-  CleanerTaskAction,
-  CleaningTask,
-  Incident,
+    CleanerOnlineKey,
+    CleanerRealtimeNotification,
+    CleanerTaskAction,
+    CleaningTask,
+    Incident,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -525,33 +525,23 @@ export default function TaskDetailTab({
   }, [loadDetail]);
 
   useEffect(() => {
-    if (task && String(task.status || '').toUpperCase() === 'DONE') {
-      onViewSummary?.();
-    }
-  }, [task, onViewSummary]);
-
-  useEffect(() => {
     const normalizedTaskId = normalizeId(taskId);
-    if (!token || !userId || !normalizedTaskId) {
+    if (!token || !normalizedTaskId) {
       return;
     }
 
-    const disconnect = connectCleanerNotificationSocket({
-      token,
-      cleanerId: userId,
-      onNotification: (event) => {
-        if (!shouldRefreshDetailFromEvent(event, normalizedTaskId)) {
-          return;
-        }
+    const unsubscribe = subscribeCleanerRealtimeEvent((event) => {
+      if (!shouldRefreshDetailFromEvent(event, normalizedTaskId)) {
+        return;
+      }
 
-        if (realtimeReloadTimer.current) {
-          clearTimeout(realtimeReloadTimer.current);
-        }
-        realtimeReloadTimer.current = setTimeout(() => {
-          realtimeReloadTimer.current = null;
-          void loadDetail(true);
-        }, 350);
-      },
+      if (realtimeReloadTimer.current) {
+        clearTimeout(realtimeReloadTimer.current);
+      }
+      realtimeReloadTimer.current = setTimeout(() => {
+        realtimeReloadTimer.current = null;
+        void loadDetail(true);
+      }, 350);
     });
 
     return () => {
@@ -560,9 +550,9 @@ export default function TaskDetailTab({
         realtimeReloadTimer.current = null;
       }
 
-      disconnect();
+      unsubscribe();
     };
-  }, [loadDetail, taskId, token, userId]);
+  }, [loadDetail, taskId, token]);
 
   const handleAction = async (action: CleanerTaskAction) => {
     if (!task || !taskId) return;

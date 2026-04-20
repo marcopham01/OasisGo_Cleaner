@@ -1,38 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Modal,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
 import {
-    bulkCreateInventoryActivityLogs,
-    getAllInventoryStocks,
-    getCleanerDailyActivityLogs,
-    getDailyTakenItemsSummary,
-    getInventoryEstimate,
+  bulkCreateInventoryActivityLogs,
+  getAllInventoryStocks,
+  getCleanerDailyActivityLogs,
+  getDailyTakenItemsSummary,
+  getInventoryEstimate,
 } from '@/services/inventory.service';
 import type {
-    CheckoutDraftItem,
-    CleanerDailyActivityLogResponse,
-    DailyActivityLogEntry,
-    DailyActivityLogSummaryItem,
-    DailyTakenItemsSummaryResponse,
-    FreeCheckoutDraftItem,
-    InventoryEstimateResponse,
-    InventoryStockItem,
-    InventorySuggestedStock,
-    ReturnDraftItem,
+  CheckoutDraftItem,
+  CleanerDailyActivityLogResponse,
+  DailyActivityLogEntry,
+  DailyActivityLogSummaryItem,
+  DailyTakenItemsSummaryResponse,
+  FreeCheckoutDraftItem,
+  InventoryEstimateResponse,
+  InventoryStockItem,
+  InventorySuggestedStock,
+  ReturnDraftItem,
 } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -569,6 +569,7 @@ function logEpochSeconds(iso?: string | null): number {
 function actionMeta(actionType: string, palette: typeof Colors.light) {
   const t = String(actionType || 'CHECKOUT').toUpperCase();
   if (t === 'RETURN') return { label: 'Trả kho', icon: '↩', color: palette.warning };
+  if (t === 'CONSUMED') return { label: 'Tiêu thụ', icon: '−', color: palette.error };
   if (t === 'WASTE')  return { label: 'Hỏng/Bỏ', icon: '✕', color: palette.error };
   return { label: 'Xuất kho', icon: '↑', color: palette.primary };
 }

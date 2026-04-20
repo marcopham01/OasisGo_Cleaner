@@ -25,7 +25,14 @@ export default function RootLayout() {
             <Stack.Screen name="task/before-photo" options={{ title: 'Chụp ảnh trước khi dọn', headerBackTitle: 'Quay lại' }} />
             <Stack.Screen name="task/checklist" options={{ title: 'Dọn dẹp & Báo cáo', headerBackTitle: 'Quay lại' }} />
             <Stack.Screen name="task/after-photo" options={{ title: 'Chụp ảnh sau khi dọn', headerBackTitle: 'Quay lại' }} />
-            <Stack.Screen name="task/summary" options={{ title: 'Kết quả dọn dẹp', headerBackTitle: 'Quay lại' }} />
+            <Stack.Screen
+              name="task/summary"
+              options={{
+                title: 'Kết quả dọn dẹp',
+                headerBackTitle: 'Quay lại',
+                gestureEnabled: false,
+              }}
+            />
             <Stack.Screen
               name="edit-profile"
               options={{ title: 'Chỉnh sửa thông tin', headerBackTitle: 'Tài khoản' }}
