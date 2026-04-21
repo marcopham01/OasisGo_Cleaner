@@ -1084,8 +1084,10 @@ export async function checkinBookingWithCleanerKey(token: string, keyToken: stri
     }
 
     return item;
-  } catch (error) {
-    throw new Error(getErrorMessage(error));
+  } catch (error: any) {
+    const normalizedError = new Error(getErrorMessage(error)) as Error & { statusCode?: number };
+    normalizedError.statusCode = error?.response?.status || error?.statusCode;
+    throw normalizedError;
   }
 }
 

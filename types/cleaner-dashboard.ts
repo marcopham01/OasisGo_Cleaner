@@ -195,6 +195,8 @@ export interface StaffShiftAssignment {
   work_date?: string;
   start_date?: string;
   end_date?: string;
+  start_time?: string;
+  end_time?: string;
   status?: ShiftAssignmentStatus | string;
   checkin_at?: string | null;
   checkout_at?: string | null;

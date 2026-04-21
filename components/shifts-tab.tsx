@@ -1,36 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    checkinShift,
-    checkoutShift,
-    getMyAssignmentAttendanceStatus,
-    getMyAttendanceLogs,
-    getMyAttendanceLogsPaginated,
-    getMyCleaningTasks,
-    getMyShiftAssignments,
-    getMyTodayAttendanceStatus,
+  checkinShift,
+  checkoutShift,
+  getMyAssignmentAttendanceStatus,
+  getMyAttendanceLogs,
+  getMyAttendanceLogsPaginated,
+  getMyCleaningTasks,
+  getMyShiftAssignments,
+  getMyTodayAttendanceStatus,
 } from '@/services/cleaner-dashboard.service';
 import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type {
-    CleanerRealtimeNotification,
-    CleaningTask,
-    StaffAttendanceLog,
-    StaffAttendanceLogListResponse,
-    StaffShiftAssignment,
-    StaffTodayAttendanceStatus,
+  CleanerRealtimeNotification,
+  CleaningTask,
+  StaffAttendanceLog,
+  StaffAttendanceLogListResponse,
+  StaffShiftAssignment,
+  StaffTodayAttendanceStatus,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -1051,10 +1051,13 @@ export default function ShiftsTab({
                   Khu vực: {String(assignment.location?.name || '-')}
                 </Text>
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Giờ check-in: {formatDateTime(assignment.checkin_at || attendanceState?.checkin_at)}
+                  Giờ ca: {String(assignment.start_time || assignment.shift?.start_time || '-')} – {String(assignment.end_time || assignment.shift?.end_time || '-')}
                 </Text>
                 <Text style={[styles.meta, { color: palette.textMuted }]}>
-                  Giờ check-out: {formatDateTime(assignment.checkout_at || attendanceState?.checkout_at)}
+                  Đã vào ca lúc: {formatDateTime(assignment.checkin_at || attendanceState?.checkin_at)}
+                </Text>
+                <Text style={[styles.meta, { color: palette.textMuted }]}>
+                  Đã tan ca lúc: {formatDateTime(assignment.checkout_at || attendanceState?.checkout_at)}
                 </Text>
 
                 {isWrongSelectedDate && (
@@ -1073,7 +1076,7 @@ export default function ShiftsTab({
                         styles.actionButtonText,
                         { color: checkinDisabled ? palette.textMuted : palette.primaryDark },
                       ]}>
-                      Vao ca
+                      Vào ca
                     </Text>
                   </Pressable>
                   <Pressable

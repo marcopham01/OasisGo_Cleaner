@@ -374,6 +374,59 @@ function defaultBodyByEventCode(eventCode: string) {
   return 'Bạn có cập nhật mới cần xem.';
 }
 
+// ISO 8601 UTC datetime strings embedded in notification messages from the
+// backend are formatted in UTC+0. Replace them with the equivalent local time
+// so cleaners always see Vietnam Standard Time (UTC+7).
+function rewriteIsoUtcTimestamps(text: string): string {
+  return text.replace(
+    /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g,
+    (isoStr) => {
+      const d = new Date(isoStr);
+      if (Number.isNaN(d.getTime())) return isoStr;
+      return d.toLocaleString('vi-VN', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+    },
+  );
+}
+
+// Extract a deadline timestamp from the various fields the backend may include
+// in the socket payload for a cleaning task assignment event.
+function resolveTaskDueText(
+  payload: Record<string, unknown>,
+  payloadData: Record<string, unknown>,
+): string {
+  const raw =
+    toText(payload.due_at) ||
+    toText(payloadData.due_at) ||
+    toText(payload.booking_end_time) ||
+    toText(payloadData.booking_end_time) ||
+    toText(payload.end_time) ||
+    toText(payloadData.end_time) ||
+    toText((payload.data as Record<string, unknown> | null)?.due_at);
+
+  if (!raw) return '';
+
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return '';
+
+  return d.toLocaleString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
 function resolveRealtimeNotificationText(event: CleanerRealtimeNotification, payload: Record<string, unknown>) {
   const payloadData = toObject(parseJsonString(payload.data));
 
@@ -400,12 +453,27 @@ function resolveRealtimeNotificationText(event: CleanerRealtimeNotification, pay
   const eventCode = resolveRealtimeEventCode(event, payload);
   const title =
     rawTitle && !isInternalCodeText(rawTitle)
-      ? rawTitle
+      ? rewriteIsoUtcTimestamps(rawTitle)
       : defaultTitleByEventCode(eventCode);
-  const body =
-    rawBody && !isInternalCodeText(rawBody)
-      ? rawBody
+
+  // For new-task-assignment events, ensure the deadline time shown in the
+  // notification body is in UTC+7 (Asia/Ho_Chi_Minh).
+  // 1. If the backend embeds an ISO UTC timestamp in the message string,
+  //    rewrite it to local time.
+  // 2. If the body is missing/internal-code, try to build one from the
+  //    due_at / booking_end_time field that the backend may include in the
+  //    payload, then fall back to the generic default.
+  let body: string;
+  if (rawBody && !isInternalCodeText(rawBody)) {
+    body = rewriteIsoUtcTimestamps(rawBody);
+  } else if (eventCode === 'CLEANING_TASK_ASSIGNED') {
+    const dueText = resolveTaskDueText(payload, payloadData);
+    body = dueText
+      ? `Bạn vừa được phân công một nhiệm vụ dọn dẹp mới. Hạn chót: ${dueText}.`
       : defaultBodyByEventCode(eventCode);
+  } else {
+    body = defaultBodyByEventCode(eventCode);
+  }
 
   return {
     title,
