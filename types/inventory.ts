@@ -169,6 +169,7 @@ export interface CheckoutDraftItem {
 /** UI-level item with user-editable return quantity */
 export interface ReturnDraftItem {
   inventory_stock_id: string;
+  item_id: string | null;
   cleaning_task_id: string | null;
   item_name: string | null;
   warehouse_name: string | null;
@@ -176,6 +177,9 @@ export interface ReturnDraftItem {
   checked_out: number;
   /** Total quantity already returned today for this stock+task combination */
   already_returned: number;
+  /** Net quantity currently held according to getDailyTakenItemsSummary (CHECKOUT - RETURN - CONSUMED - WASTE).
+   *  null = summary API not yet loaded / failed. */
+  held_quantity: number | null;
   /** Quantity the cleaner intends to return */
   returnQuantity: number;
 }

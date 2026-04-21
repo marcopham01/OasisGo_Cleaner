@@ -70,12 +70,21 @@ export function connectCleanerNotificationSocket(params: {
     }
   };
 
+  // Remove any stale handlers from a previous call (e.g. React Strict-Mode
+  // double-mount, or rapid token-refresh re-renders) before registering new
+  // ones.  This ensures at most ONE `cleaner:notification` listener is active
+  // at any time, preventing the same socket event from firing multiple handlers
+  // and producing duplicate local notifications.
+  socket.off('connect');
+  socket.off('cleaner:notification');
+  socket.off('socket:error');
+
   socket.on('connect', subscribe);
   socket.on('cleaner:notification', onNotification);
   socket.on('socket:error', onSocketError);
   socket.connect();
 
-  // Subscribe immediately in case socket reconnects with an existing connection.
+  // Subscribe immediately if already connected (e.g. re-render with same socket).
   if (socket.connected) {
     subscribe();
   }

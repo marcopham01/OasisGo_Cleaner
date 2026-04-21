@@ -24,12 +24,50 @@ const EXPO_NOTIFICATION_CHANNEL_ID = String(
 ).trim();
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    // Deduplicate INCIDENT notifications that arrive as remote push from the
+    // backend (e.g. one push per damage-report detail line).  This check uses
+    // the same in-memory cache as the socket pipeline so whichever channel
+    // (socket or push) arrives first wins and the rest are suppressed within
+    // the dedup TTL window.
+    const rawData = notification.request.content.data as Record<string, unknown>;
+    const targetObj = rawData?.target && typeof rawData.target === 'object'
+      ? (rawData.target as Record<string, unknown>)
+      : {};
+    const targetType = String(targetObj.type ?? rawData.type ?? '').toUpperCase();
+    const eventCode = String(rawData.event_code ?? rawData.event ?? '').toUpperCase();
+    const url = String(rawData.url ?? '');
+
+    // Local notifications scheduled by presentRealtimeNotificationAsync already
+    // passed through the dedup gate; skip dedup here to avoid self-suppression.
+    const isLocal = rawData?._local === true;
+
+    const isIncident =
+      !isLocal &&
+      (
+        targetType === 'INCIDENT' ||
+        targetType === 'DAMAGE_REPORT' ||
+        eventCode.startsWith('INCIDENT_') ||
+        url.includes('lost-found') ||
+        url === '/damage-report'
+      );
+
+    if (isIncident && isDuplicateRealtimeNotification('INCIDENT_NOTIFICATION')) {
+      return {
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
+
+    return {
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 function getProjectId() {
@@ -198,6 +236,79 @@ const SUPPRESSED_CLEANING_TASK_EVENT_CODES = new Set([
   'CLEANING_TASK_DONE',
   'CLEANING_TASK_COMPLETED',
 ]);
+
+// ── Notification deduplication ──────────────────────────────────────────────
+// Prevents the same realtime event from firing multiple local notifications
+// when the backend emits several socket events in quick succession (e.g. after
+// a damage report is created) or when the socket briefly reconnects and
+// re-delivers the event.
+
+const recentNotificationDedup = new Map<string, number>();
+const NOTIFICATION_DEDUP_TTL_MS = 10_000; // 10 seconds
+
+function buildRealtimeDedupKey(
+  event: CleanerRealtimeNotification,
+  payload: Record<string, unknown>,
+): string {
+  const payloadData = toObject(parseJsonString(payload.data));
+  const eventCode = resolveRealtimeEventCode(event, payload);
+
+  // For INCIDENT events the backend can emit several notifications in rapid
+  // succession for a single damage-report submission (e.g. INCIDENT_REPORTED,
+  // INCIDENT_REVIEW_REQUIRED, INCIDENT_STATUS_CHANGED …) and each one may
+  // carry a different entity / detail-line ID.  Collapse the entire burst into
+  // one fixed category key so only the first notification is shown within the
+  // dedup window, regardless of how many events arrive.
+  if (eventCode.startsWith('INCIDENT_') || isIncidentPayload({ ...toObject(event), ...payload })) {
+    return 'INCIDENT_NOTIFICATION';
+  }
+
+  // For all other event types prefer a stable entity / notification ID so that
+  // genuinely different events (e.g. two task assignments) are not merged.
+  const entityId = toText(
+    (event as Record<string, unknown>).id ||
+      (event as Record<string, unknown>).notification_id ||
+      payload.id ||
+      payload.notification_id ||
+      payload.entity_id ||
+      payloadData.id ||
+      payloadData.notification_id ||
+      payloadData.entity_id,
+  );
+
+  if (entityId) {
+    return `${eventCode}:${entityId}`;
+  }
+
+  // Fallback: combine event code with server timestamp for uniqueness.
+  const sentAt = toText(
+    (event as Record<string, unknown>).sent_at ||
+      payload.sent_at ||
+      payloadData.sent_at,
+  );
+  if (sentAt) {
+    return `${eventCode}:${sentAt}`;
+  }
+
+  return eventCode;
+}
+
+function isDuplicateRealtimeNotification(key: string): boolean {
+  const now = Date.now();
+  // Prune expired entries to avoid unbounded growth.
+  for (const [k, ts] of recentNotificationDedup) {
+    if (now - ts > NOTIFICATION_DEDUP_TTL_MS) {
+      recentNotificationDedup.delete(k);
+    }
+  }
+
+  if (recentNotificationDedup.has(key)) {
+    return true;
+  }
+
+  recentNotificationDedup.set(key, now);
+  return false;
+}
 
 export function shouldSuppressCleanerRealtimeNotification(event: CleanerRealtimeNotification) {
   const payload = toObject(event.payload);
@@ -417,6 +528,15 @@ export async function presentRealtimeNotificationAsync(event: CleanerRealtimeNot
   }
 
   const payload = toObject(event.payload);
+
+  // Suppress duplicate events received within the dedup window (e.g. backend
+  // emitting multiple INCIDENT_* events for one damage report submission, or
+  // socket reconnect re-delivering the same event).
+  const dedupKey = buildRealtimeDedupKey(event, payload);
+  if (isDuplicateRealtimeNotification(dedupKey)) {
+    return false;
+  }
+
   const { title, body } = resolveRealtimeNotificationText(event, payload);
   const target = resolveNotificationTargetFromData({
     ...event,
@@ -426,6 +546,9 @@ export async function presentRealtimeNotificationAsync(event: CleanerRealtimeNot
 
   const data: Record<string, unknown> = {
     target,
+    // Marks this as a locally scheduled notification so handleNotification
+    // skips the dedup gate (which was already applied above).
+    _local: true,
   };
 
   if (target.type === 'TASK') {

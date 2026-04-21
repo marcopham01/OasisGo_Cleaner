@@ -130,7 +130,9 @@ function buildDraftItems(
     .filter((d) => d.required_quantity > 0);
 }
 
-/** Build return draft items by grouping today's CHECKOUT logs by (inventory_stock_id, cleaning_task_id) */
+/** Build return draft items by grouping today's CHECKOUT logs by inventory_stock_id only.
+ * Multiple logs for the same stock (different tasks or multiple checkouts) are merged
+ * into a single row so each physical item appears exactly once. */
 function buildReturnDraftItems(
   checkoutLogs: DailyActivityLogEntry[],
   returnLogs: DailyActivityLogEntry[],
@@ -140,17 +142,21 @@ function buildReturnDraftItems(
   for (const log of checkoutLogs) {
     const qty = Number(log.quantity || 0);
     if (qty <= 0) continue;
-    const key = `${log.inventory_stock_id}__${log.cleaning_task_id ?? ''}`;
+    // Key only on inventory_stock_id so the same physical item is always merged
+    const key = String(log.inventory_stock_id || '').trim();
+    if (!key) continue;
     if (map.has(key)) {
       map.get(key)!.checked_out += qty;
     } else {
       map.set(key, {
         inventory_stock_id: log.inventory_stock_id,
+        item_id: log.item_id ?? null,
         cleaning_task_id: log.cleaning_task_id ?? null,
         item_name: log.item_name ?? null,
         warehouse_name: log.warehouse_name ?? null,
         checked_out: qty,
         already_returned: 0,
+        held_quantity: null,
         returnQuantity: 0,
       });
     }
@@ -158,18 +164,17 @@ function buildReturnDraftItems(
 
   for (const log of returnLogs) {
     const qty = Number(log.quantity || 0);
-    // Normalize for display/math in case backend data format varies.
     const returnedQty = Math.abs(qty);
     if (returnedQty <= 0) continue;
-    const key = `${log.inventory_stock_id}__${log.cleaning_task_id ?? ''}`;
+    const key = String(log.inventory_stock_id || '').trim();
     if (map.has(key)) {
       map.get(key)!.already_returned += returnedQty;
     }
   }
 
   for (const item of map.values()) {
-    const maxReturnable = Math.max(0, item.checked_out - item.already_returned);
-    item.returnQuantity = maxReturnable;
+    // Default to 0 — cleaner must explicitly choose how much to return
+    item.returnQuantity = 0;
   }
 
   return [...map.values()].filter((item) => (item.checked_out - item.already_returned) > 0);
@@ -678,7 +683,12 @@ interface ReturnItemRowProps {
 }
 
 function ReturnItemRow({ item, rowKey, onChange, palette }: ReturnItemRowProps) {
-  const maxReturnable = Math.max(0, item.checked_out - item.already_returned);
+  // Prefer held_quantity from getDailyTakenItemsSummary (accounts for CONSUMED/WASTE);
+  // fall back to log-based calculation only when summary is unavailable.
+  const maxReturnable =
+    item.held_quantity !== null
+      ? Math.max(0, item.held_quantity)
+      : Math.max(0, item.checked_out - item.already_returned);
   const [inputText, setInputText] = useState(String(item.returnQuantity));
 
   useEffect(() => {
@@ -716,14 +726,7 @@ function ReturnItemRow({ item, rowKey, onChange, palette }: ReturnItemRowProps) 
         <Text style={[styles.itemName, { color: palette.text }]} numberOfLines={2}>
           {item.item_name || 'Vật tư không rõ'}
         </Text>
-        <View style={[styles.stockBadge, { backgroundColor: palette.warning + '22' }]}>
-          <Text style={[styles.stockBadgeText, { color: palette.warning }]}>Đã lấy: {item.checked_out}</Text>
-        </View>
-        {item.already_returned > 0 && (
-          <View style={[styles.stockBadge, { backgroundColor: palette.success + '22', marginLeft: spacingX._5 }]}>
-            <Text style={[styles.stockBadgeText, { color: palette.success }]}>Đã trả: {item.already_returned}</Text>
-          </View>
-        )}
+
       </View>
 
       {item.warehouse_name ? (
@@ -1358,19 +1361,44 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
     setLoading(true);
     setError(null);
     try {
-      const data = await getCleanerDailyActivityLogs(token, userId, today);
+      // Fetch raw logs (needed for inventory_stock_id to submit returns)
+      // and daily-taken summary (authoritative source for held quantities)
+      // in parallel.
+      const [data, takenSummary] = await Promise.all([
+        getCleanerDailyActivityLogs(token, userId, today),
+        getDailyTakenItemsSummary(token, { date: today }).catch(() => null),
+      ]);
+
       const checkoutLogs = (data.logs ?? []).filter(
         (l) => !l.action_type || l.action_type === 'CHECKOUT',
       );
       const returnLogs = (data.logs ?? []).filter((l) => l.action_type === 'RETURN');
-      setDraftItems(buildReturnDraftItems(checkoutLogs, returnLogs));
+      const rawDraft = buildReturnDraftItems(checkoutLogs, returnLogs);
 
-      try {
-        const takenSummary = await getDailyTakenItemsSummary(token, { date: today });
-        setHeldItems(buildHeldItems(takenSummary, data.summary_by_item ?? []));
-      } catch {
-        setHeldItems(buildHeldItems(null, data.summary_by_item ?? []));
+      // Build item_id → net_quantity from takenSummary (accounts for CONSUMED/WASTE)
+      const heldByItemId = new Map<string, number>();
+      if (takenSummary?.cleaners) {
+        for (const cleaner of takenSummary.cleaners) {
+          for (const item of cleaner.items ?? []) {
+            const id = String(item.item_id || '').trim();
+            if (!id) continue;
+            heldByItemId.set(id, (heldByItemId.get(id) ?? 0) + Number(item.net_quantity || 0));
+          }
+        }
       }
+
+      // Patch held_quantity and re-filter: if summary loaded, hide items with net=0
+      const patchedDraft = rawDraft
+        .map((d) => ({
+          ...d,
+          held_quantity: d.item_id && heldByItemId.size > 0 ? (heldByItemId.get(d.item_id) ?? 0) : null,
+        }))
+        .filter((d) =>
+          d.held_quantity !== null ? d.held_quantity > 0 : d.checked_out - d.already_returned > 0,
+        );
+
+      setDraftItems(patchedDraft);
+      setHeldItems(buildHeldItems(takenSummary, data.summary_by_item ?? []));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -1389,10 +1417,7 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
 
   function handleQtyChange(key: string, qty: number) {
     setDraftItems((prev) =>
-      prev.map((d) => {
-        const k = `${d.inventory_stock_id}__${d.cleaning_task_id ?? ''}`;
-        return k === key ? { ...d, returnQuantity: qty } : d;
-      }),
+      prev.map((d) => (d.inventory_stock_id === key ? { ...d, returnQuantity: qty } : d)),
     );
   }
 
@@ -1501,7 +1526,7 @@ function ReturnModal({ visible, token, userId, today, palette, onClose, onSucces
               <View style={styles.section}>
                 <Text style={[styles.sectionTitle, { color: palette.text }]}>Vật tư đang giữ</Text>
                 {draftItems.map((item) => {
-                  const key = `${item.inventory_stock_id}__${item.cleaning_task_id ?? ''}`;
+                  const key = item.inventory_stock_id;
                   return (
                     <ReturnItemRow
                       key={key}

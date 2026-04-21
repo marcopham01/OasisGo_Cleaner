@@ -20,6 +20,7 @@ import {
   getMyLostFoundItems,
   getPodItemsByPodId,
 } from '@/services/cleaner-dashboard.service';
+import { getDailyTakenItemsSummary } from '@/services/inventory.service';
 import type {
   CleaningTask,
   Incident,
@@ -130,6 +131,8 @@ export default function TaskChecklistTab({
   const [podItemsPodName, setPodItemsPodName] = useState('');
   const [loadingPodItems, setLoadingPodItems] = useState(false);
   const [supplyInputByItemKey, setSupplyInputByItemKey] = useState<Record<string, number>>({});
+  // Map of item_id -> net held quantity from today's inventory activity logs
+  const [heldQtyByItemId, setHeldQtyByItemId] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
@@ -219,6 +222,24 @@ export default function TaskChecklistTab({
     }
   }, [token, task]);
 
+  const refreshHeldItems = useCallback(async () => {
+    if (!token) return;
+    try {
+      const summary = await getDailyTakenItemsSummary(token);
+      const map: Record<string, number> = {};
+      for (const cleaner of summary.cleaners ?? []) {
+        for (const item of cleaner.items ?? []) {
+          const id = String(item.item_id || '').trim();
+          if (!id) continue;
+          map[id] = (map[id] ?? 0) + Number(item.net_quantity || 0);
+        }
+      }
+      setHeldQtyByItemId(map);
+    } catch {
+      // Non-critical — held quantity display is informational only
+    }
+  }, [token]);
+
   const updateSupplyQuantity = useCallback(
     (itemKey: string, expectedQuantity: number, nextValue: number | string) => {
       const max = Math.max(0, Math.floor(expectedQuantity || 0));
@@ -238,14 +259,16 @@ export default function TaskChecklistTab({
   useEffect(() => {
     void refreshLostFoundItems();
     void refreshPodItems();
-  }, [refreshLostFoundItems, refreshPodItems]);
+    void refreshHeldItems();
+  }, [refreshLostFoundItems, refreshPodItems, refreshHeldItems]);
 
   useFocusEffect(
     useCallback(() => {
       void refreshIncidents();
       void refreshLostFoundItems();
       void refreshPodItems();
-    }, [refreshIncidents, refreshLostFoundItems, refreshPodItems]),
+      void refreshHeldItems();
+    }, [refreshIncidents, refreshLostFoundItems, refreshPodItems, refreshHeldItems]),
   );
 
   const toggleChecklistItem = (item: string) => {
@@ -274,6 +297,32 @@ export default function TaskChecklistTab({
   const isChecklistComplete =
     CLEANING_CHECKLIST_ITEMS.length > 0 &&
     completedChecklistCount === CLEANING_CHECKLIST_ITEMS.length;
+
+  // Block step 3 if held quantity (from inventory activity logs today) is less
+  // than the expected quantity for any pod item.  Only runs when heldQtyByItemId
+  // has been loaded; if the API hasn't responded yet, skip blocking to avoid
+  // false positives on slow connections.
+  const heldDataLoaded = Object.keys(heldQtyByItemId).length > 0;
+  const supplyShortageItems = heldDataLoaded
+    ? podItems
+        .map((podItem) => {
+          const expectedQuantity = Math.max(0, Math.floor(Number(podItem.expected_quantity || 0)));
+          if (expectedQuantity === 0) return null;
+          const itemIdForHeld = String(podItem.item_id || '').trim();
+          const heldQuantity = itemIdForHeld
+            ? Math.max(0, Number(heldQtyByItemId[itemIdForHeld] ?? 0))
+            : expectedQuantity;
+          if (heldQuantity >= expectedQuantity) return null;
+          return {
+            name: String(podItem.item_name || podItem.item?.name || podItem.item_id || 'Vật tư'),
+            held: heldQuantity,
+            expected: expectedQuantity,
+          };
+        })
+        .filter(Boolean) as Array<{ name: string; held: number; expected: number }>
+    : [];
+  const hasSupplyShortage = supplyShortageItems.length > 0;
+
   const hasDamageReports = incidents.length > 0;
   const hasLostFoundReports = lostFoundItems.length > 0;
   const showReportActionSection = !(hasDamageReports && hasLostFoundReports);
@@ -472,9 +521,16 @@ export default function TaskChecklistTab({
                 const expectedQuantity = Math.max(0, Math.floor(Number(podItem.expected_quantity || 0)));
                 const itemKey = String(podItem.item_id || podItem.id || `pod-item-${index}`).trim();
                 const hasInputValue = Object.prototype.hasOwnProperty.call(supplyInputByItemKey, itemKey);
+                // Default to held quantity when the cleaner hasn't touched the stepper,
+                // so that a real shortage (held < expected) is visible immediately.
+                // Falls back to expectedQuantity when held data isn't loaded yet.
+                const itemIdForHeld = String(podItem.item_id || '').trim();
+                const heldDefault = itemIdForHeld && Object.prototype.hasOwnProperty.call(heldQtyByItemId, itemIdForHeld)
+                  ? Math.min(Number(heldQtyByItemId[itemIdForHeld] ?? 0), expectedQuantity)
+                  : expectedQuantity;
                 const defaultQuantity = hasInputValue
                   ? Number(supplyInputByItemKey[itemKey] || 0)
-                  : expectedQuantity;
+                  : heldDefault;
                 const inputQuantity = toBoundedInt(defaultQuantity, 0, expectedQuantity);
 
                 return (
@@ -494,9 +550,21 @@ export default function TaskChecklistTab({
                         numberOfLines={2}>
                         {itemName}
                       </Text>
-                      <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 3 }}>
-                        Chuẩn: <Text style={{ fontWeight: '700', color: palette.primary }}>{expectedQuantity}</Text>
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 3 }}>
+                        <Text style={{ fontSize: 12, color: palette.textMuted }}>
+                          Chuẩn: <Text style={{ fontWeight: '700', color: palette.primary }}>{expectedQuantity}</Text>
+                        </Text>
+                        {(() => {
+                          const itemId = String(podItem.item_id || '').trim();
+                          const held = Number(itemId ? (heldQtyByItemId[itemId] ?? 0) : 0);
+                          const heldColor = held >= expectedQuantity ? palette.success : held > 0 ? '#f59e0b' : palette.textMuted;
+                          return (
+                            <Text style={{ fontSize: 12, color: palette.textMuted }}>
+                              Đang giữ: <Text style={{ fontWeight: '700', color: heldColor }}>{held}</Text>
+                            </Text>
+                          );
+                        })()}
+                      </View>
                     </View>
                     <View style={styles.supplyQtyWrap}>
                       <Pressable
@@ -692,9 +760,40 @@ export default function TaskChecklistTab({
               Cần hoàn thành {completedChecklistCount}/{CLEANING_CHECKLIST_ITEMS.length} mục trước khi tiếp tục
             </Text>
           ) : null}
+          {hasSupplyShortage ? (
+            <View
+              style={{
+                backgroundColor: '#FFF7ED',
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: '#FED7AA',
+                padding: 12,
+                marginBottom: 4,
+              }}>
+              <Text style={{ color: '#C2410C', fontWeight: '700', fontSize: 13, marginBottom: 4 }}>
+                ⚠️ Chưa đủ vật tư bổ sung
+              </Text>
+              {supplyShortageItems.map((s, i) => (
+                <Text key={i} style={{ color: '#92400E', fontSize: 12, marginTop: 2 }}>
+                  • {s.name}: đang giữ {s.held}/{s.expected}
+                </Text>
+              ))}
+              <Text style={{ color: '#C2410C', fontSize: 12, marginTop: 6 }}>
+                Vui lòng bổ sung đủ số lượng trước khi chuyển sang bước tiếp theo.
+              </Text>
+            </View>
+          ) : null}
           <Pressable
-            style={[styles.workDoneButton, { backgroundColor: isChecklistComplete ? palette.success : palette.neutral400 }]}
-            disabled={!isChecklistComplete}
+            style={[
+              styles.workDoneButton,
+              {
+                backgroundColor:
+                  isChecklistComplete && !hasSupplyShortage
+                    ? palette.success
+                    : palette.neutral400,
+              },
+            ]}
+            disabled={!isChecklistComplete || hasSupplyShortage}
             onPress={onWorkDone}>
             <Text style={styles.workDoneButtonText}>Hoàn thành dọn dẹp</Text>
           </Pressable>
