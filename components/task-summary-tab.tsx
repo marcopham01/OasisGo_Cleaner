@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { ResizeMode, Video } from 'expo-av';
 import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -63,6 +64,10 @@ function severityLabelVi(severity?: string | null) {
   return severity ?? '-';
 }
 
+function isVideoUrl(url: string): boolean {
+  return /\.(mp4|mov|avi|webm|mkv|m4v)(\?|#|$)/i.test(url) || /\/video\/upload\//i.test(url);
+}
+
 function severityColor(severity?: string | null, palette?: typeof Colors.light) {
   if (!palette) return '#64748b';
   if (severity === 'LOW') return palette.success;
@@ -84,7 +89,7 @@ export default function TaskSummaryTab({
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<{ uri: string; isVideo: boolean } | null>(null);
 
   const loadData = useCallback(async () => {
     if (!taskId || !token) return;
@@ -97,8 +102,8 @@ export default function TaskSummaryTab({
         getIncidentsByCleaningTaskId(token, taskId),
       ]);
       setTask(taskData);
-      setBeforePhotos(allPhotos.filter((p) => String(p.type).toUpperCase() === 'BEFORE'));
-      setAfterPhotos(allPhotos.filter((p) => String(p.type).toUpperCase() === 'AFTER'));
+      setBeforePhotos(allPhotos.filter((p) => String(p.media_type || p.type || '').toUpperCase() === 'BEFORE'));
+      setAfterPhotos(allPhotos.filter((p) => String(p.media_type || p.type || '').toUpperCase() === 'AFTER'));
       setIncidents(incidentsData);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -145,22 +150,32 @@ export default function TaskSummaryTab({
 
   return (
     <>
-      {/* ── Image Lightbox ── */}
+      {/* ── Image/Video Lightbox ── */}
       <Modal
-        visible={selectedImage !== null}
+        visible={selectedMedia !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setSelectedImage(null)}>
+        onRequestClose={() => setSelectedMedia(null)}>
         <View style={styles.lightboxOverlay}>
-          <Pressable style={styles.lightboxClose} onPress={() => setSelectedImage(null)}>
+          <Pressable style={styles.lightboxClose} onPress={() => setSelectedMedia(null)}>
             <MaterialIcons name="close" size={26} color="#fff" />
           </Pressable>
-          {selectedImage ? (
-            <Image
-              source={{ uri: selectedImage }}
-              style={styles.lightboxImage}
-              resizeMode="contain"
-            />
+          {selectedMedia ? (
+            selectedMedia.isVideo ? (
+              <Video
+                source={{ uri: selectedMedia.uri }}
+                style={styles.lightboxImage}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                shouldPlay
+              />
+            ) : (
+              <Image
+                source={{ uri: selectedMedia.uri }}
+                style={styles.lightboxImage}
+                resizeMode="contain"
+              />
+            )
           ) : null}
         </View>
       </Modal>
@@ -248,15 +263,28 @@ export default function TaskSummaryTab({
           {beforePhotos.length > 0 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.photoRow}>
-                {beforePhotos.map((photo, idx) => (
-                  <Pressable key={photo.id ?? `before_${idx}`} onPress={() => setSelectedImage(photo.photo_url)}>
-                    <Image
-                      source={{ uri: photo.photo_url }}
-                      style={styles.photoThumb}
-                      resizeMode="cover"
-                    />
-                  </Pressable>
-                ))}
+                {beforePhotos.map((photo, idx) => {
+                  const uri = String(photo.media?.url || photo.media_url || photo.photo_url || '');
+                  const isVideo = (photo.file_type || photo.media?.file_type || '').toUpperCase() === 'VIDEO';
+                  return (
+                    <View key={photo.id ?? `before_${idx}`} style={{ position: 'relative' }}>
+                      <Pressable onPress={() => setSelectedMedia({ uri, isVideo })}>
+                        {isVideo ? (
+                          <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
+                            <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
+                          </View>
+                        ) : (
+                          <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
+                        )}
+                      </Pressable>
+                      {isVideo ? (
+                        <View style={styles.mediaBadge}>
+                          <MaterialIcons name="videocam" size={10} color="#fff" />
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
               </View>
             </ScrollView>
           ) : (
@@ -275,15 +303,28 @@ export default function TaskSummaryTab({
           {afterPhotos.length > 0 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.photoRow}>
-                {afterPhotos.map((photo, idx) => (
-                  <Pressable key={photo.id ?? `after_${idx}`} onPress={() => setSelectedImage(photo.photo_url)}>
-                    <Image
-                      source={{ uri: photo.photo_url }}
-                      style={styles.photoThumb}
-                      resizeMode="cover"
-                    />
-                  </Pressable>
-                ))}
+                {afterPhotos.map((photo, idx) => {
+                  const uri = String(photo.media?.url || photo.media_url || photo.photo_url || '');
+                  const isVideo = (photo.file_type || photo.media?.file_type || '').toUpperCase() === 'VIDEO';
+                  return (
+                    <View key={photo.id ?? `after_${idx}`} style={{ position: 'relative' }}>
+                      <Pressable onPress={() => setSelectedMedia({ uri, isVideo })}>
+                        {isVideo ? (
+                          <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
+                            <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
+                          </View>
+                        ) : (
+                          <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
+                        )}
+                      </Pressable>
+                      {isVideo ? (
+                        <View style={styles.mediaBadge}>
+                          <MaterialIcons name="videocam" size={10} color="#fff" />
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
               </View>
             </ScrollView>
           ) : (
@@ -339,15 +380,32 @@ export default function TaskSummaryTab({
                     {incident.photo_urls && incident.photo_urls.length > 0 ? (
                       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View style={styles.photoRow}>
-                          {incident.photo_urls.map((url, photoIdx) => (
-                            <Pressable key={`${incident.id}_${photoIdx}`} onPress={() => setSelectedImage(String(url))}>
-                              <Image
-                                source={{ uri: String(url) }}
-                                style={styles.incidentThumb}
-                                resizeMode="cover"
-                              />
-                            </Pressable>
-                          ))}
+                          {incident.photo_urls.map((url, photoIdx) => {
+                            const uri = String(url);
+                            const isVideo = isVideoUrl(uri);
+                            return (
+                              <View key={`${incident.id}_${photoIdx}`} style={{ position: 'relative' }}>
+                                <Pressable onPress={() => setSelectedMedia({ uri, isVideo })}>
+                                  {isVideo ? (
+                                    <View style={[styles.incidentThumb, styles.videoThumbPlaceholder]}>
+                                      <MaterialIcons name="play-circle-filled" size={28} color="#fff" />
+                                    </View>
+                                  ) : (
+                                    <Image
+                                      source={{ uri }}
+                                      style={styles.incidentThumb}
+                                      resizeMode="cover"
+                                    />
+                                  )}
+                                </Pressable>
+                                {isVideo ? (
+                                  <View style={styles.mediaBadge}>
+                                    <MaterialIcons name="videocam" size={10} color="#fff" />
+                                  </View>
+                                ) : null}
+                              </View>
+                            );
+                          })}
                         </View>
                       </ScrollView>
                     ) : null}
@@ -524,6 +582,23 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: radius._10,
+    overflow: 'hidden',
+  },
+  videoThumbPlaceholder: {
+    backgroundColor: '#1e1b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaBadge: {
+    position: 'absolute',
+    left: 4,
+    bottom: 4,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    backgroundColor: '#7c3aed',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 
   // ── Incidents ──

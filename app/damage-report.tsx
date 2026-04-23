@@ -1,5 +1,7 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { ResizeMode, Video } from 'expo-av';
+import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -62,7 +64,7 @@ function parseQty(value: string) {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
-type PendingPhoto = { id: string; uri: string };
+type PendingMedia = { id: string; uri: string; mediaType: 'IMAGE' | 'VIDEO' };
 
 export default function DamageReportScreen() {
   const theme = useColorScheme() ?? 'light';
@@ -103,12 +105,16 @@ export default function DamageReportScreen() {
   const [services, setServices] = useState<DamageServiceCatalogItem[]>([]);
   const [loadingCatalogs, setLoadingCatalogs] = useState(true);
 
-  // ── Camera / photo state ──
-  const [capturedPhotos, setCapturedPhotos] = useState<PendingPhoto[]>([]);
+  // ── Camera / photo / video state ──
+  const [capturedMedia, setCapturedMedia] = useState<PendingMedia[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraMode, setCameraMode] = useState<CameraMode>('picture');
+  const [isRecording, setIsRecording] = useState(false);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
+  const [lightboxIsVideo, setLightboxIsVideo] = useState(false);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [, requestVideoPermission] = useMicrophonePermissions();
 
   // ── Initial data load ──
   useEffect(() => {
@@ -250,7 +256,7 @@ export default function DamageReportScreen() {
     });
   };
 
-  const openCamera = async () => {
+  const openCameraForPhoto = async () => {
     if (!cameraPermission?.granted) {
       const result = await requestCameraPermission();
       if (!result.granted) {
@@ -258,7 +264,41 @@ export default function DamageReportScreen() {
         return;
       }
     }
+    setCameraMode('picture');
     setIsCameraOpen(true);
+  };
+
+  const openCameraForVideo = async () => {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (!result.granted) {
+        Alert.alert('Không thể mở camera', 'Vui lòng cấp quyền camera.');
+        return;
+      }
+    }
+    const videoResult = await requestVideoPermission();
+    if (!videoResult.granted) {
+      Alert.alert('Không thể quay video', 'Vui lòng cấp quyền microphone để quay video.');
+      return;
+    }
+    setCameraMode('video');
+    setIsCameraOpen(true);
+  };
+
+  const pickFromLibrary = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      allowsMultipleSelection: true,
+      quality: 0.75,
+      videoMaxDuration: 60,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const newItems: PendingMedia[] = result.assets.map((asset) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      uri: asset.uri,
+      mediaType: asset.type === 'video' ? 'VIDEO' : 'IMAGE',
+    }));
+    setCapturedMedia((prev) => [...prev, ...newItems]);
   };
 
   const handleCapturePhoto = async () => {
@@ -266,9 +306,9 @@ export default function DamageReportScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
       if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.'); return; }
-      setCapturedPhotos((prev) => [
+      setCapturedMedia((prev) => [
         ...prev,
-        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri },
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri, mediaType: 'IMAGE' },
       ]);
       Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách.', [{ text: 'OK', onPress: () => setIsCameraOpen(false) }]);
     } catch {
@@ -276,8 +316,33 @@ export default function DamageReportScreen() {
     }
   };
 
-  const removePhoto = (photoId: string) => {
-    setCapturedPhotos((prev) => prev.filter((p) => p.id !== photoId));
+  const handleStartRecording = async () => {
+    if (!cameraRef.current || isRecording) return;
+    setIsRecording(true);
+    try {
+      const video = await cameraRef.current.recordAsync({ maxDuration: 60 });
+      if (video?.uri) {
+        setCapturedMedia((prev) => [
+          ...prev,
+          { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: video.uri, mediaType: 'VIDEO' },
+        ]);
+        setIsCameraOpen(false);
+      }
+    } catch {
+      Alert.alert('Lỗi', 'Không thể quay video, vui lòng thử lại.');
+    } finally {
+      setIsRecording(false);
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (cameraRef.current && isRecording) {
+      cameraRef.current.stopRecording();
+    }
+  };
+
+  const removeMedia = (mediaId: string) => {
+    setCapturedMedia((prev) => prev.filter((m) => m.id !== mediaId));
   };
 
   const handleSubmit = async () => {
@@ -318,7 +383,8 @@ export default function DamageReportScreen() {
       details: [...itemDetails, ...serviceDetails],
       estimated_service_fee: estimatedServiceFee,
       severity,
-      local_uris: capturedPhotos.map((p) => p.uri),
+      local_uris: capturedMedia.map((m) => m.uri),
+      local_media: capturedMedia.map((m) => ({ uri: m.uri, mediaType: m.mediaType })),
     };
 
     setSubmitting(true);
@@ -670,32 +736,55 @@ export default function DamageReportScreen() {
                 </Text>
               </View>
 
-              <Text style={[styles.incidentPhotoTitle, { color: palette.text }]}>Ảnh hư hại</Text>
+              <Text style={[styles.incidentPhotoTitle, { color: palette.text }]}>Ảnh / Video hư hại</Text>
               <View style={styles.incidentPhotoActionRow}>
                 <Pressable
                   style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: '#1f7aed', backgroundColor: '#1f7aed' }]}
-                  onPress={() => void openCamera()}>
-                  <MaterialIcons name="photo-camera" size={26} color={palette.white} />
-                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chụp ảnh hư hại</Text>
+                  onPress={() => void openCameraForPhoto()}>
+                  <MaterialIcons name="photo-camera" size={24} color={palette.white} />
+                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chụp ảnh</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: '#7c3aed', backgroundColor: '#7c3aed' }]}
+                  onPress={() => void openCameraForVideo()}>
+                  <MaterialIcons name="videocam" size={24} color={palette.white} />
+                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Quay video</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: palette.neutral500, backgroundColor: palette.neutral500 }]}
+                  onPress={() => void pickFromLibrary()}>
+                  <MaterialIcons name="photo-library" size={24} color={palette.white} />
+                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Thư viện</Text>
                 </Pressable>
               </View>
 
               <View style={styles.requiredPhotosRow}>
-                {capturedPhotos.map((photo) => (
-                  <View key={photo.id} style={styles.requiredThumbWrap}>
-                    <Pressable onPress={() => setLightboxUri(photo.uri)}>
-                      <Image source={{ uri: photo.uri }} style={styles.requiredThumb} resizeMode="cover" />
+                {capturedMedia.map((item) => (
+                  <View key={item.id} style={styles.requiredThumbWrap}>
+                    <Pressable onPress={() => { setLightboxUri(item.uri); setLightboxIsVideo(item.mediaType === 'VIDEO'); }}>
+                      {item.mediaType === 'VIDEO' ? (
+                        <View style={[styles.requiredThumb, styles.videoThumbPlaceholder]}>
+                          <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
+                        </View>
+                      ) : (
+                        <Image source={{ uri: item.uri }} style={styles.requiredThumb} resizeMode="cover" />
+                      )}
                     </Pressable>
+                    {item.mediaType === 'VIDEO' ? (
+                      <View style={styles.mediaBadge}>
+                        <MaterialIcons name="videocam" size={10} color="#fff" />
+                      </View>
+                    ) : null}
                     <Pressable
                       style={[styles.requiredRemoveIcon, { backgroundColor: '#00000085' }]}
-                      onPress={() => removePhoto(photo.id)}>
+                      onPress={() => removeMedia(item.id)}>
                       <MaterialIcons name="close" size={14} color={palette.white} />
                     </Pressable>
                   </View>
                 ))}
               </View>
-              {capturedPhotos.length === 0 && (
-                <Text style={[styles.info, { color: palette.textMuted }]}>Chưa có ảnh hư hại</Text>
+              {capturedMedia.length === 0 && (
+                <Text style={[styles.info, { color: palette.textMuted }]}>Chưa có ảnh/video hư hại</Text>
               )}
             </View>
 
@@ -725,12 +814,20 @@ export default function DamageReportScreen() {
         visible={lightboxUri !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setLightboxUri(null)}>
+        onRequestClose={() => { setLightboxUri(null); setLightboxIsVideo(false); }}>
         <View style={styles.lightboxOverlay}>
-          <Pressable style={styles.lightboxClose} onPress={() => setLightboxUri(null)}>
+          <Pressable style={styles.lightboxClose} onPress={() => { setLightboxUri(null); setLightboxIsVideo(false); }}>
             <MaterialIcons name="close" size={26} color="#fff" />
           </Pressable>
-          {lightboxUri ? (
+          {lightboxUri && lightboxIsVideo ? (
+            <Video
+              source={{ uri: lightboxUri }}
+              style={styles.lightboxImage}
+              resizeMode={ResizeMode.CONTAIN}
+              useNativeControls
+              shouldPlay
+            />
+          ) : lightboxUri ? (
             <Image source={{ uri: lightboxUri }} style={styles.lightboxImage} resizeMode="contain" />
           ) : null}
         </View>
@@ -739,20 +836,34 @@ export default function DamageReportScreen() {
       {/* ── Camera Modal ── */}
       <Modal visible={isCameraOpen} animationType="slide" statusBarTranslucent>
         <View style={styles.cameraModalRoot}>
-          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} />
+          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} mode={cameraMode} />
           {/* Top header */}
           <View style={styles.cameraHeader}>
-            <Pressable style={styles.cameraBackBtn} onPress={() => setIsCameraOpen(false)}>
+            <Pressable style={styles.cameraBackBtn} onPress={() => { if (isRecording) handleStopRecording(); setIsCameraOpen(false); }}>
               <MaterialIcons name="arrow-back" size={26} color="#fff" />
             </Pressable>
+            {isRecording ? (
+              <View style={styles.recordingBadge}>
+                <View style={styles.recordingDot} />
+                <Text style={styles.recordingText}>Đang quay...</Text>
+              </View>
+            ) : null}
           </View>
           {/* Bottom shutter */}
           <View style={styles.cameraBottomBar}>
-            <Pressable
-              style={styles.shutterBtn}
-              onPress={() => void handleCapturePhoto()}>
-              <View style={styles.shutterInner} />
-            </Pressable>
+            {cameraMode === 'picture' ? (
+              <Pressable
+                style={styles.shutterBtn}
+                onPress={() => void handleCapturePhoto()}>
+                <View style={styles.shutterInner} />
+              </Pressable>
+            ) : (
+              <Pressable
+                style={[styles.shutterBtn, { backgroundColor: isRecording ? '#ef4444' : '#fff' }]}
+                onPress={() => void (isRecording ? handleStopRecording() : handleStartRecording())}>
+                <View style={[styles.shutterInner, { backgroundColor: isRecording ? '#fff' : '#ef4444', borderColor: isRecording ? '#fff' : '#ef4444' }]} />
+              </Pressable>
+            )}
           </View>
         </View>
       </Modal>
@@ -1144,5 +1255,42 @@ const styles = StyleSheet.create({
   lightboxImage: {
     width: '100%',
     height: '80%',
+  },
+  videoThumbPlaceholder: {
+    backgroundColor: '#1e1b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaBadge: {
+    position: 'absolute',
+    left: 4,
+    bottom: 4,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    backgroundColor: '#7c3aed',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  recordingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ef444488',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+    marginLeft: 12,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
+  },
+  recordingText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: Fonts.sans,
   },
 });

@@ -360,31 +360,48 @@ export interface UpdateCleaningTaskPayload {
   reassigned_from_cleaner_id?: string | null;
 }
 
+export interface CleaningMediaAsset {
+  url: string | null;
+  public_id: string | null;
+  file_type: 'IMAGE' | 'VIDEO' | string;
+}
+
 export interface CleaningPhoto {
   id?: string;
   cleaning_task_id: string;
-  photo_url: string;
-  type: CleaningPhotoType;
+  /** New shape: preferred URL source */
+  media_url?: string | null;
+  media_public_id?: string | null;
+  /** Serialized media object returned by backend */
+  media?: CleaningMediaAsset;
+  media_type: CleaningPhotoType;
+  file_type?: 'IMAGE' | 'VIDEO' | string;
+  /** @deprecated use media_type */
+  type?: CleaningPhotoType;
+  /** @deprecated use media_url or media.url */
+  photo_url?: string | null;
   created_at?: string;
   [key: string]: unknown;
 }
 
 export interface CreateCleaningPhotoPayload {
   cleaning_task_id: string;
-  photo_url: string;
-  type: CleaningPhotoType;
+  media_url: string;
+  media_type: CleaningPhotoType;
 }
 
 export interface CreateCleaningPhotoUploadPayload {
   cleaning_task_id: string;
   local_uri: string;
   type: CleaningPhotoType;
+  /** 'IMAGE' | 'VIDEO' — nếu không truyền sẽ tự detect qua mime type của local_uri */
+  file_type?: 'IMAGE' | 'VIDEO';
 }
 
 export interface UpdateCleaningPhotoPayload {
   cleaning_task_id?: string;
-  photo_url?: string;
-  type?: CleaningPhotoType;
+  media_url?: string;
+  media_type?: CleaningPhotoType;
 }
 
 export interface Incident {
@@ -472,6 +489,8 @@ export interface CreateDamageReportPayload {
   estimated_service_fee?: number;
   severity?: IncidentSeverity;
   local_uris: string[];
+  /** Preferred over local_uris — carries per-file media type for video support. */
+  local_media?: Array<{ uri: string; mediaType: 'IMAGE' | 'VIDEO' }>;
 }
 
 export interface DamageReportResponse {
@@ -535,6 +554,16 @@ export interface DamageReportListResponse {
   pagination: PaginationInfo | null;
 }
 
+export interface LostFoundMediaItem {
+  id?: string;
+  lost_found_item_id?: string;
+  media_url: string;
+  media_public_id?: string | null;
+  file_type?: 'IMAGE' | 'VIDEO' | string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
 export interface LostFoundItem {
   id?: string;
   _id?: string;
@@ -544,7 +573,10 @@ export interface LostFoundItem {
   warehouse_id?: string | null;
   item_name: string;
   description?: string | null;
+  /** @deprecated replaced by media[] array */
   photo_url?: string | null;
+  /** New: media files attached to this item */
+  media?: LostFoundMediaItem[];
   found_at?: string;
   status?: LostFoundStatus | string;
   claimed_by_user_id?: string | null;
@@ -576,7 +608,10 @@ export interface CreateLostFoundItemPayload {
   item_name: string;
   description?: string;
   found_at?: string;
+  /** @deprecated use media_local_uri */
   photo_local_uri?: string | null;
+  media_local_uri?: string | null;
+  media_file_type?: 'IMAGE' | 'VIDEO';
 }
 
 export interface WarehouseListItem {

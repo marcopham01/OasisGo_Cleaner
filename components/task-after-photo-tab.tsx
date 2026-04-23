@@ -1,30 +1,31 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { ResizeMode, Video } from 'expo-av';
+import { CameraMode, CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  createCleaningPhoto,
-  getCleaningPhotos,
-  getCleaningTaskById,
-  getPodItemsByPodId,
-  updateCleaningTask,
+    createCleaningPhoto,
+    getCleaningPhotos,
+    getCleaningTaskById,
+    getPodItemsByPodId,
+    updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import {
-  bulkCreateInventoryActivityLogs,
-  getCleanerDailyActivityLogs,
+    bulkCreateInventoryActivityLogs,
+    getCleanerDailyActivityLogs,
 } from '@/services/inventory.service';
 import type { CleaningPhoto, CleaningTask, PodItemEntry } from '@/types/cleaner-dashboard';
 import type { InventoryActivityLogEntry } from '@/types/inventory';
@@ -39,7 +40,7 @@ interface TaskAfterPhotoTabProps {
   onCompleted: () => void;
 }
 
-type PendingPhoto = { id: string; uri: string };
+type PendingPhoto = { id: string; uri: string; mediaType: 'IMAGE' | 'VIDEO' };
 
 function normalizeActionType(actionType?: string) {
   return String(actionType || '').trim().toUpperCase();
@@ -75,7 +76,10 @@ export default function TaskAfterPhotoTab({
   const [error, setError] = useState<string | null>(null);
   const [capturedPhotos, setCapturedPhotos] = useState<PendingPhoto[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraMode, setCameraMode] = useState<CameraMode>('picture');
+  const [isRecording, setIsRecording] = useState(false);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
+  const [lightboxIsVideo, setLightboxIsVideo] = useState(false);
   const [completing, setCompleting] = useState(false);
   const isCompletingRef = useRef(false);
   const hasNavigatedToSummaryRef = useRef(false);
@@ -132,7 +136,7 @@ export default function TaskAfterPhotoTab({
       }
       setCapturedPhotos((prev) => [
         ...prev,
-        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri },
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri, mediaType: 'IMAGE' },
       ]);
       Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách.', [{ text: 'OK' }]);
     } catch {
@@ -140,29 +144,55 @@ export default function TaskAfterPhotoTab({
     }
   };
 
+  const handleStartRecording = async () => {
+    if (!cameraRef.current || isRecording) return;
+    try {
+      setIsRecording(true);
+      const video = await cameraRef.current.recordAsync({ maxDuration: 60 });
+      setIsRecording(false);
+      if (!video?.uri) {
+        Alert.alert('Lỗi', 'Không quay được video, vui lòng thử lại.');
+        return;
+      }
+      setCapturedPhotos((prev) => [
+        ...prev,
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: video.uri, mediaType: 'VIDEO' },
+      ]);
+      Alert.alert('Quay video thành công', 'Video đã được thêm vào danh sách.', [{ text: 'OK' }]);
+    } catch {
+      setIsRecording(false);
+      Alert.alert('Lỗi', 'Không thể quay video, vui lòng thử lại.');
+    }
+  };
+
+  const handleStopRecording = () => {
+    cameraRef.current?.stopRecording();
+  };
+
   const pickPhotoFromLibrary = async () => {
     if (!libraryPermission?.granted) {
       const result = await requestLibraryPermission();
       if (!result.granted) {
-        Alert.alert('Không thể mở thư viện', 'Vui lòng cấp quyền thư viện để chọn ảnh.');
+        Alert.alert('Không thể mở thư viện', 'Vui lòng cấp quyền thư viện để chọn ảnh/video.');
         return;
       }
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ['images', 'videos'],
       quality: 0.75,
       allowsEditing: false,
       selectionLimit: 1,
     });
     if (result.canceled || !result.assets?.length) return;
-    const selectedUri = result.assets[0]?.uri;
-    if (!selectedUri) {
-      Alert.alert('Lỗi', 'Không đọc được ảnh đã chọn.');
+    const asset = result.assets[0];
+    if (!asset?.uri) {
+      Alert.alert('Lỗi', 'Không đọc được file đã chọn.');
       return;
     }
+    const isVideo = asset.type === 'video';
     setCapturedPhotos((prev) => [
       ...prev,
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: selectedUri },
+      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: asset.uri, mediaType: isVideo ? 'VIDEO' : 'IMAGE' },
     ]);
   };
 
@@ -170,12 +200,17 @@ export default function TaskAfterPhotoTab({
     setCapturedPhotos((prev) => prev.filter((p) => p.id !== photoId));
   };
 
+  const openLightbox = (uri: string, isVideo: boolean) => {
+    setLightboxUri(uri);
+    setLightboxIsVideo(isVideo);
+  };
+
   const handleComplete = async () => {
     if (isCompletingRef.current || hasNavigatedToSummaryRef.current) return;
     if (!taskId || !task) return;
 
     const savedAfterPhotos = savedPhotos.filter(
-      (p) => String(p.type || '').toUpperCase() === 'AFTER',
+      (p) => String(p.media_type || p.type || '').toUpperCase() === 'AFTER',
     );
 
     if (capturedPhotos.length === 0 && savedAfterPhotos.length === 0) {
@@ -187,12 +222,13 @@ export default function TaskAfterPhotoTab({
     setCompleting(true);
     setError(null);
     try {
-      // Upload AFTER photos if any
+      // Upload AFTER photos/videos
       for (const photo of capturedPhotos) {
         await createCleaningPhoto(token, {
           cleaning_task_id: taskId,
           local_uri: photo.uri,
           type: 'AFTER',
+          file_type: photo.mediaType,
         });
       }
 
@@ -347,7 +383,7 @@ export default function TaskAfterPhotoTab({
   }
 
   const savedAfterPhotos = savedPhotos.filter(
-    (p) => String(p.type || '').toUpperCase() === 'AFTER',
+    (p) => String(p.media_type || p.type || '').toUpperCase() === 'AFTER',
   );
   const hasPhotos = capturedPhotos.length > 0 || savedAfterPhotos.length > 0;
 
@@ -383,32 +419,57 @@ export default function TaskAfterPhotoTab({
           {/* Capture buttons */}
           <View style={{ gap: spacingY._10 }}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
-              Chụp ảnh sau khi dọn
+              Chụp ảnh / quay video sau khi dọn
             </Text>
             <Pressable
               style={[styles.captureButton, { backgroundColor: '#1f7aed' }]}
               disabled={completing}
-              onPress={() => void openCamera()}>
+              onPress={() => { setCameraMode('picture'); void openCamera(); }}>
               <MaterialIcons name="photo-camera" size={20} color="#fff" />
-              <Text style={styles.captureButtonText}>Mở camera</Text>
+              <Text style={styles.captureButtonText}>Mở camera (ảnh)</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.captureButton, { backgroundColor: '#7c3aed' }]}
+              disabled={completing}
+              onPress={() => { setCameraMode('video'); void openCamera(); }}>
+              <MaterialIcons name="videocam" size={20} color="#fff" />
+              <Text style={styles.captureButtonText}>Mở camera (video)</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.captureButton, { backgroundColor: '#475569' }]}
+              disabled={completing}
+              onPress={() => void pickPhotoFromLibrary()}>
+              <MaterialIcons name="photo-library" size={20} color="#fff" />
+              <Text style={styles.captureButtonText}>Chọn từ thư viện</Text>
             </Pressable>
           </View>
 
-          {/* Pending photos */}
+          {/* Pending photos/videos */}
           {capturedPhotos.length > 0 ? (
             <View style={{ gap: spacingY._7 }}>
               <Text style={[styles.subsectionTitle, { color: palette.textMuted }]}>
-                Ảnh mới ({capturedPhotos.length})
+                Mới ({capturedPhotos.length})
               </Text>
               <View style={styles.photosRow}>
-                {capturedPhotos.map((photo) => (
-                  <View key={photo.id} style={styles.thumbWrap}>
-                    <Pressable onPress={() => setLightboxUri(photo.uri)}>
-                      <Image source={{ uri: photo.uri }} style={styles.thumb} resizeMode="cover" />
+                {capturedPhotos.map((item) => (
+                  <View key={item.id} style={styles.thumbWrap}>
+                    <Pressable onPress={() => openLightbox(item.uri, item.mediaType === 'VIDEO')}>
+                      {item.mediaType === 'VIDEO' ? (
+                        <View style={[styles.thumb, styles.videoThumbPlaceholder]}>
+                          <MaterialIcons name="play-circle-filled" size={36} color="#fff" />
+                        </View>
+                      ) : (
+                        <Image source={{ uri: item.uri }} style={styles.thumb} resizeMode="cover" />
+                      )}
                     </Pressable>
+                    {item.mediaType === 'VIDEO' ? (
+                      <View style={[styles.mediaBadge, { backgroundColor: '#7c3aed' }]}>
+                        <MaterialIcons name="videocam" size={10} color="#fff" />
+                      </View>
+                    ) : null}
                     <Pressable
                       style={[styles.removeIcon, { backgroundColor: '#00000085' }]}
-                      onPress={() => removeCapturedPhoto(photo.id)}>
+                      onPress={() => removeCapturedPhoto(item.id)}>
                       <MaterialIcons name="close" size={14} color="#fff" />
                     </Pressable>
                   </View>
@@ -417,27 +478,38 @@ export default function TaskAfterPhotoTab({
             </View>
           ) : null}
 
-          {/* Already saved AFTER photos */}
+          {/* Already saved AFTER photos/videos */}
           {savedAfterPhotos.length > 0 ? (
             <View style={{ gap: spacingY._7 }}>
               <Text style={[styles.subsectionTitle, { color: palette.textMuted }]}>
-                Ảnh đã lưu ({savedAfterPhotos.length})
+                Đã lưu ({savedAfterPhotos.length})
               </Text>
               <View style={styles.photosRow}>
-                {savedAfterPhotos.map((photo) => (
+                {savedAfterPhotos.map((photo) => {
+                    const mediaUri = String(photo.media?.url || photo.media_url || photo.photo_url || '');
+                    const isVideo = (photo.file_type || photo.media?.file_type || '').toUpperCase() === 'VIDEO';
+                    return (
                   <View key={String(photo.id || Math.random())} style={styles.thumbWrap}>
-                    <Pressable onPress={() => setLightboxUri(String(photo.photo_url || ''))}>
-                      <Image
-                        source={{ uri: String(photo.photo_url || '') }}
-                        style={styles.thumb}
-                        resizeMode="cover"
-                      />
+                    <Pressable onPress={() => openLightbox(mediaUri, isVideo)}>
+                      {isVideo ? (
+                        <View style={[styles.thumb, styles.videoThumbPlaceholder]}>
+                          <MaterialIcons name="play-circle-filled" size={36} color="#fff" />
+                        </View>
+                      ) : (
+                        <Image source={{ uri: mediaUri }} style={styles.thumb} resizeMode="cover" />
+                      )}
                     </Pressable>
+                    {isVideo ? (
+                      <View style={[styles.mediaBadge, { backgroundColor: '#7c3aed' }]}>
+                        <MaterialIcons name="videocam" size={10} color="#fff" />
+                      </View>
+                    ) : null}
                     <View style={styles.doneIcon}>
                       <MaterialIcons name="check-circle" size={20} color="#22c55e" />
                     </View>
                   </View>
-                ))}
+                    );
+                  })}
               </View>
             </View>
           ) : null}
@@ -481,7 +553,17 @@ export default function TaskAfterPhotoTab({
             <MaterialIcons name="close" size={26} color="#fff" />
           </Pressable>
           {lightboxUri ? (
-            <Image source={{ uri: lightboxUri }} style={styles.lightboxImage} resizeMode="contain" />
+            lightboxIsVideo ? (
+              <Video
+                source={{ uri: lightboxUri }}
+                style={styles.lightboxImage}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                shouldPlay
+              />
+            ) : (
+              <Image source={{ uri: lightboxUri }} style={styles.lightboxImage} resizeMode="contain" />
+            )
           ) : null}
         </View>
       </Modal>
@@ -492,25 +574,51 @@ export default function TaskAfterPhotoTab({
         animationType="slide"
         presentationStyle="fullScreen"
         statusBarTranslucent
-        onRequestClose={() => setIsCameraOpen(false)}>
+        onRequestClose={() => {
+          if (isRecording) handleStopRecording();
+          setIsCameraOpen(false);
+        }}>
         <View style={styles.cameraModalRoot}>
-          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} />
+          <CameraView
+            style={styles.cameraModalView}
+            facing="back"
+            ref={cameraRef}
+            mode={cameraMode}
+          />
           {/* Top header */}
           <View style={styles.cameraHeader}>
-            <Pressable style={styles.cameraBackBtn} onPress={() => setIsCameraOpen(false)}>
+            <Pressable
+              style={styles.cameraBackBtn}
+              onPress={() => {
+                if (isRecording) handleStopRecording();
+                setIsCameraOpen(false);
+              }}>
               <MaterialIcons name="arrow-back" size={26} color="#fff" />
             </Pressable>
-            {capturedPhotos.length > 0 ? (
-              <Text style={styles.cameraCountBadge}>Đã chụp: {capturedPhotos.length}</Text>
+            {isRecording ? (
+              <View style={styles.recordingBadge}>
+                <View style={styles.recordingDot} />
+                <Text style={styles.recordingText}>Đang quay...</Text>
+              </View>
+            ) : capturedPhotos.length > 0 ? (
+              <Text style={styles.cameraCountBadge}>Đã lưu: {capturedPhotos.length}</Text>
             ) : null}
           </View>
           {/* Bottom shutter */}
           <View style={styles.cameraBottomBar}>
-            <Pressable
-              style={styles.shutterBtn}
-              onPress={() => void handleCapturePhoto()}>
-              <View style={styles.shutterInner} />
-            </Pressable>
+            {cameraMode === 'picture' ? (
+              <Pressable
+                style={styles.shutterBtn}
+                onPress={() => void handleCapturePhoto()}>
+                <View style={styles.shutterInner} />
+              </Pressable>
+            ) : (
+              <Pressable
+                style={[styles.shutterBtn, isRecording && { borderColor: '#ef4444' }]}
+                onPress={() => void (isRecording ? handleStopRecording() : handleStartRecording())}>
+                <View style={[styles.shutterInner, isRecording && { backgroundColor: '#ef4444', borderRadius: 4 }]} />
+              </Pressable>
+            )}
           </View>
         </View>
       </Modal>
@@ -588,6 +696,41 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: '#dbe3ef',
+  },
+  videoThumbPlaceholder: {
+    backgroundColor: '#1e1b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaBadge: {
+    position: 'absolute',
+    left: 4,
+    bottom: 4,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  recordingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#00000099',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
+  },
+  recordingText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   thumb: {
     width: '100%',

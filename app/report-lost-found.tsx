@@ -1,5 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { ResizeMode, Video } from 'expo-av';
+import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -67,14 +69,18 @@ export default function ReportLostFoundScreen() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  // ── Camera / photo ──
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  // ── Camera / media ──
+  const [mediaUri, setMediaUri] = useState<string | null>(null);
+  const [mediaFileType, setMediaFileType] = useState<'IMAGE' | 'VIDEO' | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraMode, setCameraMode] = useState<CameraMode>('picture');
+  const [isRecording, setIsRecording] = useState(false);
   const [lightboxVisible, setLightboxVisible] = useState(false);
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [, requestVideoPermission] = useMicrophonePermissions();
 
-  const openCamera = async () => {
+  const openCameraForPhoto = async () => {
     if (!cameraPermission?.granted) {
       const result = await requestCameraPermission();
       if (!result.granted) {
@@ -82,7 +88,37 @@ export default function ReportLostFoundScreen() {
         return;
       }
     }
+    setCameraMode('picture');
     setIsCameraOpen(true);
+  };
+
+  const openCameraForVideo = async () => {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (!result.granted) {
+        Alert.alert('Không thể mở camera', 'Vui lòng cấp quyền camera.');
+        return;
+      }
+    }
+    const videoResult = await requestVideoPermission();
+    if (!videoResult.granted) {
+      Alert.alert('Không thể quay video', 'Vui lòng cấp quyền microphone để quay video.');
+      return;
+    }
+    setCameraMode('video');
+    setIsCameraOpen(true);
+  };
+
+  const pickFromLibrary = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      quality: 0.75,
+      videoMaxDuration: 60,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setMediaUri(asset.uri);
+    setMediaFileType(asset.type === 'video' ? 'VIDEO' : 'IMAGE');
   };
 
   const handleCapturePhoto = async () => {
@@ -90,12 +126,37 @@ export default function ReportLostFoundScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
       if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.'); return; }
-      setPhotoUri(photo.uri);
+      setMediaUri(photo.uri);
+      setMediaFileType('IMAGE');
       setIsCameraOpen(false);
     } catch {
       Alert.alert('Lỗi', 'Không thể chụp ảnh, vui lòng thử lại.');
     }
   };
+
+  const handleStartRecording = async () => {
+    if (!cameraRef.current || isRecording) return;
+    setIsRecording(true);
+    try {
+      const video = await cameraRef.current.recordAsync({ maxDuration: 60 });
+      if (video?.uri) {
+        setMediaUri(video.uri);
+        setMediaFileType('VIDEO');
+        setIsCameraOpen(false);
+      }
+    } catch {
+      Alert.alert('Lỗi', 'Không thể quay video, vui lòng thử lại.');
+    } finally {
+      setIsRecording(false);
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (cameraRef.current && isRecording) {
+      cameraRef.current.stopRecording();
+    }
+  };
+
 
   // ── Selector lists ──
   const [clusterList, setClusterList] = useState<PodCluster[]>([]);
@@ -211,7 +272,8 @@ export default function ReportLostFoundScreen() {
       pod_id: resolvedPodId,
       booking_id: resolvedBookingId,
       warehouse_id: selectedWarehouseId || null,
-      photo_local_uri: photoUri || null,
+      media_local_uri: mediaUri || null,
+      media_file_type: mediaFileType || undefined,
     };
 
     setCreating(true);
@@ -435,26 +497,60 @@ export default function ReportLostFoundScreen() {
 
             {/* ── Ảnh món đồ ── */}
             <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
-              <Text style={[styles.cardTitle, { color: palette.text }]}>Ảnh món đồ</Text>
-              {photoUri ? (
+              <Text style={[styles.cardTitle, { color: palette.text }]}>Ảnh / Video món đồ</Text>
+              {mediaUri ? (
                 <View style={{ gap: spacingY._10 }}>
                   <Pressable onPress={() => setLightboxVisible(true)}>
-                    <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
+                    {mediaFileType === 'VIDEO' ? (
+                      <View style={[styles.photoPreview, styles.videoThumbPlaceholder]}>
+                        <MaterialIcons name="play-circle-filled" size={48} color="#fff" />
+                      </View>
+                    ) : (
+                      <Image source={{ uri: mediaUri }} style={styles.photoPreview} resizeMode="cover" />
+                    )}
                   </Pressable>
-                  <Pressable
-                    style={[styles.photoRetakeBtn, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                    onPress={() => void openCamera()}>
-                    <MaterialIcons name="photo-camera" size={16} color={palette.primary} />
-                    <Text style={[styles.photoRetakeText, { color: palette.primary }]}>Chụp lại</Text>
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', gap: spacingX._7 }}>
+                    <Pressable
+                      style={[styles.photoRetakeBtn, { flex: 1, borderColor: palette.border, backgroundColor: palette.surface }]}
+                      onPress={() => void openCameraForPhoto()}>
+                      <MaterialIcons name="photo-camera" size={16} color={palette.primary} />
+                      <Text style={[styles.photoRetakeText, { color: palette.primary }]}>Chụp lại</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.photoRetakeBtn, { flex: 1, borderColor: '#7c3aed', backgroundColor: palette.surface }]}
+                      onPress={() => void openCameraForVideo()}>
+                      <MaterialIcons name="videocam" size={16} color="#7c3aed" />
+                      <Text style={[styles.photoRetakeText, { color: '#7c3aed' }]}>Quay video</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.photoRetakeBtn, { flex: 1, borderColor: palette.border, backgroundColor: palette.surface }]}
+                      onPress={() => void pickFromLibrary()}>
+                      <MaterialIcons name="photo-library" size={16} color={palette.text} />
+                      <Text style={[styles.photoRetakeText, { color: palette.text }]}>Thư viện</Text>
+                    </Pressable>
+                  </View>
                 </View>
               ) : (
-                <Pressable
-                  style={[styles.photoTriggerBtn, { borderColor: palette.primary, backgroundColor: `${palette.primary}10` }]}
-                  onPress={() => void openCamera()}>
-                  <MaterialIcons name="photo-camera" size={24} color={palette.primary} />
-                  <Text style={[styles.photoTriggerText, { color: palette.primary }]}>Chụp ảnh món đồ</Text>
-                </Pressable>
+                <View style={{ gap: spacingY._7 }}>
+                  <Pressable
+                    style={[styles.photoTriggerBtn, { borderColor: palette.primary, backgroundColor: `${palette.primary}10` }]}
+                    onPress={() => void openCameraForPhoto()}>
+                    <MaterialIcons name="photo-camera" size={24} color={palette.primary} />
+                    <Text style={[styles.photoTriggerText, { color: palette.primary }]}>Chụp ảnh món đồ</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.photoTriggerBtn, { borderColor: '#7c3aed', backgroundColor: '#7c3aed18' }]}
+                    onPress={() => void openCameraForVideo()}>
+                    <MaterialIcons name="videocam" size={24} color="#7c3aed" />
+                    <Text style={[styles.photoTriggerText, { color: '#7c3aed' }]}>Quay video</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.photoTriggerBtn, { borderColor: palette.neutral500, backgroundColor: `${palette.neutral500}18` }]}
+                    onPress={() => void pickFromLibrary()}>
+                    <MaterialIcons name="photo-library" size={24} color={palette.neutral500} />
+                    <Text style={[styles.photoTriggerText, { color: palette.neutral500 }]}>Chọn từ thư viện</Text>
+                  </Pressable>
+                </View>
               )}
             </View>
 
@@ -487,8 +583,16 @@ export default function ReportLostFoundScreen() {
           <Pressable style={styles.lightboxClose} onPress={() => setLightboxVisible(false)}>
             <MaterialIcons name="close" size={26} color="#fff" />
           </Pressable>
-          {photoUri ? (
-            <Image source={{ uri: photoUri }} style={styles.lightboxImage} resizeMode="contain" />
+          {mediaUri && mediaFileType === 'VIDEO' ? (
+            <Video
+              source={{ uri: mediaUri }}
+              style={styles.lightboxImage}
+              resizeMode={ResizeMode.CONTAIN}
+              useNativeControls
+              shouldPlay
+            />
+          ) : mediaUri ? (
+            <Image source={{ uri: mediaUri }} style={styles.lightboxImage} resizeMode="contain" />
           ) : null}
         </View>
       </Modal>
@@ -496,16 +600,30 @@ export default function ReportLostFoundScreen() {
       {/* ── Camera Modal ── */}
       <Modal visible={isCameraOpen} animationType="slide" statusBarTranslucent>
         <View style={styles.cameraModalRoot}>
-          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} />
+          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} mode={cameraMode} />
           <View style={styles.cameraHeader}>
-            <Pressable style={styles.cameraBackBtn} onPress={() => setIsCameraOpen(false)}>
+            <Pressable style={styles.cameraBackBtn} onPress={() => { if (isRecording) handleStopRecording(); setIsCameraOpen(false); }}>
               <MaterialIcons name="arrow-back" size={26} color="#fff" />
             </Pressable>
+            {isRecording ? (
+              <View style={styles.recordingBadge}>
+                <View style={styles.recordingDot} />
+                <Text style={styles.recordingText}>Đang quay...</Text>
+              </View>
+            ) : null}
           </View>
           <View style={styles.cameraBottomBar}>
-            <Pressable style={styles.shutterBtn} onPress={() => void handleCapturePhoto()}>
-              <View style={styles.shutterInner} />
-            </Pressable>
+            {cameraMode === 'picture' ? (
+              <Pressable style={styles.shutterBtn} onPress={() => void handleCapturePhoto()}>
+                <View style={styles.shutterInner} />
+              </Pressable>
+            ) : (
+              <Pressable
+                style={[styles.shutterBtn, { backgroundColor: isRecording ? '#ef4444' : '#fff' }]}
+                onPress={() => void (isRecording ? handleStopRecording() : handleStartRecording())}>
+                <View style={[styles.shutterInner, { backgroundColor: isRecording ? '#fff' : '#ef4444', borderColor: isRecording ? '#fff' : '#ef4444' }]} />
+              </Pressable>
+            )}
           </View>
         </View>
       </Modal>
@@ -721,5 +839,31 @@ const styles = StyleSheet.create({
   lightboxImage: {
     width: '100%',
     height: '80%',
+  },
+  videoThumbPlaceholder: {
+    backgroundColor: '#1e1b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ef444488',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+    marginLeft: 12,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
+  },
+  recordingText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: Fonts.sans,
   },
 });

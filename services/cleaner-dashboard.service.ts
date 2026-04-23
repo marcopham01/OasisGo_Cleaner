@@ -244,7 +244,36 @@ function toJpegFileName(fileName: string) {
 async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayload) {
   const formData = new FormData();
   formData.append('cleaning_task_id', payload.cleaning_task_id);
-  formData.append('type', payload.type);
+  formData.append('media_type', payload.type);
+
+  // Detect video by explicit flag or by URI extension
+  const isVideo =
+    payload.file_type === 'VIDEO' ||
+    /\.(mp4|mov|avi|webm|mkv)$/i.test(payload.local_uri);
+
+  if (isVideo) {
+    // Video: upload as-is — no compression, let BE/Cloudinary handle it
+    const fileName = getFileNameFromUri(payload.local_uri);
+    // iOS records .mov, Android records .mp4 — normalise to mp4 mime unless obviously mov
+    const mimeType = /\.mov$/i.test(payload.local_uri) ? 'video/quicktime' : 'video/mp4';
+
+    if (Platform.OS === 'web') {
+      const response = await fetch(payload.local_uri);
+      const blob = await response.blob();
+      const file = new File([blob], fileName, { type: mimeType });
+      formData.append('media', file);
+    } else {
+      formData.append(
+        'media',
+        {
+          uri: payload.local_uri,
+          name: fileName,
+          type: mimeType,
+        } as unknown as Blob,
+      );
+    }
+    return formData;
+  }
 
   const fileName = getFileNameFromUri(payload.local_uri);
 
@@ -263,7 +292,7 @@ async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayl
     const compressedBlob = await compressWebImageBlob(blob, targetMimeType);
     const normalizedFileName = toJpegFileName(fileName);
     const file = new File([compressedBlob], normalizedFileName, { type: targetMimeType });
-    formData.append('photo', file);
+    formData.append('media', file);
     return formData;
   }
 
@@ -286,7 +315,7 @@ async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayl
   const normalizedFileName = getFileNameFromUri(normalizedUri).replace(/\.[^/.]+$/, '.jpg');
 
   formData.append(
-    'photo',
+    'media',
     {
       uri: normalizedUri,
       name: normalizedFileName,
@@ -342,6 +371,21 @@ async function toUploadFile(uri: string) {
   } as unknown as Blob;
 }
 
+async function toUploadFileVideo(uri: string) {
+  const fileName = getFileNameFromUri(uri);
+  const mimeType = /\.mov$/i.test(uri) ? 'video/quicktime' : 'video/mp4';
+  if (Platform.OS === 'web') {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    return new File([blob], fileName, { type: mimeType });
+  }
+  return {
+    uri,
+    name: fileName,
+    type: mimeType,
+  } as unknown as Blob;
+}
+
 async function buildIncidentFormData(payload: CreateIncidentFromCleaningTaskPayload) {
   const formData = new FormData();
   const normalizedTaskId = String(payload.cleaning_task_id || '').trim();
@@ -381,7 +425,7 @@ async function buildIncidentFormData(payload: CreateIncidentFromCleaningTaskPayl
   for (let i = 0; i < validUris.length; i += 1) {
     const uri = validUris[i];
     const uploadFile = await toUploadFile(uri);
-    formData.append('photos', uploadFile);
+    formData.append('media', uploadFile);
   }
 
   return formData;
@@ -447,11 +491,19 @@ async function buildDamageReportFormData(payload: CreateDamageReportPayload) {
     throw new Error('Thiếu chi tiết hư hại. Vui lòng chọn ít nhất một mục bị ảnh hưởng.');
   }
 
-  const validUris = payload.local_uris.filter(Boolean);
-  for (let i = 0; i < validUris.length; i += 1) {
-    const uri = validUris[i];
-    const uploadFile = await toUploadFile(uri);
-    formData.append('photos', uploadFile);
+  const mediaItems =
+    Array.isArray(payload.local_media) && payload.local_media.length > 0
+      ? payload.local_media
+      : payload.local_uris.filter(Boolean).map((uri) => ({ uri, mediaType: 'IMAGE' as const }));
+
+  for (let i = 0; i < mediaItems.length; i += 1) {
+    const item = mediaItems[i];
+    const isVideo =
+      item.mediaType === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(item.uri);
+    const uploadFile = isVideo
+      ? await toUploadFileVideo(item.uri)
+      : await toUploadFile(item.uri);
+    formData.append('media', uploadFile);
   }
 
   return formData;
@@ -673,11 +725,11 @@ export async function getCleaningPhotos(
   type?: CleaningPhotoType,
 ) {
   try {
-    const response = await apiClient.get<ApiEnvelope<CleaningPhoto[]>>('/cleaning-photos', {
+    const response = await apiClient.get<ApiEnvelope<CleaningPhoto[]>>('/cleaning-media', {
       headers: authHeader(token),
       params: compactParams({
         cleaning_task_id: cleaningTaskId,
-        type,
+        media_type: type,
       }),
     });
 
@@ -696,7 +748,7 @@ export async function createCleaningPhoto(token: string, payload: CreateCleaning
     }
 
     // Use fetch so browser/runtime can set multipart boundary automatically.
-    const uploadResponse = await fetch(`${baseUrl}/cleaning-photos`, {
+    const uploadResponse = await fetch(`${baseUrl}/cleaning-media`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -768,7 +820,7 @@ export async function updateCleaningPhoto(
 ) {
   try {
     const response = await apiClient.put<ApiEnvelope<CleaningPhoto>>(
-      `/cleaning-photos/${photoId}`,
+      `/cleaning-media/${photoId}`,
       payload,
       {
         headers: authHeader(token),
@@ -1127,7 +1179,8 @@ export async function getLostFoundItemById(token: string, itemId: string) {
 
 export async function createLostFoundItem(token: string, payload: CreateLostFoundItemPayload) {
   try {
-    if (payload.photo_local_uri) {
+    const mediaUri = payload.media_local_uri || payload.photo_local_uri;
+    if (mediaUri) {
       const formData = new FormData();
       formData.append('item_name', payload.item_name);
       if (payload.description) formData.append('description', payload.description);
@@ -1135,8 +1188,12 @@ export async function createLostFoundItem(token: string, payload: CreateLostFoun
       if (payload.booking_id) formData.append('booking_id', payload.booking_id);
       if (payload.warehouse_id) formData.append('warehouse_id', payload.warehouse_id);
       if (payload.found_at) formData.append('found_at', payload.found_at);
-      const photoFile = await toUploadFile(payload.photo_local_uri);
-      formData.append('photo', photoFile);
+      const isVideo =
+        payload.media_file_type === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(mediaUri);
+      const mediaFile = isVideo
+        ? await toUploadFileVideo(mediaUri)
+        : await toUploadFile(mediaUri);
+      formData.append('media', mediaFile);
       const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', formData, {
         headers: { ...authHeader(token), 'Content-Type': 'multipart/form-data' },
       });
@@ -1145,7 +1202,7 @@ export async function createLostFoundItem(token: string, payload: CreateLostFoun
       return item;
     }
 
-    const { photo_local_uri: _omit, ...jsonPayload } = payload;
+    const { photo_local_uri: _omit1, media_local_uri: _omit2, ...jsonPayload } = payload;
     const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', jsonPayload, {
       headers: authHeader(token),
     });

@@ -1,4 +1,5 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { ResizeMode, Video } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -111,47 +112,62 @@ function toPhotoUrl(value: unknown) {
   return '';
 }
 
-function resolveLostFoundPhotoUrls(item: LostFoundItem) {
-  const bucket = new Set<string>();
+function isVideoUrl(url: string): boolean {
+  return /\.(mp4|mov|avi|webm|mkv|m4v)(\?|#|$)/i.test(url) || /\/video\/upload\//i.test(url);
+}
 
-  const pushIfValid = (candidate: unknown) => {
-    const resolved = toPhotoUrl(candidate);
-    if (resolved) {
-      bucket.add(resolved);
-    }
+function resolveLostFoundMedia(item: LostFoundItem): Array<{ uri: string; isVideo: boolean }> {
+  const seen = new Set<string>();
+  const result: Array<{ uri: string; isVideo: boolean }> = [];
+
+  const push = (candidate: unknown, knownType?: string) => {
+    const uri = toPhotoUrl(candidate);
+    if (!uri || seen.has(uri)) return;
+    seen.add(uri);
+    const isVideo =
+      knownType === 'VIDEO' ||
+      (knownType !== 'IMAGE' && isVideoUrl(uri));
+    result.push({ uri, isVideo });
   };
 
-  pushIfValid(item.photo_url);
+  // Preferred: media[] array from LostFoundMedia model (has file_type)
+  if (Array.isArray(item.media)) {
+    item.media.forEach((entry) => {
+      if (entry && typeof entry === 'object') {
+        const e = entry as Record<string, unknown>;
+        push(e.media_url, String(e.file_type || '').toUpperCase());
+      }
+    });
+  }
+
+  // Legacy fallbacks
+  push(item.photo_url);
 
   const genericRecord = item as Record<string, unknown>;
-
   const photoUrls = genericRecord.photo_urls;
   if (Array.isArray(photoUrls)) {
-    photoUrls.forEach((entry) => pushIfValid(entry));
+    photoUrls.forEach((entry) => push(entry));
   }
 
   const photos = genericRecord.photos;
   if (Array.isArray(photos)) {
     photos.forEach((entry) => {
-      if (typeof entry === 'string') {
-        pushIfValid(entry);
-        return;
-      }
-
+      if (typeof entry === 'string') { push(entry); return; }
       if (entry && typeof entry === 'object') {
         const photoObj = entry as Record<string, unknown>;
-        pushIfValid(photoObj.photo_url);
-        pushIfValid(photoObj.url);
-        pushIfValid(photoObj.secure_url);
-        pushIfValid(photoObj.uri);
+        push(photoObj.media_url);
+        push(photoObj.photo_url);
+        push(photoObj.url);
+        push(photoObj.secure_url);
+        push(photoObj.uri);
       }
     });
   }
 
-  pushIfValid(genericRecord.image_url);
-  pushIfValid(genericRecord.image);
+  push(genericRecord.image_url);
+  push(genericRecord.image);
 
-  return Array.from(bucket);
+  return result;
 }
 
 function itemId(item: LostFoundItem) {
@@ -209,7 +225,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   const [refreshing, setRefreshing] = useState(false);
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [previewMedia, setPreviewMedia] = useState<{ uri: string; isVideo: boolean } | null>(null);
   // List sub-tab
   const [activeListTab, setActiveListTab] = useState<'LOST_FOUND' | 'DAMAGE'>('LOST_FOUND');
   const [damageReports, setDamageReports] = useState<DamageReportResponse[]>([]);
@@ -285,7 +301,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   };
 
   const closeImagePreview = () => {
-    setPreviewImageUri(null);
+    setPreviewMedia(null);
   };
 
   return (
@@ -370,7 +386,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
               const status = String(item.status || 'FOUND').toUpperCase();
               const nextStatuses = (LOST_FOUND_STATUS_TRANSITIONS[status] ?? []) as LostFoundStatus[];
               const id = itemId(item);
-              const photos = resolveLostFoundPhotoUrls(item);
+              const media = resolveLostFoundMedia(item);
 
               return (
                 <View
@@ -393,24 +409,38 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                     </Text>
                   ) : null}
 
-                  {photos.length > 0 ? (
+                  {media.length > 0 ? (
                     <View>
                       <Text style={[styles.meta, { color: palette.textMuted, marginBottom: spacingY._5 }]}>
-                        Ảnh món đồ ({photos.length})
+                        Media ({media.length})
                       </Text>
                       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View style={styles.photoRow}>
-                          {photos.map((uri, idx) => (
-                            <Pressable
-                              key={`${id || 'lost-found'}_photo_${idx}`}
-                              style={styles.photoThumbPressable}
-                              onPress={() => setPreviewImageUri(uri)}>
-                              <Image
-                                source={{ uri }}
-                                style={styles.photoThumb}
-                                resizeMode="cover"
-                              />
-                            </Pressable>
+                          {media.map(({ uri, isVideo }, idx) => (
+                            <View
+                              key={`${id || 'lost-found'}_media_${idx}`}
+                              style={{ position: 'relative' }}>
+                              <Pressable
+                                style={styles.photoThumbPressable}
+                                onPress={() => setPreviewMedia({ uri, isVideo })}>
+                                {isVideo ? (
+                                  <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
+                                    <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
+                                  </View>
+                                ) : (
+                                  <Image
+                                    source={{ uri }}
+                                    style={styles.photoThumb}
+                                    resizeMode="cover"
+                                  />
+                                )}
+                              </Pressable>
+                              {isVideo ? (
+                                <View style={styles.mediaBadge}>
+                                  <MaterialIcons name="videocam" size={10} color="#fff" />
+                                </View>
+                              ) : null}
+                            </View>
                           ))}
                         </View>
                       </ScrollView>
@@ -472,7 +502,10 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
               const incidentId = String(report.report_id || '').trim();
               const podName = report.context?.pod_name || report.context?.pod_id || 'Không rõ Pod';
               const photos = Array.isArray(report.photo_urls)
-                ? report.photo_urls.map((uri) => toPhotoUrl(uri)).filter(Boolean)
+                ? report.photo_urls
+                    .map((uri) => toPhotoUrl(uri))
+                    .filter(Boolean)
+                    .map((uri) => ({ uri, isVideo: isVideoUrl(uri) }))
                 : [];
               const totalValue = (() => {
                 const v = report.pricing?.estimated_total_value;
@@ -511,21 +544,35 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                   {photos.length > 0 ? (
                     <View>
                       <Text style={[styles.meta, { color: palette.textMuted, marginBottom: spacingY._5 }]}>
-                        Ảnh đính kèm ({photos.length})
+                        Media đính kèm ({photos.length})
                       </Text>
                       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View style={styles.photoRow}>
-                          {photos.map((uri, idx) => (
-                            <Pressable
-                              key={`${incidentId || 'damage'}_photo_${idx}`}
-                              style={styles.photoThumbPressable}
-                              onPress={() => setPreviewImageUri(uri)}>
-                              <Image
-                                source={{ uri }}
-                                style={styles.photoThumb}
-                                resizeMode="cover"
-                              />
-                            </Pressable>
+                          {photos.map(({ uri, isVideo }, idx) => (
+                            <View
+                              key={`${incidentId || 'damage'}_media_${idx}`}
+                              style={{ position: 'relative' }}>
+                              <Pressable
+                                style={styles.photoThumbPressable}
+                                onPress={() => setPreviewMedia({ uri, isVideo })}>
+                                {isVideo ? (
+                                  <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
+                                    <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
+                                  </View>
+                                ) : (
+                                  <Image
+                                    source={{ uri }}
+                                    style={styles.photoThumb}
+                                    resizeMode="cover"
+                                  />
+                                )}
+                              </Pressable>
+                              {isVideo ? (
+                                <View style={styles.mediaBadge}>
+                                  <MaterialIcons name="videocam" size={10} color="#fff" />
+                                </View>
+                              ) : null}
+                            </View>
                           ))}
                         </View>
                       </ScrollView>
@@ -556,7 +603,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
       )}
 
       <Modal
-        visible={Boolean(previewImageUri)}
+        visible={previewMedia !== null}
         transparent
         animationType="fade"
         onRequestClose={closeImagePreview}>
@@ -567,8 +614,18 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             <MaterialIcons name="close" size={26} color="#fff" />
           </Pressable>
 
-          {previewImageUri ? (
-            <Image source={{ uri: previewImageUri }} style={styles.lightboxImage} resizeMode="contain" />
+          {previewMedia ? (
+            previewMedia.isVideo ? (
+              <Video
+                source={{ uri: previewMedia.uri }}
+                style={styles.lightboxImage}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                shouldPlay
+              />
+            ) : (
+              <Image source={{ uri: previewMedia.uri }} style={styles.lightboxImage} resizeMode="contain" />
+            )
           ) : null}
         </View>
       </Modal>
@@ -886,6 +943,22 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: radius._10,
     backgroundColor: '#dbe3ef',
+  },
+  videoThumbPlaceholder: {
+    backgroundColor: '#1e1b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaBadge: {
+    position: 'absolute',
+    left: 4,
+    bottom: 4,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    backgroundColor: '#7c3aed',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   lightboxOverlay: {
     flex: 1,
