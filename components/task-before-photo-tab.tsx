@@ -4,24 +4,26 @@ import { CameraMode, CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningPhoto,
-    getCleaningPhotos,
-    getCleaningTaskById,
+  createCleaningPhoto,
+  getCleaningPhotos,
+  getCleaningTaskById,
+  getPodItemsByPodId,
 } from '@/services/cleaner-dashboard.service';
-import type { CleaningPhoto, CleaningTask } from '@/types/cleaner-dashboard';
+import type { CleaningPhoto, CleaningTask, PodItemEntry } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
 interface TaskBeforePhotoTabProps {
@@ -31,6 +33,7 @@ interface TaskBeforePhotoTabProps {
   palette: typeof Colors.light;
   onClose: () => void;
   onPhotosDone: () => void;
+  onReportDamage: (params: { podId?: string; bookingId?: string; podName?: string }) => void;
 }
 
 type PendingMedia = {
@@ -46,6 +49,7 @@ export default function TaskBeforePhotoTab({
   palette,
   onClose,
   onPhotosDone,
+  onReportDamage,
 }: TaskBeforePhotoTabProps) {
   const [task, setTask] = useState<CleaningTask | null>(null);
   const [savedPhotos, setSavedPhotos] = useState<CleaningPhoto[]>([]);
@@ -61,6 +65,12 @@ export default function TaskBeforePhotoTab({
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
+
+  // REUSABLE pod items inspection
+  const [reusablePodItems, setReusablePodItems] = useState<PodItemEntry[]>([]);
+  const [podItemsPodName, setPodItemsPodName] = useState('');
+  const [loadingPodItems, setLoadingPodItems] = useState(false);
+  const [reusableInputByItemKey, setReusableInputByItemKey] = useState<Record<string, string>>({});
 
   const loadDetail = useCallback(async () => {
     if (!taskId || !token) return;
@@ -83,6 +93,41 @@ export default function TaskBeforePhotoTab({
   useEffect(() => {
     loadDetail();
   }, [loadDetail]);
+
+  // Load REUSABLE pod items once task is available
+  useEffect(() => {
+    if (!token || !task) return;
+    const podRecord = (task.pod && typeof task.pod === 'object')
+      ? (task.pod as { id?: string })
+      : undefined;
+    const podId = String(task.pod_id || podRecord?.id || '').trim();
+    if (!podId) {
+      setReusablePodItems([]);
+      setPodItemsPodName('');
+      return;
+    }
+    setLoadingPodItems(true);
+    getPodItemsByPodId(token, podId)
+      .then((podItemsData) => {
+        const reusable = (podItemsData.items || []).filter((pi) => {
+          const t = String(pi.item_type || pi.item?.item_type || '').trim().toUpperCase();
+          return t === 'REUSABLE';
+        });
+        setReusablePodItems(reusable);
+        setPodItemsPodName(String(podItemsData.pod_name || task.pod_name || ''));
+      })
+      .catch(() => {
+        setReusablePodItems([]);
+        setPodItemsPodName('');
+      })
+      .finally(() => setLoadingPodItems(false));
+  }, [token, task]);
+
+  const updateReusableQuantity = useCallback((itemKey: string, text: string, max: number) => {
+    const cleaned = text.replace(/[^0-9]/g, '');
+    const num = Math.min(Math.max(0, Number(cleaned || 0)), max);
+    setReusableInputByItemKey((prev) => ({ ...prev, [itemKey]: String(num) }));
+  }, []);
 
   const openCamera = async () => {
     if (!cameraPermission?.granted) {
@@ -263,6 +308,140 @@ export default function TaskBeforePhotoTab({
             <Text style={{ color: '#3B82F6', fontSize: 13 }}>
               Chụp ảnh toàn cảnh phòng trước khi bắt đầu dọn dẹp. Ảnh sẽ được lưu vào nhiệm vụ.
             </Text>
+          </View>
+
+          {/* REUSABLE pod items inspection */}
+          <View
+            style={{
+              backgroundColor: palette.card,
+              borderRadius: 16,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: palette.border,
+            }}>
+            <Text
+              style={[styles.sectionTitle, { color: '#7c3aed', marginBottom: 4, textAlign: 'center' }]}>
+              Kiểm kê vật tư
+            </Text>
+            {podItemsPodName ? (
+              <Text style={[styles.subsectionTitle, { color: palette.textMuted, marginBottom: 8, textAlign: 'center', fontWeight: '400', fontSize: 13 }]}>
+                Pod: {podItemsPodName}
+              </Text>
+            ) : null}
+
+            {loadingPodItems ? (
+              <ActivityIndicator color={palette.primary} style={{ marginVertical: 8 }} />
+            ) : reusablePodItems.length === 0 ? (
+              <Text style={[styles.emptyText, { color: palette.textMuted, textAlign: 'center' }]}>
+                Không có vật tư tái sử dụng nào cho pod này.
+              </Text>
+            ) : (
+              (() => {
+                const hasShortage = reusablePodItems.some((pi, idx) => {
+                  const exp = Math.max(0, Math.floor(Number(pi.expected_quantity || 0)));
+                  const key = String(pi.item_id || pi.id || `reusable-${idx}`).trim();
+                  const raw = reusableInputByItemKey[key];
+                  const observed = raw !== undefined ? Number(raw) : exp;
+                  return observed < exp;
+                });
+
+                return (
+                  <>
+                    {reusablePodItems.map((podItem, index) => {
+                      const itemName = String(
+                        podItem.item_name || podItem.item?.name || podItem.item_id || 'Item',
+                      );
+                      const expectedQty = Math.max(0, Math.floor(Number(podItem.expected_quantity || 0)));
+                      const itemKey = String(podItem.item_id || podItem.id || `reusable-${index}`).trim();
+                      const rawInput = reusableInputByItemKey[itemKey];
+                      // Default to expected_quantity so item appears full until cleaner changes it
+                      const observedQty = rawInput !== undefined ? Number(rawInput) : expectedQty;
+                      const isMatch = observedQty === expectedQty;
+                      const isShort = observedQty < expectedQty;
+                      const qtyColor = isMatch ? '#16a34a' : isShort ? '#dc2626' : '#d97706';
+
+                      return (
+                        <View
+                          key={String(podItem.id || `${podItem.item_id}-${podItem.pod_id}-${index}`)}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            paddingVertical: 10,
+                            borderBottomWidth: index < reusablePodItems.length - 1 ? 1 : 0,
+                            borderBottomColor: palette.border,
+                          }}>
+                          <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+                            <Text
+                              style={{ fontSize: 14, fontWeight: '500', color: palette.text }}
+                              numberOfLines={2}>
+                              {itemName}
+                            </Text>
+                            <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}>
+                              Cần có:{' '}
+                              <Text style={{ fontWeight: '700', color: '#7c3aed' }}>{expectedQty}</Text>
+                            </Text>
+                          </View>
+
+                          {/* Quantity stepper */}
+                          <View style={styles.supplyQtyWrap}>
+                            <Pressable
+                              style={[styles.supplyQtyButton, { backgroundColor: observedQty <= 0 ? palette.neutral200 : '#ede9fe' }]}
+                              disabled={observedQty <= 0}
+                              onPress={() => updateReusableQuantity(itemKey, String(observedQty - 1), expectedQty)}>
+                              <Text style={{ fontSize: 15, fontWeight: '800', color: '#7c3aed' }}>-</Text>
+                            </Pressable>
+
+                            <TextInput
+                              style={[styles.supplyQtyInput, { color: qtyColor, borderColor: palette.border }]}
+                              value={String(observedQty)}
+                              onChangeText={(text) => updateReusableQuantity(itemKey, text, expectedQty)}
+                              keyboardType="number-pad"
+                              maxLength={4}
+                              textAlign="center"
+                            />
+
+                            <Pressable
+                              style={[styles.supplyQtyButton, { backgroundColor: observedQty >= expectedQty ? palette.neutral200 : '#ede9fe' }]}
+                              disabled={observedQty >= expectedQty}
+                              onPress={() => updateReusableQuantity(itemKey, String(observedQty + 1), expectedQty)}>
+                              <Text style={{ fontSize: 15, fontWeight: '800', color: '#7c3aed' }}>+</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      );
+                    })}
+
+                    {/* Damage report button – shown when any REUSABLE item is below expected */}
+                    {hasShortage ? (
+                      <Pressable
+                        style={{
+                          marginTop: 12,
+                          backgroundColor: palette.error,
+                          borderRadius: radius._10,
+                          paddingVertical: 11,
+                          alignItems: 'center',
+                          flexDirection: 'row',
+                          justifyContent: 'center',
+                          gap: 8,
+                        }}
+                        onPress={() =>
+                          onReportDamage({
+                            podId: task?.pod_id,
+                            bookingId: String(task?.booking_id ?? ''),
+                            podName: String(task?.pod_name ?? podItemsPodName),
+                          })
+                        }>
+                        <MaterialIcons name="warning" size={18} color="#fff" />
+                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14, fontFamily: Fonts.sans }}>
+                          Báo cáo hư hại
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </>
+                );
+              })()
+            )}
           </View>
 
           {/* Capture buttons */}
@@ -599,6 +778,33 @@ const styles = StyleSheet.create({
     borderRadius: 99,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  supplyQtyWrap: {
+    width: 108,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    flexShrink: 0,
+  },
+  supplyQtyButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supplyQtyInput: {
+    flex: 1,
+    height: 32,
+    borderWidth: 1,
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    paddingVertical: 0,
+    paddingHorizontal: 4,
+    includeFontPadding: false,
   },
   captureButton: {
     height: 44,

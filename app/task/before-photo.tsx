@@ -47,6 +47,14 @@ export default function BeforePhotoScreen() {
         onPhotosDone={() => {
           router.push(`/task/checklist?taskId=${resolvedTaskId}`);
         }}
+        onReportDamage={({ podId, bookingId, podName }) => {
+          const params = new URLSearchParams();
+          if (resolvedTaskId) params.set('cleaningTaskId', resolvedTaskId);
+          if (podId) params.set('podId', podId);
+          if (bookingId) params.set('bookingId', bookingId);
+          if (podName) params.set('podName', podName);
+          router.push(`/damage-report?${params.toString()}`);
+        }}
       />
     </SafeAreaView>
   );
