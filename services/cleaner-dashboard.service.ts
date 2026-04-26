@@ -719,7 +719,7 @@ export async function updateCleaningTask(
   }
 }
 
-export async function getCleaningPhotos(
+export async function getCleaningMedia(
   token: string,
   cleaningTaskId: string,
   type?: CleaningPhotoType,
@@ -739,7 +739,7 @@ export async function getCleaningPhotos(
   }
 }
 
-export async function createCleaningPhoto(token: string, payload: CreateCleaningPhotoUploadPayload) {
+export async function createCleaningMedia(token: string, payload: CreateCleaningPhotoUploadPayload) {
   try {
     const formData = await buildCleaningPhotoFormData(payload);
     const baseUrl = apiClient.defaults.baseURL;

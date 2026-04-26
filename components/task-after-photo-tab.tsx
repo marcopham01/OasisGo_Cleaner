@@ -17,8 +17,8 @@ import {
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningPhoto,
-    getCleaningPhotos,
+    createCleaningMedia,
+    getCleaningMedia,
     getCleaningTaskById,
     getPodItemsByPodId,
     updateCleaningTask,
@@ -100,7 +100,7 @@ export default function TaskAfterPhotoTab({
     try {
       const [taskData, photosData] = await Promise.all([
         getCleaningTaskById(token, taskId),
-        getCleaningPhotos(token, taskId),
+        getCleaningMedia(token, taskId),
       ]);
       setTask(taskData);
       setSavedPhotos(photosData);
@@ -224,7 +224,7 @@ export default function TaskAfterPhotoTab({
     try {
       // Upload AFTER photos/videos
       for (const photo of capturedPhotos) {
-        await createCleaningPhoto(token, {
+        await createCleaningMedia(token, {
           cleaning_task_id: taskId,
           local_uri: photo.uri,
           type: 'AFTER',
@@ -408,10 +408,10 @@ export default function TaskAfterPhotoTab({
               borderColor: '#FED7AA',
             }}>
             <Text style={{ fontWeight: '700', color: '#C2410C', fontSize: 14, marginBottom: 4 }}>
-              Bước 3/3 – Chụp ảnh SAU khi dọn
+              Bước 3/3 – Lưu thông tin SAU khi dọn
             </Text>
             <Text style={{ color: '#EA580C', fontSize: 13 }}>
-              Chụp ảnh toàn cảnh phòng sau khi đã dọn dẹp xong, rồi bấm Hoàn thành để kết thúc
+              Lưu thông tin toàn cảnh phòng sau khi đã dọn dẹp xong, rồi bấm Hoàn thành để kết thúc
               nhiệm vụ.
             </Text>
           </View>
@@ -419,7 +419,7 @@ export default function TaskAfterPhotoTab({
           {/* Capture buttons */}
           <View style={{ gap: spacingY._10 }}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
-              Chụp ảnh / quay video sau khi dọn
+              Lưu thông tin sau khi dọn
             </Text>
             <Pressable
               style={[styles.captureButton, { backgroundColor: '#1f7aed' }]}
@@ -435,13 +435,7 @@ export default function TaskAfterPhotoTab({
               <MaterialIcons name="videocam" size={20} color="#fff" />
               <Text style={styles.captureButtonText}>Mở camera (video)</Text>
             </Pressable>
-            <Pressable
-              style={[styles.captureButton, { backgroundColor: '#475569' }]}
-              disabled={completing}
-              onPress={() => void pickPhotoFromLibrary()}>
-              <MaterialIcons name="photo-library" size={20} color="#fff" />
-              <Text style={styles.captureButtonText}>Chọn từ thư viện</Text>
-            </Pressable>
+
           </View>
 
           {/* Pending photos/videos */}

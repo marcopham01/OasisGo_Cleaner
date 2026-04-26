@@ -520,7 +520,7 @@ export default function ReportLostFoundScreen() {
                       style={[styles.photoRetakeBtn, { flex: 1, borderColor: '#7c3aed', backgroundColor: palette.surface }]}
                       onPress={() => void openCameraForVideo()}>
                       <MaterialIcons name="videocam" size={16} color="#7c3aed" />
-                      <Text style={[styles.photoRetakeText, { color: '#7c3aed' }]}>Quay video</Text>
+                      <Text style={[styles.photoRetakeText, { color: '#7c3aed' }]}>Quay phim</Text>
                     </Pressable>
                     <Pressable
                       style={[styles.photoRetakeBtn, { flex: 1, borderColor: palette.border, backgroundColor: palette.surface }]}
@@ -542,7 +542,7 @@ export default function ReportLostFoundScreen() {
                     style={[styles.photoTriggerBtn, { borderColor: '#7c3aed', backgroundColor: '#7c3aed18' }]}
                     onPress={() => void openCameraForVideo()}>
                     <MaterialIcons name="videocam" size={24} color="#7c3aed" />
-                    <Text style={[styles.photoTriggerText, { color: '#7c3aed' }]}>Quay video</Text>
+                    <Text style={[styles.photoTriggerText, { color: '#7c3aed' }]}>Quay phim</Text>
                   </Pressable>
                   <Pressable
                     style={[styles.photoTriggerBtn, { borderColor: palette.neutral500, backgroundColor: `${palette.neutral500}18` }]}
@@ -742,7 +742,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacingY._10,
   },
   photoRetakeText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     fontFamily: Fonts.sans,
   },
@@ -757,7 +757,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacingY._25,
   },
   photoTriggerText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },

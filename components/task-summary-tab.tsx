@@ -14,7 +14,7 @@ import {
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    getCleaningPhotos,
+    getCleaningMedia,
     getCleaningTaskById,
     getIncidentsByCleaningTaskId,
 } from '@/services/cleaner-dashboard.service';
@@ -98,7 +98,7 @@ export default function TaskSummaryTab({
     try {
       const [taskData, allPhotos, incidentsData] = await Promise.all([
         getCleaningTaskById(token, taskId),
-        getCleaningPhotos(token, taskId),
+        getCleaningMedia(token, taskId),
         getIncidentsByCleaningTaskId(token, taskId),
       ]);
       setTask(taskData);

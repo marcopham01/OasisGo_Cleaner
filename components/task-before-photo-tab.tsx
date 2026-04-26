@@ -18,8 +18,8 @@ import {
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  createCleaningPhoto,
-  getCleaningPhotos,
+  createCleaningMedia,
+  getCleaningMedia,
   getCleaningTaskById,
   getPodItemsByPodId,
 } from '@/services/cleaner-dashboard.service';
@@ -79,7 +79,7 @@ export default function TaskBeforePhotoTab({
     try {
       const [taskData, photosData] = await Promise.all([
         getCleaningTaskById(token, taskId),
-        getCleaningPhotos(token, taskId),
+        getCleaningMedia(token, taskId),
       ]);
       setTask(taskData);
       setSavedPhotos(photosData);
@@ -239,7 +239,7 @@ export default function TaskBeforePhotoTab({
     setError(null);
     try {
       for (const photo of capturedPhotos) {
-        await createCleaningPhoto(token, {
+        await createCleaningMedia(token, {
           cleaning_task_id: taskId,
           local_uri: photo.uri,
           type: 'BEFORE',
@@ -303,10 +303,10 @@ export default function TaskBeforePhotoTab({
             }}>
             <Text
               style={{ fontWeight: '700', color: '#1D4ED8', fontSize: 14, marginBottom: 4 }}>
-              Bước 1/3 – Chụp ảnh TRƯỚC khi dọn
+              Bước 1/3 – Lưu thông tin TRƯỚC khi dọn
             </Text>
             <Text style={{ color: '#3B82F6', fontSize: 13 }}>
-              Chụp ảnh toàn cảnh phòng trước khi bắt đầu dọn dẹp. Ảnh sẽ được lưu vào nhiệm vụ.
+              Lưu thông tin toàn cảnh phòng trước khi bắt đầu dọn dẹp. Ảnh/video sẽ được lưu vào nhiệm vụ.
             </Text>
           </View>
 
@@ -447,7 +447,7 @@ export default function TaskBeforePhotoTab({
           {/* Capture buttons */}
           <View style={{ gap: spacingY._10 }}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
-              Chụp ảnh / quay video trước khi dọn
+              Lưu thông tin trước khi dọn
             </Text>
             <Pressable
               style={[styles.captureButton, { backgroundColor: '#1f7aed' }]}
@@ -463,13 +463,7 @@ export default function TaskBeforePhotoTab({
               <MaterialIcons name="videocam" size={20} color="#fff" />
               <Text style={styles.captureButtonText}>Mở camera (video)</Text>
             </Pressable>
-            <Pressable
-              style={[styles.captureButton, { backgroundColor: '#475569' }]}
-              disabled={uploadingPhoto}
-              onPress={() => void pickPhotoFromLibrary()}>
-              <MaterialIcons name="photo-library" size={20} color="#fff" />
-              <Text style={styles.captureButtonText}>Chọn từ thư viện</Text>
-            </Pressable>
+
           </View>
 
           {/* Pending photos/videos */}

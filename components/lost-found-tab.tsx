@@ -456,25 +456,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                     ) : null}
                   </View>
 
-                  {nextStatuses.length > 0 && (
-                    <View style={styles.actionRow}>
-                      {nextStatuses.map((next) => (
-                        <Pressable
-                          key={`${id}_${next}`}
-                          style={[styles.statusButton, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                          disabled={updatingItemId === id}
-                          onPress={() => void handleUpdateStatus(item, next)}>
-                          {updatingItemId === id ? (
-                            <ActivityIndicator size="small" color={palette.primary} />
-                          ) : (
-                            <Text style={[styles.statusButtonText, { color: palette.primary }]}>
-                              {nextStatusLabel(next)}
-                            </Text>
-                          )}
-                        </Pressable>
-                      ))}
-                    </View>
-                  )}
+
                 </View>
               );
             })

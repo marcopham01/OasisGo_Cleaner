@@ -563,40 +563,7 @@ export default function TaskDetailTab({
     onErrorChange?.(null);
 
     try {
-      // Online key validation only before transitioning to IN_PROGRESS
-      if (action === 'start') {
-        const bookingId = normalizeId(task.booking_id);
-
-        // [1] Lấy key
-        let cleanerKeyResult: Awaited<ReturnType<typeof getMyCleanerKeyByTaskId>>;
-        try {
-          cleanerKeyResult = await getMyCleanerKeyByTaskId(token, taskId);
-        } catch {
-          if (!bookingId) {
-            Alert.alert('Không thể tiếp tục', 'Task này không có booking để lấy chìa khóa cửa.');
-            return;
-          }
-          cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
-        }
-
-        // [2] Kiểm tra key_token tồn tại
-        const keyToken = cleanerKeyResult.online_key?.key_token;
-        if (!keyToken) {
-          Alert.alert('Không tìm thấy key', 'Chưa được cấp chìa khóa cửa cho booking này.');
-          return;
-        }
-
-        // [3] Checkin booking với key
-        try {
-          await checkinBookingWithCleanerKey(token, keyToken);
-        } catch (err) {
-          const { title, message } = resolveStartActionError(err);
-          Alert.alert(title, message);
-          return;
-        }
-      }
-
-      // [4] Tất cả pass → cập nhật task
+      // [4] Cập nhật task
       const payload = taskActionPayload(action, '');
       const updated = await updateCleaningTask(token, taskId, payload);
 
