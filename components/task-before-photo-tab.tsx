@@ -1,30 +1,44 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ResizeMode, Video } from 'expo-av';
 import { CameraMode, CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  createCleaningMedia,
-  getCleaningMedia,
-  getCleaningTaskById,
-  getPodItemsByPodId,
+    createCleaningMedia,
+    getCheckoutChecklistItems,
+    getCleaningMedia,
+    getCleaningTaskById,
+    submitCheckoutChecklist,
 } from '@/services/cleaner-dashboard.service';
-import type { CleaningPhoto, CleaningTask, PodItemEntry } from '@/types/cleaner-dashboard';
+import type {
+    CheckoutChecklistItem,
+    CheckoutChecklistStatus,
+    CleaningPhoto,
+    CleaningTask,
+} from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
+
+type SubmittedChecklistDetail = {
+  item_id: string;
+  item_name: string;
+  status: CheckoutChecklistStatus;
+  quantity: number;
+};
 
 interface TaskBeforePhotoTabProps {
   token: string;
@@ -66,25 +80,33 @@ export default function TaskBeforePhotoTab({
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [libraryPermission, requestLibraryPermission] = ImagePicker.useMediaLibraryPermissions();
 
-  // REUSABLE pod items inspection
-  const [reusablePodItems, setReusablePodItems] = useState<PodItemEntry[]>([]);
-  const [podItemsPodName, setPodItemsPodName] = useState('');
-  const [loadingPodItems, setLoadingPodItems] = useState(false);
-  const [reusableInputByItemKey, setReusableInputByItemKey] = useState<Record<string, string>>({});
+  // Checkout checklist
+  const [checklistItems, setChecklistItems] = useState<CheckoutChecklistItem[]>([]);
+  const [checklistStatusByItemId, setChecklistStatusByItemId] = useState<Record<string, CheckoutChecklistStatus>>({});
+  const [checklistQtyByItemId, setChecklistQtyByItemId] = useState<Record<string, string>>({});
+  const [loadingChecklist, setLoadingChecklist] = useState(false);
+  const [checklistLoadError, setChecklistLoadError] = useState<string | null>(null);
+  const [checklistSubmitted, setChecklistSubmitted] = useState(false);
+  const [submittedChecklistDetails, setSubmittedChecklistDetails] = useState<SubmittedChecklistDetail[]>([]);
 
   const loadDetail = useCallback(async () => {
     if (!taskId || !token) return;
     setLoading(true);
     setError(null);
     try {
-      const [taskData, photosData] = await Promise.all([
+      // Run independently so a task-detail error doesn't block loading saved photos
+      const [taskResult, photosResult] = await Promise.allSettled([
         getCleaningTaskById(token, taskId),
         getCleaningMedia(token, taskId),
       ]);
-      setTask(taskData);
-      setSavedPhotos(photosData);
-    } catch (err) {
-      setError(getErrorMessage(err));
+      if (taskResult.status === 'fulfilled') {
+        setTask(taskResult.value);
+      } else {
+        setError(getErrorMessage(taskResult.reason));
+      }
+      if (photosResult.status === 'fulfilled') {
+        setSavedPhotos(photosResult.value);
+      }
     } finally {
       setLoading(false);
     }
@@ -94,39 +116,70 @@ export default function TaskBeforePhotoTab({
     loadDetail();
   }, [loadDetail]);
 
-  // Load REUSABLE pod items once task is available
-  useEffect(() => {
-    if (!token || !task) return;
-    const podRecord = (task.pod && typeof task.pod === 'object')
-      ? (task.pod as { id?: string })
-      : undefined;
-    const podId = String(task.pod_id || podRecord?.id || '').trim();
-    if (!podId) {
-      setReusablePodItems([]);
-      setPodItemsPodName('');
-      return;
-    }
-    setLoadingPodItems(true);
-    getPodItemsByPodId(token, podId)
-      .then((podItemsData) => {
-        const reusable = (podItemsData.items || []).filter((pi) => {
-          const t = String(pi.item_type || pi.item?.item_type || '').trim().toUpperCase();
-          return t === 'REUSABLE';
-        });
-        setReusablePodItems(reusable);
-        setPodItemsPodName(String(podItemsData.pod_name || task.pod_name || ''));
-      })
-      .catch(() => {
-        setReusablePodItems([]);
-        setPodItemsPodName('');
-      })
-      .finally(() => setLoadingPodItems(false));
-  }, [token, task]);
+  // Load checkout checklist items once taskId is available
+  const loadChecklist = useCallback(() => {
+    if (!token || !taskId) return;
+    setLoadingChecklist(true);
+    setChecklistLoadError(null);
+    const storedKey = `@checklist_done:${taskId}`;
+    (async () => {
+      try {
+        // Check AsyncStorage first (fast local cache path)
+        const stored = await AsyncStorage.getItem(storedKey);
+        if (stored) {
+          const parsed = JSON.parse(stored) as SubmittedChecklistDetail[];
+          setSubmittedChecklistDetails(parsed);
+          setChecklistSubmitted(true);
+          // Stop loading IMMEDIATELY so the read-only view renders right away
+          setLoadingChecklist(false);
+          // Load items in background for display reference only (non-blocking)
+          getCheckoutChecklistItems(token, taskId)
+            .then((data) => setChecklistItems(data.items))
+            .catch(() => {});
+          return;
+        }
 
-  const updateReusableQuantity = useCallback((itemKey: string, text: string, max: number) => {
+        // Not submitted yet – load items and show interactive form
+        const data = await getCheckoutChecklistItems(token, taskId);
+        setChecklistItems(data.items);
+        setChecklistLoadError(null);
+        const defaultStatuses: Record<string, CheckoutChecklistStatus> = {};
+        const defaultQtys: Record<string, string> = {};
+        for (const item of data.items) {
+          defaultStatuses[item.item_id] = 'MATCHED';
+          defaultQtys[item.item_id] = String(item.expected_quantity);
+        }
+        setChecklistStatusByItemId(defaultStatuses);
+        setChecklistQtyByItemId(defaultQtys);
+        setChecklistSubmitted(false);
+      } catch (err) {
+        setChecklistItems([]);
+        setChecklistLoadError(getErrorMessage(err));
+      } finally {
+        setLoadingChecklist(false);
+      }
+    })();
+  }, [token, taskId]);
+
+  useEffect(() => {
+    loadChecklist();
+  }, [loadChecklist]);
+
+  const setItemStatus = useCallback((itemId: string, status: CheckoutChecklistStatus, expectedQty: number) => {
+    setChecklistStatusByItemId((prev) => ({ ...prev, [itemId]: status }));
+    if (status === 'MATCHED') {
+      setChecklistQtyByItemId((prev) => ({ ...prev, [itemId]: String(expectedQty) }));
+    } else if (status === 'MISSING') {
+      // Default to expectedQty - 1 (thiếu ít nhất 1); cleaner tự chỉnh lại
+      const defaultMissing = Math.max(0, expectedQty - 1);
+      setChecklistQtyByItemId((prev) => ({ ...prev, [itemId]: String(defaultMissing) }));
+    }
+  }, []);
+
+  const updateItemQty = useCallback((itemId: string, text: string, max: number) => {
     const cleaned = text.replace(/[^0-9]/g, '');
     const num = Math.min(Math.max(0, Number(cleaned || 0)), max);
-    setReusableInputByItemKey((prev) => ({ ...prev, [itemKey]: String(num) }));
+    setChecklistQtyByItemId((prev) => ({ ...prev, [itemId]: String(num) }));
   }, []);
 
   const openCamera = async () => {
@@ -221,36 +274,85 @@ export default function TaskBeforePhotoTab({
 
   const handlePhotosDone = async () => {
     if (!taskId) return;
-    const savedBeforePhotos = savedPhotos.filter(
-      (p) => String(p.media_type || p.type || '').toUpperCase() === 'BEFORE',
-    );
+    const savedBeforePhotos = savedPhotos.filter((p) => {
+      const mt = String(
+        p.media_type || p.type || p['photo_type'] || p['mediaType'] || ''
+      ).toUpperCase();
+      return mt === 'BEFORE';
+    });
 
     if (capturedPhotos.length === 0 && savedBeforePhotos.length === 0) {
       Alert.alert('Chưa thể tiếp tục', 'Vui lòng chụp ít nhất một ảnh trước khi dọn.');
       return;
     }
 
-    if (capturedPhotos.length === 0) {
-      onPhotosDone();
+    // Block if checklist failed to load
+    if (checklistLoadError && !checklistSubmitted) {
+      Alert.alert(
+        'Không thể tải danh sách kiểm kê',
+        `${checklistLoadError}\n\nVui lòng thử tải lại trước khi tiếp tục.`,
+        [
+          { text: 'Tải lại', onPress: loadChecklist },
+          { text: 'Đóng', style: 'cancel' },
+        ],
+      );
       return;
+    }
+
+    // Validate checklist is filled when items exist
+    if (checklistItems.length > 0 && !checklistSubmitted) {
+      const allFilled = checklistItems.every((item) => !!checklistStatusByItemId[item.item_id]);
+      if (!allFilled) {
+        Alert.alert('Chưa hoàn tất kiểm kê', 'Vui lòng chọn trạng thái cho tất cả vật tư trước khi tiếp tục.');
+        return;
+      }
     }
 
     setUploadingPhoto(true);
     setError(null);
     try {
-      for (const photo of capturedPhotos) {
-        await createCleaningMedia(token, {
-          cleaning_task_id: taskId,
-          local_uri: photo.uri,
-          type: 'BEFORE',
-          file_type: photo.mediaType,
-        });
+      // Upload photos first
+      if (capturedPhotos.length > 0) {
+        for (const photo of capturedPhotos) {
+          await createCleaningMedia(token, {
+            cleaning_task_id: taskId,
+            local_uri: photo.uri,
+            type: 'BEFORE',
+            file_type: photo.mediaType,
+          });
+        }
+        setCapturedPhotos([]);
       }
-      const count = capturedPhotos.length;
-      setCapturedPhotos([]);
-      Alert.alert('Thành công', `Đã lưu ${count} ảnh/video trước khi dọn.`, [
-        { text: 'Tiếp tục', onPress: onPhotosDone },
-      ]);
+
+      // Submit checkout checklist if not yet submitted
+      if (checklistItems.length > 0 && !checklistSubmitted) {
+        const submitItems = checklistItems.map((item) => ({
+          item_id: item.item_id,
+          status: checklistStatusByItemId[item.item_id] ?? 'MATCHED',
+          quantity: Number(checklistQtyByItemId[item.item_id] ?? item.expected_quantity),
+        }));
+        const result = await submitCheckoutChecklist(token, taskId, submitItems);
+        const details: SubmittedChecklistDetail[] = submitItems.map((si) => ({
+          item_id: si.item_id,
+          item_name: checklistItems.find((i) => i.item_id === si.item_id)?.item_name ?? si.item_id,
+          status: si.status,
+          quantity: si.quantity,
+        }));
+        await AsyncStorage.setItem(`@checklist_done:${taskId}`, JSON.stringify(details));
+        setSubmittedChecklistDetails(details);
+        setChecklistSubmitted(true);
+        const issueMsg =
+          result.issue_count > 0
+            ? `\n⚠️ Phát hiện ${result.issue_count} sự cố, đã gửi báo cáo cho quản lý.`
+            : '\n✅ Tất cả vật tư đầy đủ.';
+        await new Promise<void>((resolve) =>
+          Alert.alert('Kiểm kê hoàn tất', `Đã lưu ${result.total_items} vật tư.${issueMsg}`, [
+            { text: 'Tiếp tục', onPress: () => resolve() },
+          ]),
+        );
+      }
+
+      onPhotosDone();
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
@@ -276,9 +378,12 @@ export default function TaskBeforePhotoTab({
     );
   }
 
-  const savedBeforePhotos = savedPhotos.filter(
-    (p) => String(p.media_type || p.type || '').toUpperCase() === 'BEFORE',
-  );
+  const savedBeforePhotos = savedPhotos.filter((p) => {
+    const mt = String(
+      p.media_type || p.type || p['photo_type'] || p['mediaType'] || ''
+    ).toUpperCase();
+    return mt === 'BEFORE';
+  });
   const hasPhotos = capturedPhotos.length > 0 || savedBeforePhotos.length > 0;
 
   return (
@@ -310,140 +415,6 @@ export default function TaskBeforePhotoTab({
             </Text>
           </View>
 
-          {/* REUSABLE pod items inspection */}
-          <View
-            style={{
-              backgroundColor: palette.card,
-              borderRadius: 16,
-              padding: 16,
-              borderWidth: 1,
-              borderColor: palette.border,
-            }}>
-            <Text
-              style={[styles.sectionTitle, { color: '#7c3aed', marginBottom: 4, textAlign: 'center' }]}>
-              Kiểm kê vật tư
-            </Text>
-            {podItemsPodName ? (
-              <Text style={[styles.subsectionTitle, { color: palette.textMuted, marginBottom: 8, textAlign: 'center', fontWeight: '400', fontSize: 13 }]}>
-                Pod: {podItemsPodName}
-              </Text>
-            ) : null}
-
-            {loadingPodItems ? (
-              <ActivityIndicator color={palette.primary} style={{ marginVertical: 8 }} />
-            ) : reusablePodItems.length === 0 ? (
-              <Text style={[styles.emptyText, { color: palette.textMuted, textAlign: 'center' }]}>
-                Không có vật tư tái sử dụng nào cho pod này.
-              </Text>
-            ) : (
-              (() => {
-                const hasShortage = reusablePodItems.some((pi, idx) => {
-                  const exp = Math.max(0, Math.floor(Number(pi.expected_quantity || 0)));
-                  const key = String(pi.item_id || pi.id || `reusable-${idx}`).trim();
-                  const raw = reusableInputByItemKey[key];
-                  const observed = raw !== undefined ? Number(raw) : exp;
-                  return observed < exp;
-                });
-
-                return (
-                  <>
-                    {reusablePodItems.map((podItem, index) => {
-                      const itemName = String(
-                        podItem.item_name || podItem.item?.name || podItem.item_id || 'Item',
-                      );
-                      const expectedQty = Math.max(0, Math.floor(Number(podItem.expected_quantity || 0)));
-                      const itemKey = String(podItem.item_id || podItem.id || `reusable-${index}`).trim();
-                      const rawInput = reusableInputByItemKey[itemKey];
-                      // Default to expected_quantity so item appears full until cleaner changes it
-                      const observedQty = rawInput !== undefined ? Number(rawInput) : expectedQty;
-                      const isMatch = observedQty === expectedQty;
-                      const isShort = observedQty < expectedQty;
-                      const qtyColor = isMatch ? '#16a34a' : isShort ? '#dc2626' : '#d97706';
-
-                      return (
-                        <View
-                          key={String(podItem.id || `${podItem.item_id}-${podItem.pod_id}-${index}`)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 10,
-                            borderBottomWidth: index < reusablePodItems.length - 1 ? 1 : 0,
-                            borderBottomColor: palette.border,
-                          }}>
-                          <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
-                            <Text
-                              style={{ fontSize: 14, fontWeight: '500', color: palette.text }}
-                              numberOfLines={2}>
-                              {itemName}
-                            </Text>
-                            <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}>
-                              Cần có:{' '}
-                              <Text style={{ fontWeight: '700', color: '#7c3aed' }}>{expectedQty}</Text>
-                            </Text>
-                          </View>
-
-                          {/* Quantity stepper */}
-                          <View style={styles.supplyQtyWrap}>
-                            <Pressable
-                              style={[styles.supplyQtyButton, { backgroundColor: observedQty <= 0 ? palette.neutral200 : '#ede9fe' }]}
-                              disabled={observedQty <= 0}
-                              onPress={() => updateReusableQuantity(itemKey, String(observedQty - 1), expectedQty)}>
-                              <Text style={{ fontSize: 15, fontWeight: '800', color: '#7c3aed' }}>-</Text>
-                            </Pressable>
-
-                            <TextInput
-                              style={[styles.supplyQtyInput, { color: qtyColor, borderColor: palette.border }]}
-                              value={String(observedQty)}
-                              onChangeText={(text) => updateReusableQuantity(itemKey, text, expectedQty)}
-                              keyboardType="number-pad"
-                              maxLength={4}
-                              textAlign="center"
-                            />
-
-                            <Pressable
-                              style={[styles.supplyQtyButton, { backgroundColor: observedQty >= expectedQty ? palette.neutral200 : '#ede9fe' }]}
-                              disabled={observedQty >= expectedQty}
-                              onPress={() => updateReusableQuantity(itemKey, String(observedQty + 1), expectedQty)}>
-                              <Text style={{ fontSize: 15, fontWeight: '800', color: '#7c3aed' }}>+</Text>
-                            </Pressable>
-                          </View>
-                        </View>
-                      );
-                    })}
-
-                    {/* Damage report button – shown when any REUSABLE item is below expected */}
-                    {hasShortage ? (
-                      <Pressable
-                        style={{
-                          marginTop: 12,
-                          backgroundColor: palette.error,
-                          borderRadius: radius._10,
-                          paddingVertical: 11,
-                          alignItems: 'center',
-                          flexDirection: 'row',
-                          justifyContent: 'center',
-                          gap: 8,
-                        }}
-                        onPress={() =>
-                          onReportDamage({
-                            podId: task?.pod_id,
-                            bookingId: String(task?.booking_id ?? ''),
-                            podName: String(task?.pod_name ?? podItemsPodName),
-                          })
-                        }>
-                        <MaterialIcons name="warning" size={18} color="#fff" />
-                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14, fontFamily: Fonts.sans }}>
-                          Báo cáo hư hại
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </>
-                );
-              })()
-            )}
-          </View>
-
           {/* Capture buttons */}
           <View style={{ gap: spacingY._10 }}>
             <Text style={[styles.sectionTitle, { color: palette.text }]}>
@@ -463,7 +434,6 @@ export default function TaskBeforePhotoTab({
               <MaterialIcons name="videocam" size={20} color="#fff" />
               <Text style={styles.captureButtonText}>Mở camera (video)</Text>
             </Pressable>
-
           </View>
 
           {/* Pending photos/videos */}
@@ -542,6 +512,217 @@ export default function TaskBeforePhotoTab({
               Chưa có ảnh trước khi dọn
             </Text>
           ) : null}
+
+          {/* Checkout checklist */}
+          <View
+            style={{
+              backgroundColor: palette.card,
+              borderRadius: 16,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: palette.border,
+            }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 4 }}>
+              {checklistSubmitted ? <MaterialIcons name="check-circle" size={16} color="#16a34a" /> : null}
+              <Text
+                style={[styles.sectionTitle, { color: checklistSubmitted ? '#16a34a' : '#7c3aed', textAlign: 'center' }]}>
+                {checklistSubmitted ? 'Đã kiểm kê vật tư' : 'Kiểm kê vật tư'}
+              </Text>
+            </View>
+            <Text style={{ fontSize: 12, color: palette.textMuted, textAlign: 'center', marginBottom: 10 }}>
+              {checklistSubmitted ? 'Chi tiết vật tư đã kiểm kê' : 'Chọn trạng thái từng vật tư sau khi kiểm tra thực tế'}
+            </Text>
+
+            {loadingChecklist ? (
+              <ActivityIndicator color={palette.primary} style={{ marginVertical: 8 }} />
+            ) : checklistSubmitted ? (
+              submittedChecklistDetails.length === 0 ? (
+                <Text style={[styles.emptyText, { color: palette.textMuted, textAlign: 'center' }]}>
+                  Không có vật tư nào được kiểm kê.
+                </Text>
+              ) : (
+                <>
+                  {submittedChecklistDetails.map((detail, index) => {
+                    const statusLabel =
+                      detail.status === 'MATCHED' ? 'Đủ'
+                      : detail.status === 'DAMAGED' ? 'Hư hỏng'
+                      : detail.status === 'MISSING' ? 'Thiếu'
+                      : detail.status;
+                    const statusColor =
+                      detail.status === 'MATCHED' ? '#16a34a'
+                      : detail.status === 'DAMAGED' ? '#d97706'
+                      : '#dc2626';
+                    const statusBg =
+                      detail.status === 'MATCHED' ? '#dcfce7'
+                      : detail.status === 'DAMAGED' ? '#fef9c3'
+                      : '#fee2e2';
+                    return (
+                      <View
+                        key={detail.item_id}
+                        style={{
+                          flexDirection: 'row',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          paddingVertical: 10,
+                          borderBottomWidth: index < submittedChecklistDetails.length - 1 ? 1 : 0,
+                          borderBottomColor: palette.border,
+                          gap: 8,
+                        }}>
+                        <Text
+                          style={{ fontSize: 13, color: palette.text, flex: 1 }}
+                          numberOfLines={2}>
+                          {detail.item_name}
+                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          {detail.status !== 'MATCHED' ? (
+                            <Text style={{ fontSize: 12, color: palette.textMuted }}>
+                              SL: <Text style={{ fontWeight: '700', color: statusColor }}>{detail.quantity}</Text>
+                            </Text>
+                          ) : null}
+                          <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, backgroundColor: statusBg }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: statusColor }}>
+                              {statusLabel}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </>
+              )
+            ) : checklistLoadError ? (
+              <View style={{ alignItems: 'center', gap: 8 }}>
+                <Text style={[styles.emptyText, { color: palette.error, textAlign: 'center' }]}>
+                  {checklistLoadError}
+                </Text>
+                <Pressable
+                  onPress={loadChecklist}
+                  style={{
+                    paddingHorizontal: 16,
+                    paddingVertical: 8,
+                    borderRadius: radius._10,
+                    backgroundColor: '#ede9fe',
+                  }}>
+                  <Text style={{ color: '#7c3aed', fontWeight: '700', fontSize: 13 }}>Tải lại</Text>
+                </Pressable>
+              </View>
+            ) : checklistItems.length === 0 ? (
+              <Text style={[styles.emptyText, { color: palette.textMuted, textAlign: 'center' }]}>
+                Không có vật tư tái sử dụng nào cần kiểm kê.
+              </Text>
+            ) : (
+              <>
+                {checklistItems.map((item, index) => {
+                  const currentStatus = checklistStatusByItemId[item.item_id] ?? 'MATCHED';
+                  const currentQty = checklistQtyByItemId[item.item_id] ?? String(item.expected_quantity);
+                  const showQtyInput = currentStatus === 'DAMAGED' || currentStatus === 'MISSING';
+
+                  const statusChips: Array<{ value: CheckoutChecklistStatus; label: string; color: string; bg: string }> = [
+                    { value: 'MATCHED', label: 'Đủ', color: '#16a34a', bg: '#dcfce7' },
+                    { value: 'DAMAGED', label: 'Hư hỏng', color: '#d97706', bg: '#fef9c3' },
+                    { value: 'MISSING', label: 'Thiếu', color: '#dc2626', bg: '#fee2e2' },
+                  ];
+
+                  return (
+                    <View
+                      key={item.item_id}
+                      style={{
+                        paddingVertical: 12,
+                        borderBottomWidth: index < checklistItems.length - 1 ? 1 : 0,
+                        borderBottomColor: palette.border,
+                        gap: 6,
+                      }}>
+                      {/* Item name + expected qty */}
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <Text
+                          style={{ fontSize: 14, fontWeight: '600', color: palette.text, flex: 1, marginRight: 8 }}
+                          numberOfLines={2}>
+                          {item.item_name}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: palette.textMuted, flexShrink: 0 }}>
+                          Cần: <Text style={{ fontWeight: '700', color: '#7c3aed' }}>{item.expected_quantity}</Text>
+                        </Text>
+                      </View>
+
+                      {/* User's pre-reported status (reference) */}
+                      <Text style={{ fontSize: 11, color: palette.textMuted }}>
+                        Khách báo:{' '}
+                        {item.user_reported_status ? (
+                          <Text style={{ fontWeight: '600', color: '#6366f1' }}>
+                            {item.user_reported_status === 'MATCHED' ? 'Đủ'
+                              : item.user_reported_status === 'DAMAGED' ? 'Hư hỏng'
+                              : item.user_reported_status === 'MISSING' ? 'Thiếu'
+                              : item.user_reported_status}
+                            {item.user_reported_quantity !== null && item.user_reported_quantity !== undefined
+                              ? ` (${item.user_reported_quantity})`
+                              : ''}
+                          </Text>
+                        ) : (
+                          <Text style={{ fontWeight: '600', color: palette.neutral400 }}>Chưa báo cáo</Text>
+                        )}
+                      </Text>
+
+                      {/* Status chips */}
+                      <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                        {statusChips.map((chip) => {
+                          const active = currentStatus === chip.value;
+                          return (
+                            <Pressable
+                              key={chip.value}
+                              onPress={() => setItemStatus(item.item_id, chip.value, item.expected_quantity)}
+                              style={{
+                                paddingHorizontal: 12,
+                                paddingVertical: 5,
+                                borderRadius: 20,
+                                borderWidth: 1.5,
+                                borderColor: active ? chip.color : palette.border,
+                                backgroundColor: active ? chip.bg : palette.background,
+                              }}>
+                              <Text style={{ fontSize: 12, fontWeight: '700', color: active ? chip.color : palette.textMuted }}>
+                                {chip.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+
+                      {/* Quantity input for DAMAGED / MISSING */}
+                      {showQtyInput ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                          <Text style={{ fontSize: 12, color: palette.textMuted }}>
+                            {currentStatus === 'DAMAGED' ? 'Số lượng hư hỏng:' : 'Số lượng thiếu:'}
+                          </Text>
+                          <View style={styles.supplyQtyWrap}>
+                            <Pressable
+                              style={[styles.supplyQtyButton, { backgroundColor: Number(currentQty) <= 0 ? palette.neutral200 : '#ede9fe' }]}
+                              disabled={Number(currentQty) <= 0}
+                              onPress={() => updateItemQty(item.item_id, String(Number(currentQty) - 1), item.expected_quantity)}>
+                              <Text style={{ fontSize: 15, fontWeight: '800', color: '#7c3aed' }}>-</Text>
+                            </Pressable>
+                            <TextInput
+                              style={[styles.supplyQtyInput, { color: '#d97706', borderColor: palette.border }]}
+                              value={currentQty}
+                              onChangeText={(text) => updateItemQty(item.item_id, text, item.expected_quantity)}
+                              keyboardType="number-pad"
+                              maxLength={4}
+                              textAlign="center"
+                            />
+                            <Pressable
+                              style={[styles.supplyQtyButton, { backgroundColor: Number(currentQty) >= item.expected_quantity ? palette.neutral200 : '#ede9fe' }]}
+                              disabled={Number(currentQty) >= item.expected_quantity}
+                              onPress={() => updateItemQty(item.item_id, String(Number(currentQty) + 1), item.expected_quantity)}>
+                              <Text style={{ fontSize: 15, fontWeight: '800', color: '#7c3aed' }}>+</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+
+              </>
+            )}
+          </View>
         </View>
       </ScrollView>
 

@@ -1,34 +1,33 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-  checkinBookingWithCleanerKey,
-  getBookingById,
-  getCleaningTaskById,
-  getIncidentsByCleaningTaskId,
-  getMyCleanerKeyByBookingId,
-  getMyCleanerKeyByTaskId,
-  getPodById,
-  updateCleaningTask,
+    getBookingById,
+    getCleaningTaskById,
+    getIncidentsByCleaningTaskId,
+    getMyCleanerKeyByBookingId,
+    getMyCleanerKeyByTaskId,
+    getPodById,
+    updateCleaningTask
 } from '@/services/cleaner-dashboard.service';
 import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type {
-  CleanerOnlineKey,
-  CleanerRealtimeNotification,
-  CleanerTaskAction,
-  CleaningTask,
-  Incident,
+    CleanerOnlineKey,
+    CleanerRealtimeNotification,
+    CleanerTaskAction,
+    CleaningTask,
+    Incident,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -606,10 +605,17 @@ export default function TaskDetailTab({
 
   if (!task) {
     return (
-      <View style={[styles.emptyContainer, { backgroundColor: palette.background }]}>
-        <Text style={[styles.emptyText, { color: palette.error }]}>
-          Không tìm thấy task
-        </Text>
+      <View style={[{ flex: 1, backgroundColor: palette.background }]}>
+        <View style={{ paddingHorizontal: spacingX._15, paddingTop: spacingY._10 }}>
+          <Pressable onPress={onClose} style={styles.backButton}>
+            <MaterialIcons name="arrow-back" size={24} color={palette.text} />
+          </Pressable>
+        </View>
+        <View style={[styles.emptyContainer]}>
+          <Text style={[styles.emptyText, { color: palette.error }]}>
+            {error || 'Không tìm thấy task'}
+          </Text>
+        </View>
       </View>
     );
   }

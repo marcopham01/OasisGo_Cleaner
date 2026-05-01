@@ -5,6 +5,9 @@ import { Platform } from 'react-native';
 import { apiClient } from '@/services/api';
 import type {
     BookingDetails,
+    CheckoutChecklistData,
+    CheckoutChecklistResult,
+    CheckoutChecklistSubmitItem,
     CleanerMarkAllReadResponse,
     CleanerNotification,
     CleanerNotificationListResponse,
@@ -538,11 +541,11 @@ export async function getStaffWorkRosters(token: string, query: StaffWorkRosterQ
   }
 }
 
-export async function checkinShift(token: string, shiftAssignmentId: string, date?: string) {
+export async function checkinShift(token: string) {
   try {
     const response = await apiClient.post<ApiEnvelope<StaffAttendanceLog>>(
       '/staff-attendance-logs/checkin',
-      compactParams({ shift_assignment_id: shiftAssignmentId, date }),
+      {},
       {
         headers: authHeader(token),
       },
@@ -559,11 +562,11 @@ export async function checkinShift(token: string, shiftAssignmentId: string, dat
   }
 }
 
-export async function checkoutShift(token: string, shiftAssignmentId: string, date?: string) {
+export async function checkoutShift(token: string) {
   try {
     const response = await apiClient.post<ApiEnvelope<StaffAttendanceLog>>(
       '/staff-attendance-logs/checkout',
-      compactParams({ shift_assignment_id: shiftAssignmentId, date }),
+      {},
       {
         headers: authHeader(token),
       },
@@ -1179,8 +1182,20 @@ export async function getLostFoundItemById(token: string, itemId: string) {
 
 export async function createLostFoundItem(token: string, payload: CreateLostFoundItemPayload) {
   try {
-    const mediaUri = payload.media_local_uri || payload.photo_local_uri;
-    if (mediaUri) {
+    // Normalise media list from new or legacy fields
+    const mediaItems: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO' }> = [];
+    if (payload.media_local_uris && payload.media_local_uris.length > 0) {
+      mediaItems.push(...payload.media_local_uris);
+    } else {
+      const legacyUri = payload.media_local_uri || payload.photo_local_uri;
+      if (legacyUri) {
+        const isVideo =
+          payload.media_file_type === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(legacyUri);
+        mediaItems.push({ uri: legacyUri, fileType: isVideo ? 'VIDEO' : 'IMAGE' });
+      }
+    }
+
+    if (mediaItems.length > 0) {
       const formData = new FormData();
       formData.append('item_name', payload.item_name);
       if (payload.description) formData.append('description', payload.description);
@@ -1188,21 +1203,43 @@ export async function createLostFoundItem(token: string, payload: CreateLostFoun
       if (payload.booking_id) formData.append('booking_id', payload.booking_id);
       if (payload.warehouse_id) formData.append('warehouse_id', payload.warehouse_id);
       if (payload.found_at) formData.append('found_at', payload.found_at);
-      const isVideo =
-        payload.media_file_type === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(mediaUri);
-      const mediaFile = isVideo
-        ? await toUploadFileVideo(mediaUri)
-        : await toUploadFile(mediaUri);
-      formData.append('media', mediaFile);
-      const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', formData, {
-        headers: { ...authHeader(token), 'Content-Type': 'multipart/form-data' },
+
+      for (const { uri, fileType } of mediaItems) {
+        const isVideo = fileType === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(uri);
+        const mediaFile = isVideo
+          ? await toUploadFileVideo(uri)
+          : await toUploadFile(uri);
+        formData.append('media', mediaFile);
+      }
+
+      const baseUrl = apiClient.defaults.baseURL;
+      if (!baseUrl) {
+        throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
+      }
+
+      // Use fetch so runtime sets multipart boundary automatically.
+      const uploadResponse = await fetch(`${baseUrl}/lost-found-items`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
       });
-      const item = extractData<LostFoundItem>(response.data?.data ?? response.data);
+
+      const responseBody = (await uploadResponse.json()) as ApiEnvelope<LostFoundItem>;
+      if (!uploadResponse.ok) {
+        throw new Error((responseBody as { message?: string }).message || 'Tạo item thất lạc thất bại');
+      }
+      const item = extractData<LostFoundItem>(responseBody?.data ?? responseBody);
       if (!item) throw new Error('Tạo item thất lạc thất bại');
       return item;
     }
 
-    const { photo_local_uri: _omit1, media_local_uri: _omit2, ...jsonPayload } = payload;
+    const {
+      photo_local_uri: _omit1,
+      media_local_uri: _omit2,
+      media_local_uris: _omit3,
+      media_file_type: _omit4,
+      ...jsonPayload
+    } = payload;
     const response = await apiClient.post<ApiEnvelope<LostFoundItem>>('/lost-found-items', jsonPayload, {
       headers: authHeader(token),
     });
@@ -1245,7 +1282,7 @@ export async function updateLostFoundStatus(
 
 export async function getMyLostFoundItems(token: string, query: LostFoundQuery = {}) {
   try {
-    const response = await apiClient.get<ApiEnvelope<LostFoundItem[]>>('/lost-found-items/my', {
+    const response = await apiClient.get<ApiEnvelope<LostFoundItem[]>>('/lost-found-items', {
       headers: authHeader(token),
       params: compactParams(query),
     });
@@ -1293,6 +1330,41 @@ export async function getPodItemsByPodId(token: string, podId: string) {
       count: Number(body?.count || 0),
       items: normalizePodItemEntries(body?.items),
     } as PodItemsByPodData;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function getCheckoutChecklistItems(token: string, taskId: string): Promise<CheckoutChecklistData> {
+  try {
+    const response = await apiClient.get<ApiEnvelope<CheckoutChecklistData>>(
+      `/cleaning-tasks/${encodeURIComponent(taskId)}/damage-report-items`,
+      { headers: authHeader(token) },
+    );
+    const body = extractData<CheckoutChecklistData>(response.data?.data ?? response.data);
+    return {
+      booking_id: String(body?.booking_id || ''),
+      pod_id: String(body?.pod_id || ''),
+      items: Array.isArray(body?.items) ? body.items : [],
+    };
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function submitCheckoutChecklist(
+  token: string,
+  taskId: string,
+  items: CheckoutChecklistSubmitItem[],
+): Promise<CheckoutChecklistResult> {
+  try {
+    const response = await apiClient.post<ApiEnvelope<CheckoutChecklistResult>>(
+      `/cleaning-tasks/${encodeURIComponent(taskId)}/damage-report`,
+      { items },
+      { headers: authHeader(token) },
+    );
+    const body = extractData<CheckoutChecklistResult>(response.data?.data ?? response.data);
+    return body as CheckoutChecklistResult;
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }
@@ -1454,3 +1526,5 @@ export async function markAllNotificationsAsRead(
     throw new Error(getErrorMessage(error));
   }
 }
+
+

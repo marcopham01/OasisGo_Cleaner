@@ -26,7 +26,7 @@ export type IncidentStatus = 'PENDING' | 'RESOLVED' | 'DISMISSED' | 'INVESTIGATI
 export type IncidentType = 'OPERATIONAL' | 'DAMAGE_REPORT';
 export type IncidentDetailType = 'ITEM' | 'SERVICE';
 export type DamageType = 'BROKEN' | 'SCRATCHED' | 'LOST' | 'STAINED';
-export type LostFoundStatus = 'FOUND' | 'CLAIMED' | 'DISPOSED' | 'RETURNED_TO_USER';
+export type LostFoundStatus = 'FOUND' | 'IN_STORAGE' | 'CLAIM_PENDING' | 'RETURNED' | 'DISPOSED';
 
 export const CLEANER_NOTIFICATION_TYPES = [
   'BOOKING',
@@ -219,7 +219,9 @@ export interface StaffAttendanceLog {
   id?: string;
   _id?: string;
   staff_id?: string;
-  shift_assignment_id?: string;
+  shift_id?: string;
+  location_id?: string;
+  cluster_id?: string;
   work_date?: string;
   action?: StaffAttendanceAction | string;
   created_at?: string;
@@ -233,7 +235,7 @@ export interface StaffAttendanceLogQuery {
   to_date?: string;
   date?: string;
   work_date?: string;
-  shift_assignment_id?: string;
+  shift_id?: string;
   page?: number;
   limit?: number;
 }
@@ -251,12 +253,13 @@ export interface StaffTodayAttendanceStatus {
   date: string;
   checked_in_today: boolean;
   checked_out_today: boolean;
+  can_checkin: boolean;
   checkin_count: number;
   checkout_count: number;
   latest_checkin_at: string | null;
   latest_checkout_at: string | null;
-  checkin_assignment_ids: string[];
-  checkout_assignment_ids: string[];
+  shift_ids: string[];
+  has_handover?: boolean;
 }
 
 export interface StaffAttendanceLogListResponse {
@@ -573,10 +576,13 @@ export interface LostFoundItem {
   warehouse_id?: string | null;
   item_name: string;
   description?: string | null;
-  /** @deprecated replaced by media[] array */
+  serial_number?: string | null;
+  /** @deprecated replaced by photo_urls array */
   photo_url?: string | null;
-  /** New: media files attached to this item */
-  media?: LostFoundMediaItem[];
+  /** URLs returned from backend toLostFoundItemView (from LostFoundMedia records) */
+  photo_urls?: string[];
+  /** Cleaning task IDs linked via booking_id — returned by backend getLostFoundItems/getLostFoundItemById */
+  cleaning_task_ids?: string[];
   found_at?: string;
   status?: LostFoundStatus | string;
   claimed_by_user_id?: string | null;
@@ -596,6 +602,7 @@ export interface LostFoundQuery {
   booking_id?: string;
   found_by_user_id?: string;
   warehouse_id?: string;
+  serial_number?: string;
   status?: LostFoundStatus | string;
   page?: number;
   limit?: number;
@@ -608,9 +615,13 @@ export interface CreateLostFoundItemPayload {
   item_name: string;
   description?: string;
   found_at?: string;
-  /** @deprecated use media_local_uri */
+  /** Multiple media files — up to 5 (matches BE limit) */
+  media_local_uris?: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO' }>;
+  /** @deprecated use media_local_uris */
   photo_local_uri?: string | null;
+  /** @deprecated use media_local_uris */
   media_local_uri?: string | null;
+  /** @deprecated use media_local_uris */
   media_file_type?: 'IMAGE' | 'VIDEO';
 }
 
@@ -718,3 +729,76 @@ export interface MyCleanerKeyByTaskData extends MyCleanerKeyByBookingData {
 }
 
 export type CleanerTaskAction = 'accept' | 'start' | 'complete' | 'reject';
+
+export type CheckoutChecklistStatus = 'MATCHED' | 'DAMAGED' | 'MISSING';
+
+export interface CheckoutChecklistItem {
+  item_id: string;
+  item_name: string;
+  expected_quantity: number;
+  user_reported_status: string | null;
+  user_reported_quantity: number | null;
+}
+
+export interface CheckoutChecklistData {
+  booking_id: string;
+  pod_id: string;
+  items: CheckoutChecklistItem[];
+}
+
+export interface CheckoutChecklistSubmitItem {
+  item_id: string;
+  status: CheckoutChecklistStatus;
+  quantity?: number;
+}
+
+export interface CheckoutChecklistResult {
+  booking_id: string;
+  pod_id: string;
+  total_items: number;
+  matched_count: number;
+  issue_count: number;
+  incidents: Array<{
+    incident_id: string;
+    item_name: string;
+    status: string;
+    quantity: number;
+  }>;
+  message: string;
+}
+
+// ─── Cleaner Incident Flow ───────────────────────────────────────
+
+export type CleanerIncidentStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED';
+
+export interface CleanerIncident {
+  id?: string;
+  pod_id?: string;
+  booking_id?: string | null;
+  cleaning_task_id?: string | null;
+  reported_by?: string;
+  description?: string;
+  severity?: IncidentSeverity | string;
+  status?: CleanerIncidentStatus | string;
+  incident_type?: string;
+  resolution_note?: string | null;
+  handled_by?: string | null;
+  details?: IncidentDetailLine[];
+  photo_urls?: string[];
+  booking?: Record<string, unknown> | null;
+  cleaning_task?: Record<string, unknown> | null;
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface CleanerCheckinReportData {
+  cleaning_task?: Record<string, unknown> | null;
+  booking?: Record<string, unknown> | null;
+  incidents: CleanerIncident[];
+}
+
+export interface UpdateCleanerIncidentStatusPayload {
+  status: 'PROCESSING' | 'COMPLETED';
+  resolution_note?: string;
+}

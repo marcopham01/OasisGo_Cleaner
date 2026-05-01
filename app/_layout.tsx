@@ -45,6 +45,22 @@ export default function RootLayout() {
               name="report-lost-found"
               options={{ title: 'Ghi nhận món đồ bị thất lạc', headerBackTitle: 'Sự cố' }}
             />
+            <Stack.Screen
+              name="incident/list"
+              options={{ title: 'Các hư hại cần xử lý gấp', headerBackTitle: 'Sự cố' }}
+            />
+            <Stack.Screen
+              name="incident/[id]"
+              options={{ title: 'Chi tiết sự cố', headerBackTitle: 'Xử lý hư hại gấp' }}
+            />
+            <Stack.Screen
+              name="incident/repair"
+              options={{ title: 'Sửa chữa hư hại', headerBackTitle: 'Chi tiết sự cố' }}
+            />
+            <Stack.Screen
+              name="incident/result"
+              options={{ title: 'Kết quả xử lý', gestureEnabled: false }}
+            />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
           </Stack>
           <StatusBar style="auto" />

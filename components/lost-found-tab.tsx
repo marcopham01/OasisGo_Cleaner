@@ -17,17 +17,16 @@ import {
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
+import { useAuth } from '@/contexts/auth-context';
 import { apiClient } from '@/services/api';
 import {
     getDamageReports,
     getMyLostFoundItems,
-    updateLostFoundStatus,
 } from '@/services/cleaner-dashboard.service';
 import type {
     DamageReportResponse,
     IncidentSeverity,
     LostFoundItem,
-    LostFoundStatus,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -74,13 +73,6 @@ function resolveMediaBaseUrl() {
 }
 
 const MEDIA_BASE_URL = resolveMediaBaseUrl();
-
-const LOST_FOUND_STATUS_TRANSITIONS: Record<string, LostFoundStatus[]> = {
-  FOUND: ['CLAIMED', 'DISPOSED', 'RETURNED_TO_USER'],
-  CLAIMED: ['RETURNED_TO_USER'],
-  DISPOSED: [],
-  RETURNED_TO_USER: [],
-};
 
 function formatDateTime(dateText?: string | null) {
   if (!dateText) return '-';
@@ -130,25 +122,15 @@ function resolveLostFoundMedia(item: LostFoundItem): Array<{ uri: string; isVide
     result.push({ uri, isVideo });
   };
 
-  // Preferred: media[] array from LostFoundMedia model (has file_type)
-  if (Array.isArray(item.media)) {
-    item.media.forEach((entry) => {
-      if (entry && typeof entry === 'object') {
-        const e = entry as Record<string, unknown>;
-        push(e.media_url, String(e.file_type || '').toUpperCase());
-      }
-    });
+  // Preferred: photo_urls array returned by backend toLostFoundItemView
+  if (Array.isArray(item.photo_urls)) {
+    item.photo_urls.forEach((entry) => push(entry));
   }
 
   // Legacy fallbacks
   push(item.photo_url);
 
   const genericRecord = item as Record<string, unknown>;
-  const photoUrls = genericRecord.photo_urls;
-  if (Array.isArray(photoUrls)) {
-    photoUrls.forEach((entry) => push(entry));
-  }
-
   const photos = genericRecord.photos;
   if (Array.isArray(photos)) {
     photos.forEach((entry) => {
@@ -177,26 +159,21 @@ function itemId(item: LostFoundItem) {
 function statusColor(status: string | undefined, isDark: boolean) {
   const normalized = String(status || '').toUpperCase();
   if (normalized === 'FOUND') return isDark ? '#60a5fa' : '#2563eb';
-  if (normalized === 'CLAIMED') return isDark ? '#34d399' : '#10b981';
+  if (normalized === 'IN_STORAGE') return isDark ? '#34d399' : '#059669';
+  if (normalized === 'CLAIM_PENDING') return isDark ? '#fbbf24' : '#d97706';
+  if (normalized === 'RETURNED') return isDark ? '#a78bfa' : '#7c3aed';
   if (normalized === 'DISPOSED') return isDark ? '#fb7185' : '#e11d48';
-  if (normalized === 'RETURNED_TO_USER') return isDark ? '#a78bfa' : '#7c3aed';
   return isDark ? '#94a3b8' : '#64748b';
 }
 
 function statusLabel(status: string | undefined) {
   const normalized = String(status || '').toUpperCase();
   if (normalized === 'FOUND') return 'Đã tìm thấy';
-  if (normalized === 'CLAIMED') return 'Đã nhận';
+  if (normalized === 'IN_STORAGE') return 'Đang lưu kho';
+  if (normalized === 'CLAIM_PENDING') return 'Chờ bàn giao';
+  if (normalized === 'RETURNED') return 'Đã trả khách';
   if (normalized === 'DISPOSED') return 'Đã xử lý';
-  if (normalized === 'RETURNED_TO_USER') return 'Đã trả';
   return normalized || '-';
-}
-
-function nextStatusLabel(status: LostFoundStatus) {
-  if (status === 'CLAIMED') return 'Đánh dấu đã nhận';
-  if (status === 'DISPOSED') return 'Đánh dấu đã xử lý';
-  if (status === 'RETURNED_TO_USER') return 'Đánh dấu đã trả';
-  return status;
 }
 
 function drStatusInfo(status: string, palette: typeof Colors.light) {
@@ -220,10 +197,10 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
     tab?: string;
     section?: string;
   }>();
+  const { user } = useAuth();
   const [items, setItems] = useState<LostFoundItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewMedia, setPreviewMedia] = useState<{ uri: string; isVideo: boolean } | null>(null);
   // List sub-tab
@@ -253,8 +230,9 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
     onErrorChange?.(null);
 
     try {
+      const myUserId = String(user?.id || '').trim() || undefined;
       const [lfData, drData] = await Promise.all([
-        getMyLostFoundItems(token, {}),
+        getMyLostFoundItems(token, { found_by_user_id: myUserId }),
         getDamageReports(token, { page: 1, limit: 50 }).catch(() => ({ items: [], pagination: null })),
       ]);
       setItems(lfData);
@@ -271,7 +249,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
       setLoading(false);
       setRefreshing(false);
     }
-  }, [token, onErrorChange]);
+  }, [token, user, onErrorChange]);
 
   useEffect(() => {
     void loadItems();
@@ -283,22 +261,6 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
       void loadItems();
     }, [loadItems]),
   );
-
-  const handleUpdateStatus = async (item: LostFoundItem, nextStatus: LostFoundStatus) => {
-    const id = itemId(item);
-    if (!id) return;
-
-    setUpdatingItemId(id);
-
-    try {
-      const updated = await updateLostFoundStatus(token, id, nextStatus);
-      setItems((prev) => prev.map((existing) => (itemId(existing) === id ? updated : existing)));
-    } catch (err) {
-      Alert.alert('Lỗi', getErrorMessage(err));
-    } finally {
-      setUpdatingItemId(null);
-    }
-  };
 
   const closeImagePreview = () => {
     setPreviewMedia(null);
@@ -321,6 +283,11 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             style={[styles.actionBtn, { backgroundColor: palette.error }]}
             onPress={() => router.push('/damage-report')}>
             <Text style={[styles.actionBtnText, { color: palette.white }]}>⚠ Báo hư hại</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.actionBtn, { backgroundColor: '#d97706' }]}
+            onPress={() => router.push('/incident/list' as never)}>
+            <Text style={[styles.actionBtnText, { color: '#fff' }]}>🔧 Xử lý hư hại gấp</Text>
           </Pressable>
         </View>
 
@@ -384,7 +351,6 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
           ) : (
             items.map((item) => {
               const status = String(item.status || 'FOUND').toUpperCase();
-              const nextStatuses = (LOST_FOUND_STATUS_TRANSITIONS[status] ?? []) as LostFoundStatus[];
               const id = itemId(item);
               const media = resolveLostFoundMedia(item);
 

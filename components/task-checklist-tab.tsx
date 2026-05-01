@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
+import { useAuth } from '@/contexts/auth-context';
 import {
   getCleaningTaskById,
   getIncidentsByCleaningTaskId,
@@ -72,9 +73,10 @@ function incidentStatusVi(status?: string) {
 function lostFoundStatusVi(status?: string) {
   const normalized = String(status || '').toUpperCase();
   if (normalized === 'FOUND') return 'Đã tìm thấy';
-  if (normalized === 'CLAIMED') return 'Đã nhận lại';
+  if (normalized === 'IN_STORAGE') return 'Đang lưu kho';
+  if (normalized === 'CLAIM_PENDING') return 'Chờ bàn giao';
+  if (normalized === 'RETURNED') return 'Đã trả khách';
   if (normalized === 'DISPOSED') return 'Đã tiêu hủy';
-  if (normalized === 'RETURNED_TO_USER') return 'Đã trả cho khách';
   return status || 'Đã tìm thấy';
 }
 
@@ -123,6 +125,7 @@ export default function TaskChecklistTab({
   onReportDamage,
   onReportLostFound,
 }: TaskChecklistTabProps) {
+  const { user } = useAuth();
   const [task, setTask] = useState<CleaningTask | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [lostFoundItems, setLostFoundItems] = useState<LostFoundItem[]>([]);
@@ -175,26 +178,31 @@ export default function TaskChecklistTab({
   const refreshLostFoundItems = useCallback(async () => {
     if (!token || !task) return;
 
-    const bookingId = String(task.booking_id ?? '').trim();
     const podId = String(task.pod_id ?? '').trim();
-    if (!bookingId && !podId) {
+    if (!podId) {
       setLostFoundItems([]);
       return;
     }
 
+    const myUserId = String(user?.id || '').trim() || undefined;
     setLoadingLostFound(true);
     try {
       const items = await getMyLostFoundItems(token, {
-        booking_id: bookingId || undefined,
-        pod_id: podId || undefined,
+        pod_id: podId,
+        found_by_user_id: myUserId,
       });
-      setLostFoundItems(items);
+      const filtered = taskId
+        ? items.filter((item) =>
+            Array.isArray(item.cleaning_task_ids) && item.cleaning_task_ids.includes(taskId),
+          )
+        : items;
+      setLostFoundItems(filtered);
     } catch {
       setLostFoundItems([]);
     } finally {
       setLoadingLostFound(false);
     }
-  }, [token, task]);
+  }, [token, task, user]);
 
   const refreshPodItems = useCallback(async () => {
     if (!token || !task) return;
@@ -741,11 +749,23 @@ export default function TaskChecklistTab({
                         {String(item.description)}
                       </Text>
                     ) : null}
-                    {item.photo_url ? (
-                      <Pressable onPress={() => setSelectedImageUri(String(item.photo_url))}>
-                        <Image source={{ uri: String(item.photo_url) }} style={styles.incidentThumb} resizeMode="cover" />
-                      </Pressable>
-                    ) : null}
+                    {(() => {
+                      const urls: string[] = Array.isArray(item.photo_urls) && item.photo_urls.length > 0
+                        ? item.photo_urls.map(String)
+                        : item.photo_url ? [String(item.photo_url)] : [];
+                      if (!urls.length) return null;
+                      return (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                            {urls.map((uri, idx) => (
+                              <Pressable key={idx} onPress={() => setSelectedImageUri(uri)}>
+                                <Image source={{ uri }} style={styles.incidentThumb} resizeMode="cover" />
+                              </Pressable>
+                            ))}
+                          </View>
+                        </ScrollView>
+                      );
+                    })()}
                     <Text style={[styles.incidentTime, { color: palette.textMuted }]}> 
                       {formatDateTime(String(item.found_at || item.created_at || ''))}
                     </Text>
