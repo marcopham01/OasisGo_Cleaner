@@ -68,16 +68,29 @@ export async function getInventoryEstimate(
   }
 }
 
-export async function getWarehouses(token: string): Promise<Warehouse[]> {
+export async function getWarehouses(
+  token: string,
+  options: { locationId?: string | null } = {},
+): Promise<Warehouse[]> {
   try {
     const response = await apiClient.get('/warehouses', {
       headers: authHeader(token),
+      params: compactParams({ location_id: options.locationId }),
     });
 
     const body = response.data as { success?: boolean; data?: unknown; count?: number };
-    if (Array.isArray(body?.data)) return body.data as Warehouse[];
-    if (Array.isArray(body)) return body as Warehouse[];
-    return [];
+    const raw: Array<Record<string, unknown>> = Array.isArray(body?.data)
+      ? (body.data as Array<Record<string, unknown>>)
+      : Array.isArray(body)
+        ? (body as unknown as Array<Record<string, unknown>>)
+        : [];
+
+    return raw.map((w) => ({
+      ...w,
+      id: String(w.id ?? w._id ?? ''),
+      name: String(w.name ?? ''),
+      location_id: w.location_id != null ? String(w.location_id) : null,
+    })) as Warehouse[];
   } catch (error) {
     const msg = getErrorMessage(error, 'Không thể tải danh sách kho');
     throw new Error(msg);

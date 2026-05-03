@@ -43,6 +43,7 @@ export interface InventoryEstimateQuery {
 export interface Warehouse {
   id: string;
   name: string;
+  location_id?: string | null;
   [key: string]: unknown;
 }
 

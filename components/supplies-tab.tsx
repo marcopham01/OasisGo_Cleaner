@@ -14,14 +14,16 @@ import {
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
-import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
+import { getMyCleaningTasks, getMyWorkRosters } from '@/services/cleaner-dashboard.service';
 import {
   bulkCreateInventoryActivityLogs,
   getAllInventoryStocks,
   getCleanerDailyActivityLogs,
   getDailyTakenItemsSummary,
   getInventoryEstimate,
+  getWarehouses,
 } from '@/services/inventory.service';
+import type { StaffWorkRoster } from '@/types/cleaner-dashboard';
 import type {
   CheckoutDraftItem,
   CleanerDailyActivityLogResponse,
@@ -33,6 +35,7 @@ import type {
   InventoryStockItem,
   InventorySuggestedStock,
   ReturnDraftItem,
+  Warehouse,
 } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -1127,22 +1130,66 @@ function buildFreeDraft(
 
 function FreeCheckoutModal({ visible, token, userId, palette, onClose, onSuccess }: FreeCheckoutModalProps) {
   const [allStocks, setAllStocks] = useState<InventoryStockItem[]>([]);
+  const [scopeWarehouseIds, setScopeWarehouseIds] = useState<string[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
   const [draftItems, setDraftItems] = useState<FreeCheckoutDraftItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const warehouses = useMemo(() => extractWarehousesFromStocks(allStocks), [allStocks]);
+  // Restrict display to warehouses scoped to the cleaner's active shift.
+  // Falls back to all stocks when the estimate endpoint is unavailable (e.g. BE bug).
+  const scopedStocks = useMemo(() => {
+    if (scopeWarehouseIds.length === 0) return allStocks;
+    return allStocks.filter(
+      (s) => s.warehouse_id != null && scopeWarehouseIds.includes(s.warehouse_id),
+    );
+  }, [allStocks, scopeWarehouseIds]);
+
+  const warehouses = useMemo(() => extractWarehousesFromStocks(scopedStocks), [scopedStocks]);
 
   const loadStocks = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const stocks = await getAllInventoryStocks(token);
+      const today = todayISODate();
+      // Step 1: get stocks and roster in parallel first
+      const [stocks, rosters] = await Promise.all([
+        getAllInventoryStocks(token),
+        getMyWorkRosters(token).catch((): StaffWorkRoster[] => []),
+      ]);
+
+      // Step 2: resolve cleaner's active location from today's roster
+      const activeRoster = rosters.find((r) => {
+        if (r.is_active === false) return false;
+        if (r.is_temporary) {
+          return r.work_date ? String(r.work_date).slice(0, 10) === today : false;
+        }
+        return true;
+      });
+      // Prefer nested location.id (populated by API), fall back to flat location_id field
+      const locationId =
+        String(activeRoster?.location?.id ?? activeRoster?.location_id ?? '').trim() || null;
+
+      // Step 3: fetch warehouses filtered by this location (via query param, not client filter)
+      const locationWarehouses = await getWarehouses(token, { locationId }).catch(
+        (): Warehouse[] => [],
+      );
+      const scopeIds = locationWarehouses.map((w) => w.id).filter(Boolean);
+
       setAllStocks(stocks);
-      setDraftItems(buildFreeDraft(stocks, null));
-      setSelectedWarehouseId(null);
+      setScopeWarehouseIds(scopeIds);
+
+      // Auto-select the first warehouse at the cleaner's location
+      const defaultWarehouseId = locationWarehouses[0]?.id ?? null;
+      setSelectedWarehouseId(defaultWarehouseId);
+
+      // Build draft: scoped to location warehouses if found, else show all
+      const baseStocks =
+        scopeIds.length > 0
+          ? stocks.filter((s) => s.warehouse_id != null && scopeIds.includes(s.warehouse_id))
+          : stocks;
+      setDraftItems(buildFreeDraft(baseStocks, defaultWarehouseId));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -1161,7 +1208,7 @@ function FreeCheckoutModal({ visible, token, userId, palette, onClose, onSuccess
   function handleSelectWarehouse(warehouseId: string) {
     const next = selectedWarehouseId === warehouseId ? null : warehouseId;
     setSelectedWarehouseId(next);
-    setDraftItems(buildFreeDraft(allStocks, next));
+    setDraftItems(buildFreeDraft(scopedStocks, next));
   }
 
   function handleQtyChange(stockId: string, qty: number) {

@@ -1,26 +1,30 @@
 import { Redirect, router } from 'expo-router';
+import { Lock, UserRound } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Image,
+    KeyboardAvoidingView,
+    Platform,
+    Pressable,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
+import { Fonts } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { loginWithEmail } from '@/services/auth.service';
 
+const SKY = '#0284c7';
+const SKY_DARK = '#0369a1';
+const SKY_100 = '#e0f2fe';
+
 export default function LoginScreen() {
-  const theme = useColorScheme() ?? 'light';
-  const palette = Colors[theme];
   const { isAuthenticated, isHydrating, signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,11 +37,9 @@ export default function LoginScreen() {
 
   if (isHydrating) {
     return (
-      <SafeAreaView style={[styles.screen, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
-        <View style={styles.hydratingWrap}>
-          <ActivityIndicator color={palette.primary} />
-        </View>
-      </SafeAreaView>
+      <View style={styles.hydratingScreen}>
+        <ActivityIndicator color={SKY} size="large" />
+      </View>
     );
   }
 
@@ -76,180 +78,300 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        style={styles.safeArea}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          contentContainerStyle={styles.screen}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}>
-          <View
-            style={[
-              styles.card,
-              {
-                backgroundColor: palette.card,
-                borderColor: palette.border,
-                ...Platform.select({
-                  web: {
-                    boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.08)',
-                  },
-                  default: {
-                    shadowColor: palette.black,
-                  },
-                }),
-              },
-            ]}>
-            <Text style={[styles.title, { color: palette.primary }]}>Đăng nhập Cleaner</Text>
-            <Text style={[styles.subtitle, { color: palette.textMuted }]}>Chỉ tài khoản có role Cleaner mới được phép đăng nhập ứng dụng.</Text>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" backgroundColor={SKY} />
+      <SafeAreaView style={styles.root} edges={['top']}>
+        <KeyboardAvoidingView
+          style={styles.root}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
-            <View style={styles.formGroup}>
-              <Text style={[styles.label, { color: palette.text }]}>Email</Text>
-              <TextInput
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                placeholder="cleaner@example.com"
-                placeholderTextColor={palette.neutral500}
-                style={[
-                  styles.input,
-                  {
-                    borderColor: palette.border,
-                    color: palette.text,
-                    backgroundColor: palette.surface,
-                  },
-                ]}
-                value={email}
-                onChangeText={setEmail}
+          {/* Sky blue background section */}
+          <View style={styles.topSection}>
+            {/* Decorative circles */}
+            <View style={styles.circleTopRight} />
+            <View style={styles.circleMiddleLeft} />
+
+            {/* Logo card */}
+            <View style={styles.logoCard}>
+              <Image
+                source={require('@/assets/images/OasisGo_Logo.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
               />
             </View>
+            <Text style={styles.tagline}>
+              Hệ thống quản lý công việc{'\n'}dọn dẹp pod ngủ
+            </Text>
+          </View>
 
-            <View style={styles.formGroup}>
-              <Text style={[styles.label, { color: palette.text }]}>Mật khẩu</Text>
-              <TextInput
-                secureTextEntry
-                placeholder="Nhập mật khẩu"
-                placeholderTextColor={palette.neutral500}
-                style={[
-                  styles.input,
-                  {
-                    borderColor: palette.border,
-                    color: palette.text,
-                    backgroundColor: palette.surface,
-                  },
-                ]}
-                value={password}
-                onChangeText={setPassword}
-              />
+          {/* White bottom form card */}
+          <ScrollView
+            style={styles.formSheet}
+            contentContainerStyle={styles.formSheetContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}>
+
+            <Text style={styles.formTitle}>Đăng nhập</Text>
+            <Text style={styles.formSubtitle}>Vui lòng nhập mã nhân viên để tiếp tục</Text>
+
+            {/* Employee code field */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>TÀI KHOẢN (EMAIL)</Text>
+              <View style={styles.inputWrap}>
+                <View style={styles.inputIcon}>
+                  <UserRound size={20} color="#94a3b8" />
+                </View>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  placeholder=""
+                  placeholderTextColor="#94a3b8"
+                  style={styles.input}
+                  value={email}
+                  onChangeText={setEmail}
+                />
+              </View>
             </View>
 
-            {error ? <Text style={[styles.errorText, { color: palette.error }]}>{error}</Text> : null}
+            {/* Password field */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>MẬT KHẨU</Text>
+              <View style={styles.inputWrap}>
+                <View style={styles.inputIcon}>
+                  <Lock size={20} color="#94a3b8" />
+                </View>
+                <TextInput
+                  secureTextEntry
+                  placeholder="••••••••"
+                  placeholderTextColor="#94a3b8"
+                  style={styles.input}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+              </View>
+            </View>
 
+            {/* Forgot password */}
+            <View style={styles.forgotRow}>
+              <Pressable>
+                <Text style={styles.forgotText}>Quên mật khẩu?</Text>
+              </Pressable>
+            </View>
+
+            {/* Error message */}
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            {/* Submit button */}
             <Pressable
-              style={[
-                styles.button,
-                { backgroundColor: palette.primary },
-                (!isFormValid || isLoading) && styles.buttonDisabled,
-              ]}
+              style={[styles.submitBtn, (!isFormValid || isLoading) && styles.submitBtnDisabled]}
               onPress={handleLogin}
               disabled={!isFormValid || isLoading}>
               {isLoading ? (
-                <ActivityIndicator color={palette.white} />
+                <View style={styles.submitBtnInner}>
+                  <ActivityIndicator color="#fff" size="small" />
+                  <Text style={styles.submitBtnText}>Đang xác thực...</Text>
+                </View>
               ) : (
-                <Text style={[styles.buttonText, { color: palette.white }]}>Đăng nhập</Text>
+                <Text style={styles.submitBtnText}>Bắt đầu ca làm việc</Text>
               )}
             </Pressable>
 
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  root: {
     flex: 1,
+    backgroundColor: SKY,
   },
-  screen: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._20,
-  },
-  hydratingWrap: {
+  hydratingScreen: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#f3f3f3',
   },
-  card: {
-    borderRadius: radius._17,
-    borderWidth: 1,
-    padding: spacingX._20,
+
+  /* ── Top blue section ── */
+  topSection: {
+    height: 300,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 36,
+    overflow: 'hidden',
+  },
+  circleTopRight: {
+    position: 'absolute',
+    top: -80,
+    right: -80,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  circleMiddleLeft: {
+    position: 'absolute',
+    top: 120,
+    left: -80,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  logoCard: {
+    width: 160,
+    height: 120,
+    backgroundColor: '#ffffff',
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    marginBottom: 16,
     ...Platform.select({
-      web: {
-        boxShadow: '0px 10px 20px rgba(0, 0, 0, 0.08)',
-      },
-      default: {
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.08,
-        shadowRadius: 20,
-      },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 16 },
+      android: { elevation: 10 },
+      web: { boxShadow: '0 8px 24px rgba(0,0,0,0.18)' } as any,
     }),
-    elevation: 4,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
-    marginBottom: spacingY._7,
+  logoImage: {
+    width: '100%',
+    height: '100%',
   },
-  subtitle: {
-    fontSize: 14,
+  tagline: {
+    color: SKY_100,
+    fontSize: 13,
     fontFamily: Fonts.sans,
-    marginBottom: spacingY._20,
+    textAlign: 'center',
     lineHeight: 20,
   },
-  formGroup: {
-    marginBottom: spacingY._15,
+
+  /* ── White form sheet ── */
+  formSheet: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 40,
+    borderTopRightRadius: 40,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: -10 }, shadowOpacity: 0.10, shadowRadius: 20 },
+      android: { elevation: 12 },
+      web: { boxShadow: '0 -10px 40px rgba(0,0,0,0.10)' } as any,
+    }),
   },
-  label: {
-    marginBottom: spacingY._7,
+  formSheetContent: {
+    paddingHorizontal: 32,
+    paddingTop: 36,
+    paddingBottom: 48,
+  },
+  formTitle: {
+    fontSize: 26,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    color: '#1e293b',
+    marginBottom: 4,
+  },
+  formSubtitle: {
     fontSize: 14,
+    fontFamily: Fonts.sans,
+    color: '#64748b',
+    marginBottom: 28,
+  },
+
+  /* ── Fields ── */
+  fieldGroup: {
+    marginBottom: 18,
+  },
+  fieldLabel: {
+    fontSize: 11,
     fontWeight: '600',
     fontFamily: Fonts.sans,
+    color: '#64748b',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+    marginLeft: 4,
   },
-  input: {
-    borderWidth: 1,
-    borderRadius: radius._12,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._12,
-    fontSize: 15,
-    fontFamily: Fonts.sans,
-  },
-  errorText: {
-    marginBottom: spacingY._12,
-    fontSize: 14,
-    fontFamily: Fonts.sans,
-  },
-  button: {
-    borderRadius: radius._12,
-    paddingVertical: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    fontFamily: Fonts.sans,
-  },
-  dividerRow: {
+  inputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: spacingY._15,
-    gap: spacingX._7,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+  },
+  inputIcon: {
+    marginRight: 10,
+  },
+  input: {
+    flex: 1,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 12,
+    fontSize: 15,
+    fontFamily: Fonts.sans,
+    color: '#334155',
+  },
+
+  /* ── Forgot password ── */
+  forgotRow: {
+    alignItems: 'flex-end',
+    marginBottom: 20,
+  },
+  forgotText: {
+    fontSize: 14,
+    fontWeight: '500',
+    fontFamily: Fonts.sans,
+    color: SKY,
+  },
+
+  /* ── Error ── */
+  errorBox: {
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  errorText: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+    color: '#dc2626',
+  },
+
+  /* ── Submit button ── */
+  submitBtn: {
+    backgroundColor: SKY,
+    borderRadius: 18,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: SKY, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 12 },
+      android: { elevation: 6 },
+      web: { boxShadow: '0 6px 20px rgba(2,132,199,0.35)' } as any,
+    }),
+  },
+  submitBtnDisabled: {
+    opacity: 0.6,
+  },
+  submitBtnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  submitBtnText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
   },
 });

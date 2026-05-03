@@ -300,7 +300,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
       {/* ── Page header ── */}
-      <View style={[styles.pageHeaderWrap, { backgroundColor: palette.card, borderBottomColor: palette.border }]}>
+      <View style={[styles.pageHeaderWrap, { backgroundColor: palette.background, borderBottomColor: palette.border }]}>
         <Text style={[styles.pageTitle, { color: palette.primary }]}>Báo cáo sự cố</Text>
 
         {/* Action buttons */}
