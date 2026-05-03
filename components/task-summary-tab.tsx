@@ -12,6 +12,7 @@ import {
     View,
 } from 'react-native';
 
+import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
     getCleaningMedia,
@@ -270,9 +271,7 @@ export default function TaskSummaryTab({
                     <View key={photo.id ?? `before_${idx}`} style={{ position: 'relative' }}>
                       <Pressable onPress={() => setSelectedMedia({ uri, isVideo })}>
                         {isVideo ? (
-                          <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
-                            <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
-                          </View>
+                          <VideoThumb uri={uri} style={styles.photoThumb} iconSize={32} />
                         ) : (
                           <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
                         )}
@@ -310,9 +309,7 @@ export default function TaskSummaryTab({
                     <View key={photo.id ?? `after_${idx}`} style={{ position: 'relative' }}>
                       <Pressable onPress={() => setSelectedMedia({ uri, isVideo })}>
                         {isVideo ? (
-                          <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
-                            <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
-                          </View>
+                          <VideoThumb uri={uri} style={styles.photoThumb} iconSize={32} />
                         ) : (
                           <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
                         )}
@@ -387,9 +384,7 @@ export default function TaskSummaryTab({
                               <View key={`${incident.id}_${photoIdx}`} style={{ position: 'relative' }}>
                                 <Pressable onPress={() => setSelectedMedia({ uri, isVideo })}>
                                   {isVideo ? (
-                                    <View style={[styles.incidentThumb, styles.videoThumbPlaceholder]}>
-                                      <MaterialIcons name="play-circle-filled" size={28} color="#fff" />
-                                    </View>
+                                    <VideoThumb uri={uri} style={styles.incidentThumb} iconSize={28} />
                                   ) : (
                                     <Image
                                       source={{ uri }}

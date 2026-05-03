@@ -119,9 +119,33 @@ export default function IncidentRepairScreen() {
 
     setSubmitting(true);
     try {
-      await resolveReplenishment(token, targetId, items);
-      router.replace(
-        `/incident/result?incidentId=${encodeURIComponent(targetId)}&cleaningTaskId=${encodeURIComponent(cleaningTaskId)}` as never,
+      const result = await resolveReplenishment(token, targetId, items);
+
+      const itemLines = `${result.items_processed ?? items.length} loại vật tư`;
+
+      const successMessage = (() => {
+        const raw = String(result.message || '').toLowerCase();
+        if (raw.includes('already') || raw.includes('replenished')) return 'Sự cố này đã được xử lý trước đó.';
+        if (raw.includes('not found') || raw.includes('không tìm thấy')) return 'Không tìm thấy sự cố.';
+        if (raw.includes('success') || raw.includes('complete') || raw.includes('done')) return 'Đã xử lý thành công.';
+        if (result.message) return result.message;
+        return 'Đã xử lý thành công.';
+      })();
+
+      Alert.alert(
+        'Bổ sung hoàn tất',
+        `${successMessage}\n\n${itemLines}`,
+        [
+          {
+            text: 'Xem kết quả',
+            onPress: () => {
+              router.replace(
+                `/incident/result?incidentId=${encodeURIComponent(targetId)}&cleaningTaskId=${encodeURIComponent(cleaningTaskId)}` as never,
+              );
+            },
+          },
+        ],
+        { cancelable: false },
       );
     } catch (err) {
       Alert.alert('Lỗi', getErrorMessage(err));

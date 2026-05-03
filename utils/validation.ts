@@ -65,6 +65,26 @@ export function validateDateRange(
 }
 
 export function getErrorMessage(error: unknown): string {
+  // Axios error: extract backend message from response body first
+  if (error && typeof error === 'object' && 'response' in error) {
+    const axiosError = error as {
+      response?: { data?: { message?: unknown; error?: unknown }; status?: number };
+      message?: string;
+    };
+    const data = axiosError.response?.data;
+    const backendMsg =
+      (typeof data?.message === 'string' && data.message.trim()) ||
+      (typeof data?.error === 'string' && data.error.trim()) ||
+      null;
+    if (backendMsg) {
+      return normalizeBackendMessage(backendMsg);
+    }
+    // Axios generic message as fallback
+    if (typeof axiosError.message === 'string' && axiosError.message.trim()) {
+      return normalizeBackendMessage(axiosError.message);
+    }
+  }
+
   if (error instanceof Error) {
     return normalizeBackendMessage(error.message);
   }

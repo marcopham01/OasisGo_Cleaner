@@ -2,13 +2,13 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Image,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -120,7 +120,7 @@ export default function IncidentResultScreen() {
         <View style={styles.center}>
           <Text style={{ color: palette.error, textAlign: 'center', paddingHorizontal: 24 }}>{error}</Text>
           <Pressable
-            style={[styles.backBtn, { backgroundColor: palette.primary, marginTop: spacingY._16 }]}
+            style={[styles.backBtn, { backgroundColor: palette.primary, marginTop: spacingY._15 }]}
             onPress={() => router.replace('/incident/list' as never)}>
             <Text style={styles.backBtnText}>Quay lại trang chủ</Text>
           </Pressable>
@@ -166,7 +166,13 @@ export default function IncidentResultScreen() {
             />
             <InfoRow
               label="Loại sự cố"
-              value={String(incident.incident_type || '-')}
+              value={(() => {
+                const t = String(incident.incident_type || '').toUpperCase();
+                if (t === 'DAMAGE_REPORT') return 'Hư hại';
+                if (t === 'REPLENISHMENT_REQUEST') return 'Bổ sung vật tư';
+                if (t === 'OPERATIONAL') return 'Vận hành';
+                return incident.incident_type ? String(incident.incident_type) : '-';
+              })()}
               palette={palette}
             />
             <InfoRow
@@ -175,7 +181,7 @@ export default function IncidentResultScreen() {
               palette={palette}
             />
             <InfoRow
-              label="Cập nhật lần cuối"
+              label="Cập nhật"
               value={formatDateTime(String(incident.updated_at || ''))}
               palette={palette}
             />
@@ -210,11 +216,7 @@ export default function IncidentResultScreen() {
                     x{detail.quantity ?? 1}
                   </Text>
                 </View>
-                {detail.total_cost != null ? (
-                  <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600', marginTop: 2 }}>
-                    {formatVnd(Number(detail.total_cost))}
-                  </Text>
-                ) : null}
+
               </View>
             ))}
           </View>
@@ -238,28 +240,6 @@ export default function IncidentResultScreen() {
         ) : null}
 
         {/* Cleaning task info */}
-        {cleaningTask ? (
-          <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            <Text style={[styles.cardTitle, { color: palette.text }]}>Nhiệm vụ</Text>
-            {cleaningTask.status != null ? (
-              <InfoRow label="Trạng thái" value={String(cleaningTask.status)} palette={palette} />
-            ) : null}
-            {cleaningTask.scheduled_start_time != null ? (
-              <InfoRow
-                label="Bắt đầu"
-                value={formatDateTime(String(cleaningTask.scheduled_start_time))}
-                palette={palette}
-              />
-            ) : null}
-            {cleaningTask.scheduled_end_time != null ? (
-              <InfoRow
-                label="Kết thúc"
-                value={formatDateTime(String(cleaningTask.scheduled_end_time))}
-                palette={palette}
-              />
-            ) : null}
-          </View>
-        ) : null}
 
       </ScrollView>
 
@@ -280,12 +260,12 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 200 },
   scrollContent: {
     paddingHorizontal: spacingX._20,
-    paddingTop: spacingY._16,
+    paddingTop: spacingY._15,
     paddingBottom: 100,
-    gap: spacingY._16,
+    gap: spacingY._15,
   },
   successHeader: {
-    borderRadius: radius._16,
+    borderRadius: radius._17,
     borderWidth: 1.5,
     padding: spacingX._20,
     alignItems: 'center',
@@ -347,7 +327,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    padding: spacingX._16,
+    padding: spacingX._15,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   backBtn: {

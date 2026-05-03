@@ -541,6 +541,18 @@ export async function getStaffWorkRosters(token: string, query: StaffWorkRosterQ
   }
 }
 
+export async function getMyWorkRosters(token: string): Promise<StaffWorkRoster[]> {
+  try {
+    const response = await apiClient.get<ApiEnvelope<StaffWorkRoster[]>>(
+      '/staff-work-rosters/me',
+      { headers: authHeader(token) },
+    );
+    return toArray<StaffWorkRoster>(response.data?.data ?? response.data);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
 export async function checkinShift(token: string) {
   try {
     const response = await apiClient.post<ApiEnvelope<StaffAttendanceLog>>(

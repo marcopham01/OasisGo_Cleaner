@@ -18,7 +18,7 @@ import {
     getMyAttendanceLogsPaginated,
     getMyCleaningTasks,
     getMyTodayAttendanceStatus,
-    getStaffWorkRosters,
+    getMyWorkRosters,
 } from '@/services/cleaner-dashboard.service';
 import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type {
@@ -40,15 +40,7 @@ interface ShiftsTabProps {
   onErrorChange?: (error: string | null) => void;
 }
 
-const DAY_OF_WEEK_LABELS = [
-  'Chủ nhật',
-  'Thứ hai',
-  'Thứ ba',
-  'Thứ tư',
-  'Thứ năm',
-  'Thứ sáu',
-  'Thứ bảy',
-];
+const TODAY_STR = new Date().toISOString().slice(0, 10);
 
 function formatDateTime(dateText?: string | null) {
   if (!dateText) return '-';
@@ -79,24 +71,26 @@ function todayDateLabel() {
 }
 
 function rosterShiftLabel(roster: StaffWorkRoster) {
-  const raw = roster as Record<string, unknown>;
-  const shift = ((raw.shift ?? raw.location_shift) as Record<string, unknown>) || null;
-  return String(shift?.shift_name || shift?.name || '—');
+  return String(roster.shift?.shift_name || '—');
 }
 
 function rosterTimeLabel(roster: StaffWorkRoster) {
-  const raw = roster as Record<string, unknown>;
-  const shift = ((raw.shift ?? raw.location_shift) as Record<string, unknown>) || null;
-  const startTime = String(shift?.start_time || '');
-  const endTime = String(shift?.end_time || '');
+  const startTime = String(roster.shift?.start_time || '');
+  const endTime = String(roster.shift?.end_time || '');
   if (startTime && endTime) return `${startTime} – ${endTime}`;
   return '';
 }
 
 function rosterLocationLabel(roster: StaffWorkRoster) {
-  const raw = roster as Record<string, unknown>;
-  const location = (raw.location as Record<string, unknown>) || null;
-  return String(location?.name || '—');
+  return String(roster.location?.name || '—');
+}
+
+function rosterClusterLabel(roster: StaffWorkRoster) {
+  return String(roster.cluster?.name || '');
+}
+
+function rosterLocationAddress(roster: StaffWorkRoster) {
+  return String(roster.location?.address || '');
 }
 
 function shouldHidePermissionMessage(message: string) {
@@ -314,8 +308,13 @@ export default function ShiftsTab({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const realtimeReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const todayDow = new Date().getDay();
-  const todayRosters = rosters.filter((r) => r.day_of_week === todayDow && r.is_active !== false);
+  const todayRosters = rosters.filter((r) => {
+    if (r.is_active === false) return false;
+    if (r.is_temporary) {
+      return r.work_date ? String(r.work_date).slice(0, 10) === TODAY_STR : false;
+    }
+    return true;
+  });
   const canCheckin = todayStatus?.can_checkin === true && !todayStatus?.checked_in_today;
   const canCheckout = todayStatus?.checked_in_today === true && !todayStatus?.checked_out_today;
 
@@ -329,7 +328,7 @@ export default function ShiftsTab({
 
       try {
         const [rosterResult, statusResult] = await Promise.allSettled([
-          getStaffWorkRosters(token, { is_active: true }),
+          getMyWorkRosters(token),
           getMyTodayAttendanceStatus(token),
         ]);
 
@@ -535,12 +534,14 @@ export default function ShiftsTab({
                       const timeLabel = rosterTimeLabel(roster);
                       const shiftName = rosterShiftLabel(roster);
                       if (!timeLabel) return null;
-                      const key = String(roster.id || roster._id || roster.location_shift_id || '');
+                      const key = String(roster.id || roster._id || roster.shift_id || '');
                       return (
                         <View key={key} style={styles.shiftTimeBadge}>
-                          <Text style={[styles.shiftTimeName, { color: palette.primaryDark }]}>
-                            {shiftName}
-                          </Text>
+                          {shiftName && shiftName !== '—' ? (
+                            <Text style={[styles.shiftTimeName, { color: palette.primaryDark }]}>
+                              {shiftName}
+                            </Text>
+                          ) : null}
                           <Text style={[styles.shiftTimeText, { color: palette.primaryDark }]}>
                             {timeLabel}
                           </Text>
@@ -573,11 +574,21 @@ export default function ShiftsTab({
             {todayRosters.length > 0 ? (
               <View style={styles.rosterSection}>
                 <Text style={[styles.sectionLabel, { color: palette.textMuted }]}>
-                  Lịch phân công hôm nay
+                  Ca làm việc của tôi
                 </Text>
                 {todayRosters.map((roster) => {
-                  const key = String(roster.id || roster._id || roster.location_shift_id || '');
+                  const key = String(roster.id || roster._id || roster.shift_id || '');
                   const timeLabel = rosterTimeLabel(roster);
+                  const clusterName = rosterClusterLabel(roster);
+                  const address = rosterLocationAddress(roster);
+                  const shiftName = roster.shift?.shift_name;
+                  const locationName = roster.location?.name;
+
+                  const hasHeader = !!(shiftName || timeLabel);
+                  const hasAnyContent =
+                    hasHeader || !!locationName || !!clusterName || !!address || !!roster.is_temporary;
+                  if (!hasAnyContent) return null;
+
                   return (
                     <View
                       key={key}
@@ -585,20 +596,42 @@ export default function ShiftsTab({
                         styles.card,
                         { backgroundColor: palette.surface, borderColor: palette.border },
                       ]}>
-                      <Text style={[styles.cardTitle, { color: palette.text }]}>
-                        {rosterShiftLabel(roster)}
-                      </Text>
-                      {timeLabel ? (
+                      {hasHeader ? (
+                        <View style={styles.cardHeader}>
+                          {shiftName ? (
+                            <Text style={[styles.cardTitle, { color: palette.text }]}>
+                              {shiftName}
+                            </Text>
+                          ) : null}
+                          {timeLabel ? (
+                            <View style={[styles.timeBadge, { backgroundColor: palette.primaryLight }]}>
+                              <Text style={[styles.timeBadgeText, { color: palette.primaryDark }]}>
+                                {timeLabel}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : null}
+                      {locationName ? (
                         <Text style={[styles.meta, { color: palette.textMuted }]}>
-                          Giờ ca: {timeLabel}
+                          📍 {locationName}
                         </Text>
                       ) : null}
-                      <Text style={[styles.meta, { color: palette.textMuted }]}>
-                        Khu vực: {rosterLocationLabel(roster)}
-                      </Text>
-                      <Text style={[styles.meta, { color: palette.textMuted }]}>
-                        {DAY_OF_WEEK_LABELS[roster.day_of_week] ?? `Ngày ${roster.day_of_week}`}
-                      </Text>
+                      {clusterName ? (
+                        <Text style={[styles.meta, { color: palette.textMuted }]}>
+                          🏢 {clusterName}
+                        </Text>
+                      ) : null}
+                      {address ? (
+                        <Text style={[styles.metaSmall, { color: palette.neutral500 }]}>
+                          {address}
+                        </Text>
+                      ) : null}
+                      {roster.is_temporary ? (
+                        <Text style={[styles.metaSmall, { color: palette.warning }]}>
+                          Ca tạm thời – {roster.work_date ? String(roster.work_date).slice(0, 10) : ''}
+                        </Text>
+                      ) : null}
                     </View>
                   );
                 })}
@@ -894,14 +927,37 @@ const styles = StyleSheet.create({
     padding: spacingX._12,
     gap: spacingY._5,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacingX._7,
+    flexWrap: 'wrap',
+  },
   cardTitle: {
     fontSize: 14,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+    flex: 1,
+  },
+  timeBadge: {
+    borderRadius: radius._6,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._5,
+  },
+  timeBadgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.mono,
   },
   meta: {
     fontSize: 13,
     fontFamily: Fonts.sans,
+  },
+  metaSmall: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    opacity: 0.8,
   },
   actionRow: {
     flexDirection: 'row',

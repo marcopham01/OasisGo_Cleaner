@@ -17,7 +17,8 @@ import {
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
 import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
-import type { CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
+import { getMyCleanerIncidents } from '@/services/incident.service';
+import type { CleanerIncident, CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import {
   CLEANING_REQUEST_SOURCES,
 } from '@/types/cleaner-dashboard';
@@ -35,6 +36,7 @@ interface TasksTabProps {
   palette: typeof Colors.light;
   onLoadingChange?: (loading: boolean) => void;
   onErrorChange?: (error: string | null) => void;
+  onCountsChange?: (done: number, pending: number) => void;
 }
 
 function formatDateTime(dateText?: string) {
@@ -416,6 +418,40 @@ function podStatusLabel(status?: string | null) {
   return s.replace(/_/g, ' ');
 }
 
+function incidentSeverityConfig(s?: string): { color: string; icon: keyof typeof MaterialIcons.glyphMap } {
+  const v = String(s || '').toUpperCase();
+  if (v === 'CRITICAL') return { color: '#dc2626', icon: 'warning' };
+  if (v === 'HIGH') return { color: '#f43f5e', icon: 'error-outline' };
+  if (v === 'MEDIUM') return { color: '#f59e0b', icon: 'report-problem' };
+  return { color: '#10b981', icon: 'info-outline' };
+}
+
+function incidentSeverityLabel(s?: string) {
+  const v = String(s || '').toUpperCase();
+  if (v === 'LOW') return 'Thấp';
+  if (v === 'MEDIUM') return 'Trung bình';
+  if (v === 'HIGH') return 'Cao';
+  if (v === 'CRITICAL') return 'Nghiêm trọng';
+  return s || '-';
+}
+
+function incidentStatusConfig(s?: string): { label: string; color: string; bg: string; icon: keyof typeof MaterialIcons.glyphMap } {
+  const v = String(s || '').toUpperCase();
+  if (v === 'PENDING') return { label: 'Chờ xử lý', color: '#d97706', bg: '#fef3c7', icon: 'hourglass-empty' };
+  if (v === 'PROCESSING') return { label: 'Đang xử lý', color: '#2563eb', bg: '#dbeafe', icon: 'build' };
+  if (v === 'COMPLETED') return { label: 'Hoàn thành', color: '#059669', bg: '#d1fae5', icon: 'check-circle' };
+  if (v === 'RESOLVED') return { label: 'Đã giải quyết', color: '#059669', bg: '#d1fae5', icon: 'verified' };
+  if (v === 'DISMISSED') return { label: 'Đã hủy', color: '#6b7280', bg: '#f3f4f6', icon: 'cancel' };
+  return { label: s || '-', color: '#6b7280', bg: '#f3f4f6', icon: 'help-outline' };
+}
+
+function incidentFormatTime(dateText?: string) {
+  if (!dateText) return '-';
+  const parsed = new Date(dateText);
+  if (Number.isNaN(parsed.getTime())) return dateText;
+  return parsed.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
 function shouldRefreshTasksFromEvent(event: CleanerRealtimeNotification) {
   const eventCode = String(event.event || '').trim().toUpperCase();
   const payload = (event.payload || {}) as Record<string, unknown>;
@@ -444,6 +480,7 @@ export default function TasksTab({
   palette,
   onLoadingChange,
   onErrorChange,
+  onCountsChange,
 }: TasksTabProps) {
   const router = useRouter();
   const [tasks, setTasks] = useState<CleaningTask[]>([]);
@@ -451,6 +488,8 @@ export default function TasksTab({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneTodayCount, setDoneTodayCount] = useState(0);
+  const [urgentIncidents, setUrgentIncidents] = useState<CleanerIncident[]>([]);
+  const [urgentLoading, setUrgentLoading] = useState(false);
 
   const [statusFilter, setStatusFilter] = useState<CleaningTaskStatus | 'ALL'>('ALL');
   const [sourceFilter, setSourceFilter] = useState<CleaningRequestSource | 'ALL'>('ALL');
@@ -880,12 +919,35 @@ export default function TasksTab({
     unsupportedStatusesRef.current.clear();
   }, [token]);
 
+  useEffect(() => {
+    onCountsChange?.(doneTodayCount, todayTaskCount);
+  }, [doneTodayCount, todayTaskCount, onCountsChange]);
+
+  const loadUrgentIncidents = useCallback(async () => {
+    if (!token) return;
+    setUrgentLoading(true);
+    try {
+      const all = await getMyCleanerIncidents(token, { incident_type: 'REPLENISHMENT_REQUEST' });
+      const urgent = all.filter(
+        (inc) => String(inc['replenishment_status'] || '').toUpperCase() === 'NOT_REPLENISHED',
+      );
+      setUrgentIncidents(urgent);
+    } catch {
+      // silent – not critical
+    } finally {
+      setUrgentLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void loadUrgentIncidents();
+  }, [loadUrgentIncidents]);
+
   const loadMoreDisplayedTasks = useCallback(() => {
     setVisibleTaskLimit((prev) => {
       if (prev >= visibleTasks.length) {
         return prev;
       }
-
       return Math.min(prev + TASKS_PAGE_SIZE, visibleTasks.length);
     });
   }, [visibleTasks.length]);
@@ -921,7 +983,7 @@ export default function TasksTab({
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadTasks();
+    await Promise.all([loadTasks(), loadUrgentIncidents()]);
     setRefreshing(false);
   };
 
@@ -1001,47 +1063,135 @@ export default function TasksTab({
       scrollEventThrottle={16}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}>
       <View style={styles.container}>
-        <View
-          style={[
-            styles.summaryCard,
-            { backgroundColor: palette.primaryDark, borderColor: palette.primary },
-          ]}>
-          <View style={styles.summaryRow}>
-            <View>
-              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>NHIỆM VỤ HÔM NAY</Text>
-              <Text style={[styles.summaryValue, { color: palette.white }]}>{todayTaskCount}</Text>
-            </View>
-            <View style={styles.summaryRight}>
-              <Text style={[styles.summaryLabel, { color: palette.primaryLight }]}>ĐÃ HOÀN THÀNH</Text>
-              <Text style={[styles.summaryActive, { color: palette.primaryLight }]}>
-                {doneTodayCount}
-              </Text>
-            </View>
+        {/* --- Urgent Incidents Section (REPLENISHMENT_REQUEST / NOT_REPLENISHED) --- */}
+        {urgentLoading ? (
+          <View style={styles.urgentLoadingRow}>
+            <ActivityIndicator size="small" color="#dc2626" />
+            <Text style={[styles.urgentLoadingText, { color: palette.textMuted }]}>Đang tải sự cố...</Text>
           </View>
+        ) : urgentIncidents.length > 0 ? (
+          <View style={[styles.urgentSection, { backgroundColor: isDark ? '#1a0a0a' : '#fff5f5', borderColor: isDark ? '#7f1d1d' : '#fecaca' }]}>
+            <View style={styles.urgentHeader}>
+              <MaterialIcons name="warning" size={15} color="#dc2626" />
+              <Text style={[styles.urgentHeaderText, { color: '#dc2626' }]}>Sự cố cần xử lý gấp</Text>
+              <View style={[styles.urgentBadge, { backgroundColor: '#dc2626' }]}>
+                <Text style={styles.urgentBadgeText}>{urgentIncidents.length}</Text>
+              </View>
+            </View>
+            {urgentIncidents.map((incident, index) => {
+              const incidentId = String(incident.id || index);
+              const cleaningTaskId = String(incident.cleaning_task_id || '').trim();
+              const podName = String(incident.pod_name || (incident.cleaning_task as Record<string, unknown> | null)?.['pod_name'] || 'Pod').trim();
+              const sv = incidentSeverityConfig(String(incident.severity || ''));
+              const st = incidentStatusConfig(String(incident.status || ''));
+              const detailCount = Array.isArray(incident.details) ? incident.details.length : 0;
 
-          <Text style={[styles.subtitle, { color: palette.primaryLight }]}>
-            {taskWindowMode === 'TODAY'
-              ? `Theo dõi công việc trong ngày ${todayDateLabel}`
-              : `Đang hiển thị task theo khoảng ${taskWindowRange.label}`}
-          </Text>
+              return (
+                <Pressable
+                  key={incidentId}
+                  style={({ pressed }) => [
+                    styles.urgentCard,
+                    { backgroundColor: isDark ? '#1e1010' : '#ffffff', borderColor: isDark ? '#7f1d1d' : '#fecaca', opacity: pressed ? 0.92 : 1 },
+                  ]}
+                  onPress={() => {
+                    if (!incidentId) return;
+                    const qs = new URLSearchParams({ incidentId });
+                    if (cleaningTaskId) qs.set('cleaningTaskId', cleaningTaskId);
+                    router.push(`/incident/${encodeURIComponent(incidentId)}?${qs.toString()}` as never);
+                  }}>
+                  {/* Accent bar */}
+                  <View style={[styles.urgentAccent, { backgroundColor: sv.color }]} />
+
+                  <View style={styles.urgentCardInner}>
+                    {/* Row 1: type pill + status pill */}
+                    <View style={styles.urgentTopRow}>
+                      <View style={[styles.urgentTypePill, { backgroundColor: isDark ? '#1e293b' : '#fef2f2' }]}>
+                        <MaterialIcons name="build" size={10} color="#dc2626" />
+                        <Text style={[styles.urgentTypePillText, { color: '#dc2626' }]}>Bổ sung vật tư</Text>
+                      </View>
+                      <View style={[styles.urgentStatusPill, { backgroundColor: st.bg }]}>
+                        <MaterialIcons name={st.icon} size={11} color={st.color} />
+                        <Text style={[styles.urgentStatusPillText, { color: st.color }]}>{st.label}</Text>
+                      </View>
+                    </View>
+
+                    {/* Row 2: pod + severity */}
+                    <View style={styles.urgentPodRow}>
+                      <MaterialIcons name="place" size={13} color={sv.color} />
+                      <Text style={[styles.urgentPodName, { color: palette.text }]} numberOfLines={1}>{podName}</Text>
+                      <View style={[styles.urgentSeverityChip, { backgroundColor: `${sv.color}18`, borderColor: `${sv.color}40` }]}>
+                        <MaterialIcons name={sv.icon} size={10} color={sv.color} />
+                        <Text style={[styles.urgentSeverityText, { color: sv.color }]}>{incidentSeverityLabel(String(incident.severity || ''))}</Text>
+                      </View>
+                    </View>
+
+                    {/* Row 3: description */}
+                    <Text style={[styles.urgentDesc, { color: palette.textMuted }]} numberOfLines={2}>
+                      {String(incident.description || 'Không có mô tả')}
+                    </Text>
+
+                    {/* Footer */}
+                    <View style={styles.urgentFooter}>
+                      <View style={styles.urgentFooterLeft}>
+                        {detailCount > 0 ? (
+                          <View style={styles.urgentFooterChip}>
+                            <MaterialIcons name="list-alt" size={11} color={palette.textMuted} />
+                            <Text style={[styles.urgentFooterChipText, { color: palette.textMuted }]}>{detailCount} hạng mục</Text>
+                          </View>
+                        ) : null}
+                        <View style={styles.urgentFooterChip}>
+                          <MaterialIcons name="access-time" size={11} color={palette.textMuted} />
+                          <Text style={[styles.urgentFooterChipText, { color: palette.textMuted }]}>{incidentFormatTime(String(incident.created_at || ''))}</Text>
+                        </View>
+                      </View>
+                      <View style={[styles.urgentArrow, { backgroundColor: '#fee2e2' }]}>
+                        <MaterialIcons name="arrow-forward-ios" size={11} color="#dc2626" />
+                      </View>
+                    </View>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+
+        <View style={[styles.segmentControl, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+          <Pressable
+            style={[styles.segmentItem, taskWindowMode === 'TODAY' && { backgroundColor: palette.primaryDark }]}
+            onPress={() => setTaskWindowMode('TODAY')}>
+            <MaterialIcons name="today" size={15} color={taskWindowMode === 'TODAY' ? palette.white : palette.textMuted} />
+            <Text style={[styles.segmentText, { color: taskWindowMode === 'TODAY' ? palette.white : palette.textMuted }]}>
+              Hôm nay
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.segmentItem, taskWindowMode === 'WEEK_WINDOW' && { backgroundColor: palette.primaryDark }]}
+            onPress={() => setTaskWindowMode('WEEK_WINDOW')}>
+            <MaterialIcons name="date-range" size={15} color={taskWindowMode === 'WEEK_WINDOW' ? palette.white : palette.textMuted} />
+            <Text style={[styles.segmentText, { color: taskWindowMode === 'WEEK_WINDOW' ? palette.white : palette.textMuted }]}>
+              Tuần này
+            </Text>
+          </Pressable>
         </View>
 
         <View style={styles.actionsRow}>
           <Pressable
-            style={[styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            style={[
+              styles.iconButton,
+              {
+                backgroundColor: isSearchOpen ? palette.primaryBg : palette.surface,
+                borderColor: isSearchOpen ? palette.primary : palette.border,
+              },
+            ]}
             onPress={() => setIsSearchOpen((prev) => !prev)}>
-            <MaterialIcons
-              name={isSearchOpen ? 'close' : 'search'}
-              size={20}
-              color={palette.text}
-            />
-            <Text style={[styles.iconButtonText, { color: palette.text }]}>Tìm kiếm</Text>
+            <MaterialIcons name={isSearchOpen ? 'close' : 'search'} size={15} color={isSearchOpen ? palette.primary : palette.text} />
+            <Text style={[styles.iconButtonText, { color: isSearchOpen ? palette.primary : palette.text }]}>Tìm kiếm</Text>
           </Pressable>
 
           <Pressable
             style={[styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
             onPress={openFilterModal}>
-            <MaterialIcons name="tune" size={20} color={palette.text} />
+            <MaterialIcons name="tune" size={15} color={palette.text} />
             <Text style={[styles.iconButtonText, { color: palette.text }]}>Bộ lọc</Text>
           </Pressable>
         </View>
@@ -1064,38 +1214,36 @@ export default function TasksTab({
             ]}
             value={searchQuery}
             onChangeText={setSearchQuery}
-            placeholder="Tìm nhiệm vụ theo pod, booking, trạng thái..."
+            placeholder="Tìm theo pod, booking, trạng thái..."
             placeholderTextColor={palette.neutral500}
             autoCapitalize="none"
           />
         </Animated.View>
 
-        <Pressable
-          style={[styles.viewToggleButton, { borderColor: palette.primary, backgroundColor: palette.surface }]}
-          onPress={() => {
-            setTaskWindowMode((prev) => (prev === 'TODAY' ? 'WEEK_WINDOW' : 'TODAY'));
-          }}>
-          <Text style={[styles.viewToggleText, { color: palette.primary }]}>
-            {taskWindowMode === 'TODAY'
-              ? 'Xem nhiệm vụ trong vòng một tuần'
-              : 'Quay về xem nhiệm vụ hôm nay của tôi'}
-          </Text>
-        </Pressable>
-
         {error && (
           <View style={[styles.errorBox, { backgroundColor: palette.card, borderColor: palette.error }]}>
+            <MaterialIcons name="error-outline" size={16} color={palette.error} />
             <Text style={[styles.errorText, { color: palette.error }]}>{error}</Text>
           </View>
         )}
 
         {loading ? (
-          <ActivityIndicator color={palette.primary} style={styles.loader} />
+          <View style={styles.loaderWrap}>
+            <ActivityIndicator color={palette.primary} size="large" />
+            <Text style={[styles.loadingText, { color: palette.textMuted }]}>Đang tải nhiệm vụ...</Text>
+          </View>
         ) : visibleTasks.length === 0 ? (
-          <Text style={[styles.emptyText, { color: palette.textMuted }]}>
-            {taskWindowMode === 'TODAY'
-              ? 'Không có task nào trong hôm nay.'
-              : 'Không có task nào trong khoảng ±1 tuần.'}
-          </Text>
+          <View style={styles.emptyWrap}>
+            <View style={[styles.emptyIconCircle, { backgroundColor: palette.primaryBg }]}>
+              <MaterialIcons name="assignment-turned-in" size={36} color={palette.primary} />
+            </View>
+            <Text style={[styles.emptyTitle, { color: palette.text }]}>Không có nhiệm vụ</Text>
+            <Text style={[styles.emptySubtitle, { color: palette.textMuted }]}>
+              {taskWindowMode === 'TODAY'
+                ? 'Hôm nay bạn không có nhiệm vụ nào.'
+                : 'Không có task nào trong khoảng ±1 tuần.'}
+            </Text>
+          </View>
         ) : (
           displayedTasks.map((task) => {
             const status = String(task.status || 'UNKNOWN');
@@ -1107,6 +1255,8 @@ export default function TasksTab({
             const estimatedStartText = resolvedEstimatedStartText(task, bookingWindow);
             const dueText = resolvedDueText(task, bookingWindow);
 
+            const accentColor = statusColor(status, isDark);
+
             return (
               <Pressable
                 key={key}
@@ -1117,77 +1267,69 @@ export default function TasksTab({
                     router.push({ pathname: '/task/[id]', params: { id: key } });
                   }
                 }}
-                style={[
-                  styles.card,
-                  { backgroundColor: palette.card, borderColor: palette.border },
-                ]}>
-                <View style={styles.cardContentRow}>
-                  <View style={styles.cardMainContent}>
-                    <View style={styles.cardHeader}>
-                      <Text
-                        style={[styles.cardTitle, { color: palette.primaryDark, flex: 7 }]}
-                        numberOfLines={3}>
-                        {podLabel}
+                style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                <View style={[styles.cardAccent, { backgroundColor: accentColor }]} />
+                <View style={styles.cardInner}>
+                  <View style={styles.cardTopRow}>
+                    <View style={[styles.statusPill, { backgroundColor: statusBadgeBackground(status, isDark) }]}>
+                      <Text style={[styles.statusPillText, { color: statusBadgeText(status, isDark) }]}>
+                        {statusLabel(status)}
                       </Text>
-                      <View
-                        style={[
-                          styles.statusBadge,
-                          { flex: 3, alignItems: 'center', backgroundColor: statusBadgeBackground(status, isDark) },
-                        ]}>
-                        <Text
-                          style={[styles.statusBadgeText, { color: statusBadgeText(status, isDark), textAlign: 'center' }]}
-                          numberOfLines={2}>
-                          {statusLabel(status)}
-                        </Text>
-                      </View>
                     </View>
+                    {task.request_source ? (
+                      <View style={[styles.sourcePill, { backgroundColor: palette.secondaryBg, maxWidth: '55%' }]}>
+                        <Text style={[styles.sourcePillText, { color: palette.secondaryDark }]} numberOfLines={1}>
+                          {requestSourceLabel(String(task.request_source))}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
 
-                    <View style={styles.metaBlock}>
-                      <View style={styles.metaLine}>
-                        <MaterialIcons name="apartment" size={16} color={palette.neutral500} />
-                        <Text style={[styles.meta, { color: palette.textMuted }]}> 
-                          {clusterOrLocationLabel}
-                        </Text>
-                      </View>
-                      <View style={styles.metaLine}>
-                        <MaterialIcons name="person" size={16} color={palette.neutral500} />
-                        <Text style={[styles.meta, { color: palette.textMuted }]}>
-                          {bookingLabel}
-                        </Text>
-                      </View>
-                      <View style={styles.metaLine}>
-                        <MaterialIcons name="local-offer" size={16} color={palette.neutral500} />
-                        <Text style={[styles.meta, { color: palette.textMuted }]}>
-                          {requestSourceLabel(String(task.request_source || ''))}
-                        </Text>
-                      </View>
-                      <View style={styles.metaLine}>
-                        <MaterialIcons name="schedule" size={16} color={palette.neutral500} />
-                        <Text style={[styles.meta, { color: palette.textMuted }]}>
-                          {formatCompactTime(estimatedStartText)} – {formatCompactTime(dueText)}
-                        </Text>
-                      </View>
-                      {(task.booking_status || task.pod_status) ? (
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6, justifyContent: 'center' }}>
-                          {task.booking_status ? (
-                            <View style={{ backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
-                              <Text style={{ color: '#2563EB', fontSize: 11, fontWeight: '600' }}>
-                                Booking: {bookingStatusLabel(String(task.booking_status))}
-                              </Text>
-                            </View>
-                          ) : null}
-                          {task.pod_status ? (
-                            <View style={{ backgroundColor: '#FFF7ED', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
-                              <Text style={{ color: '#EA580C', fontSize: 11, fontWeight: '600' }}>
-                                Pod: {podStatusLabel(String(task.pod_status))}
-                              </Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      ) : null}
+                  <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
+                    {podLabel}
+                  </Text>
+
+                  <View style={styles.metaBlock}>
+                    <View style={styles.metaLine}>
+                      <MaterialIcons name="apartment" size={14} color={palette.neutral500} />
+                      <Text style={[styles.meta, { color: palette.textMuted }]} numberOfLines={1}>
+                        {clusterOrLocationLabel}
+                      </Text>
+                    </View>
+                    <View style={styles.metaLine}>
+                      <MaterialIcons name="person-outline" size={14} color={palette.neutral500} />
+                      <Text style={[styles.meta, { color: palette.textMuted }]} numberOfLines={1}>
+                        {bookingLabel}
+                      </Text>
+                    </View>
+                    <View style={styles.metaLine}>
+                      <MaterialIcons name="schedule" size={14} color={palette.neutral500} />
+                      <Text style={[styles.meta, { color: palette.textMuted }]} numberOfLines={1}>
+                        {formatCompactTime(estimatedStartText)} – {formatCompactTime(dueText)}
+                      </Text>
                     </View>
                   </View>
 
+                  {(task.booking_status || task.pod_status) ? (
+                    <View style={styles.chipRow}>
+                      {task.booking_status ? (
+                        <View style={[styles.chip, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
+                          <MaterialIcons name="book-online" size={11} color="#2563EB" />
+                          <Text style={[styles.chipText, { color: '#2563EB' }]} numberOfLines={1}>
+                            Đơn đặt pod: {bookingStatusLabel(String(task.booking_status))}
+                          </Text>
+                        </View>
+                      ) : <View />}
+                      {task.pod_status ? (
+                        <View style={[styles.chip, { backgroundColor: '#FFF7ED', borderColor: '#FED7AA', flexShrink: 1 }]}>
+                          <MaterialIcons name="meeting-room" size={11} color="#EA580C" />
+                          <Text style={[styles.chipText, { color: '#EA580C' }]} numberOfLines={1}>
+                            Pod: {podStatusLabel(String(task.pod_status))}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               </Pressable>
             );
@@ -1196,11 +1338,21 @@ export default function TasksTab({
 
         {!loading && visibleTasks.length > 0 ? (
           <View style={styles.paginationRow}>
-            <Text style={[styles.pageText, { color: palette.textMuted }]}>
-              {hasMoreToDisplay
-                ? `Kéo xuống để tải thêm (${displayedTasks.length}/${visibleTasks.length})`
-                : `Đã hiển thị tất cả ${visibleTasks.length} task`}
-            </Text>
+            {hasMoreToDisplay ? (
+              <>
+                <MaterialIcons name="keyboard-arrow-down" size={14} color={palette.textMuted} />
+                <Text style={[styles.pageText, { color: palette.textMuted }]}>
+                  {`${displayedTasks.length}/${visibleTasks.length} — Kéo xuống để xem thêm`}
+                </Text>
+              </>
+            ) : (
+              <>
+                <MaterialIcons name="check-circle" size={14} color={palette.success} />
+                <Text style={[styles.pageText, { color: palette.textMuted }]}>
+                  {`Đã hiển thị tất cả ${visibleTasks.length} nhiệm vụ`}
+                </Text>
+              </>
+            )}
           </View>
         ) : null}
       </View>
@@ -1255,29 +1407,6 @@ export default function TasksTab({
                     onPress={() => setDraftSourceFilter(source)}>
                     <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
                       {source === 'ALL' ? 'Tất cả' : requestSourceLabel(source)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <Text style={[styles.filterLabel, { color: palette.textMuted }]}>Pod cluster</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-              {clusterOptions.map((opt) => {
-                const active = draftClusterFilter.includes(opt);
-                return (
-                  <Pressable
-                    key={opt}
-                    style={[
-                      styles.filterChip,
-                      {
-                        backgroundColor: active ? palette.primary : palette.surface,
-                        borderColor: active ? palette.primary : palette.border,
-                      },
-                    ]}
-                    onPress={() => toggleDraftCluster(opt)}>
-                    <Text style={[styles.filterChipText, { color: active ? palette.white : palette.text }]}>
-                      {clusterFilterLabel(opt)}
                     </Text>
                   </Pressable>
                 );
@@ -1354,249 +1483,371 @@ export default function TasksTab({
 
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: spacingX._20,
-    paddingVertical: spacingY._15,
-    gap: spacingY._12,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._10,
+    gap: spacingY._7,
   },
+
+  // --- Summary Card ---
   summaryCard: {
     borderWidth: 1,
     borderRadius: radius._20,
     padding: spacingX._15,
-    gap: spacingY._7,
+    gap: spacingY._10,
   },
-  summaryRow: {
+  summaryHeaderRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    gap: spacingX._5,
   },
-  summaryRight: {
-    alignItems: 'flex-end',
+  summaryDateText: {
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+    letterSpacing: 0.3,
   },
-  summaryLabel: {
+  summaryStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  summaryStat: {
+    flex: 1,
+    alignItems: 'center',
+    gap: spacingY._5,
+  },
+  summaryStatNum: {
+    fontSize: 36,
+    fontWeight: '800',
+    fontFamily: Fonts.sans,
+    lineHeight: 40,
+  },
+  summaryStatLabel: {
     fontSize: 11,
     fontWeight: '700',
     fontFamily: Fonts.sans,
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
-  summaryValue: {
-    fontSize: 34,
-    lineHeight: 38,
-    fontWeight: '700',
+  summaryDivider: {
+    width: 1,
+    height: 44,
+  },
+  progressContainer: {
+    gap: spacingY._5,
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: radius.full,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: radius.full,
+  },
+  progressText: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+    textAlign: 'right',
+  },
+
+  // --- Urgent Incidents ---
+  urgentLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
+    paddingVertical: spacingY._7,
+  },
+  urgentLoadingText: {
+    fontSize: 12,
     fontFamily: Fonts.sans,
   },
-  summaryActive: {
-    fontSize: 34,
-    lineHeight: 38,
+  urgentSection: {
+    borderRadius: radius._12,
+    borderWidth: 1,
+    overflow: 'hidden',
+    gap: spacingY._7,
+    padding: spacingX._10,
+  },
+  urgentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._5,
+  },
+  urgentHeaderText: {
+    fontSize: 12,
     fontWeight: '700',
     fontFamily: Fonts.sans,
+    flex: 1,
   },
-  title: {
-    fontSize: 24,
+  urgentBadge: {
+    borderRadius: radius.full,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  urgentBadgeText: {
+    fontSize: 10,
     fontWeight: '700',
     fontFamily: Fonts.sans,
-    textAlign: 'center',
+    color: '#ffffff',
   },
-  subtitle: {
+  urgentCard: {
+    borderRadius: radius._10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  urgentAccent: {
+    width: 3,
+  },
+  urgentCardInner: {
+    flex: 1,
+    padding: spacingX._10,
+    gap: spacingY._5,
+  },
+  urgentTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacingX._5,
+  },
+  urgentTypePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacingX._5,
+    paddingVertical: 2,
+    borderRadius: radius._6,
+  },
+  urgentTypePillText: {
+    fontSize: 10,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
+  },
+  urgentStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacingX._5,
+    paddingVertical: 2,
+    borderRadius: radius._6,
+  },
+  urgentStatusPillText: {
+    fontSize: 10,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
+  },
+  urgentPodRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._5,
+  },
+  urgentPodName: {
     fontSize: 13,
+    fontWeight: '700',
     fontFamily: Fonts.sans,
-    textAlign: 'center',
+    flex: 1,
   },
+  urgentSeverityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacingX._5,
+    paddingVertical: 2,
+    borderRadius: radius._6,
+    borderWidth: 1,
+  },
+  urgentSeverityText: {
+    fontSize: 10,
+    fontFamily: Fonts.sans,
+    fontWeight: '700',
+  },
+  urgentDesc: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    lineHeight: 16,
+  },
+  urgentFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  urgentFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._10,
+    flex: 1,
+  },
+  urgentFooterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  urgentFooterChipText: {
+    fontSize: 10,
+    fontFamily: Fonts.sans,
+  },
+  urgentArrow: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // --- Segment Control ---
+  segmentControl: {
+    flexDirection: 'row',
+    borderRadius: radius._6,
+    borderWidth: 1,
+    padding: 2,
+    gap: 2,
+  },
+  segmentItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacingX._5,
+    paddingVertical: 4,
+    borderRadius: radius._6,
+  },
+  segmentText: {
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+
+  // --- Actions Row ---
   actionsRow: {
     flexDirection: 'row',
-    gap: spacingX._10,
+    gap: spacingX._7,
   },
   iconButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacingX._7,
+    gap: spacingX._5,
     borderWidth: 1,
-    borderRadius: radius._12,
-    paddingVertical: spacingY._10,
+    borderRadius: radius._6,
+    paddingVertical: 4,
     flex: 1,
   },
   iconButtonText: {
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '700',
     fontFamily: Fonts.sans,
   },
+
+  // --- Search ---
   searchAnimatedWrap: {
     overflow: 'hidden',
   },
   input: {
     borderWidth: 1,
-    borderRadius: radius._12,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._10,
-    fontSize: 14,
-    fontFamily: Fonts.sans,
-  },
-  filterGroup: {
-    gap: spacingY._7,
-  },
-  activeFilterRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacingX._10,
-  },
-  activeFilterText: {
-    fontSize: 12,
-    fontFamily: Fonts.sans,
-    fontWeight: '600',
-  },
-  viewToggleButton: {
-    borderWidth: 1,
     borderRadius: radius._10,
-    paddingHorizontal: spacingX._12,
+    paddingHorizontal: spacingX._10,
     paddingVertical: spacingY._7,
-    alignSelf: 'center',
-  },
-  viewToggleText: {
     fontSize: 12,
     fontFamily: Fonts.sans,
-    fontWeight: '700',
   },
-  filterLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    fontFamily: Fonts.sans,
-  },
-  filterRow: {
-    gap: spacingX._7,
-    paddingRight: spacingX._10,
-  },
-  filterChip: {
-    borderWidth: 1,
-    borderRadius: radius._10,
-    paddingHorizontal: spacingX._12,
-    paddingVertical: spacingY._7,
-  },
-  filterChipText: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
-  },
-  sortRow: {
-    flexDirection: 'row',
-    gap: spacingX._10,
-  },
-  sortButton: {
-    flex: 1,
-    borderRadius: radius._10,
-    borderWidth: 1,
-    paddingVertical: spacingY._10,
-    alignItems: 'center',
-  },
-  sortButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    fontFamily: Fonts.sans,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.45)',
-    justifyContent: 'center',
-    paddingHorizontal: spacingX._20,
-  },
-  modalCard: {
-    borderWidth: 1,
-    borderRadius: radius._15,
-    padding: spacingX._15,
-    gap: spacingY._10,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
-  },
-  modalActionRow: {
-    flexDirection: 'row',
-    gap: spacingX._10,
-    marginTop: spacingY._5,
-  },
-  modalButton: {
-    flex: 1,
-    borderRadius: radius._10,
-    paddingVertical: spacingY._10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
-  },
-  loader: {
-    marginVertical: spacingY._20,
-  },
+
+  // --- Error Box ---
   errorBox: {
     borderWidth: 1,
     borderRadius: radius._10,
-    padding: spacingX._12,
+    padding: spacingX._10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._5,
   },
   errorText: {
-    fontSize: 13,
+    fontSize: 11,
     fontFamily: Fonts.sans,
     fontWeight: '600',
+    flex: 1,
   },
-  emptyText: {
-    fontSize: 13,
+
+  // --- Loading ---
+  loaderWrap: {
+    paddingVertical: spacingY._20,
+    alignItems: 'center',
+    gap: spacingY._7,
+  },
+  loadingText: {
+    fontSize: 11,
     fontFamily: Fonts.sans,
-    paddingVertical: spacingY._15,
   },
-  paginationRow: {
-    flexDirection: 'row',
+
+  // --- Empty State ---
+  emptyWrap: {
+    paddingVertical: spacingY._25,
+    alignItems: 'center',
+    gap: spacingY._7,
+  },
+  emptyIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacingX._10,
-    marginTop: spacingY._5,
+    marginBottom: spacingY._5,
   },
-  pageText: {
-    fontSize: 12,
-    fontFamily: Fonts.sans,
+  emptyTitle: {
+    fontSize: 13,
     fontWeight: '700',
+    fontFamily: Fonts.sans,
   },
+  emptySubtitle: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    textAlign: 'center',
+    paddingHorizontal: spacingX._15,
+  },
+
+  // --- Task Card ---
   card: {
     borderWidth: 1,
-    borderRadius: radius._15,
-    padding: spacingX._15,
+    borderRadius: radius._12,
+    overflow: 'hidden',
+    flexDirection: 'row',
   },
-  cardContentRow: {
+  cardAccent: {
+    width: 3,
+  },
+  cardInner: {
+    flex: 1,
+    padding: spacingX._10,
+    gap: spacingY._5,
+  },
+  cardTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacingX._12,
+    justifyContent: 'space-between',
   },
-  cardMainContent: {
-    flex: 1,
-    gap: spacingY._10,
+  statusPill: {
+    borderRadius: radius.full,
+    paddingHorizontal: spacingX._7,
+    paddingVertical: 3,
   },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacingX._7,
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
   },
   cardTitle: {
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 13,
     fontWeight: '700',
     fontFamily: Fonts.sans,
-  },
-  statusBadge: {
-    borderRadius: radius._10,
-    paddingHorizontal: spacingX._7,
-    paddingVertical: spacingY._5,
-    minHeight: 36,
-    justifyContent: 'center',
-  },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    fontFamily: Fonts.sans,
+    lineHeight: 18,
   },
   metaBlock: {
     gap: spacingY._5,
@@ -1604,10 +1855,152 @@ const styles = StyleSheet.create({
   metaLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacingX._7,
+    gap: spacingX._5,
+  },
+  metaTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacingX._5,
   },
   meta: {
-    fontSize: 13,
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    flex: 1,
+  },
+  sourcePill: {
+    borderRadius: radius.full,
+    paddingHorizontal: spacingX._5,
+    paddingVertical: 2,
+  },
+  sourcePillText: {
+    fontSize: 9,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacingX._5,
+    marginTop: 2,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderWidth: 1,
+    borderRadius: radius.full,
+    paddingHorizontal: spacingX._5,
+    paddingVertical: 2,
+  },
+  chipText: {
+    fontSize: 9,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+
+  // --- Pagination ---
+  paginationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacingX._5,
+    paddingVertical: 3,
+  },
+  pageText: {
+    fontSize: 10,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+
+  // --- Filter Modal ---
+  filterGroup: {
+    gap: spacingY._5,
+  },
+  activeFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacingX._7,
+  },
+  activeFilterText: {
+    fontSize: 11,
+    fontFamily: Fonts.sans,
+    fontWeight: '600',
+  },
+  filterLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  filterRow: {
+    gap: spacingX._5,
+    paddingRight: spacingX._7,
+  },
+  filterChip: {
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._10,
+    paddingVertical: spacingY._5,
+  },
+  filterChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  sortRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+  },
+  sortButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    borderWidth: 1,
+    paddingVertical: spacingY._7,
+    alignItems: 'center',
+  },
+  sortButtonText: {
+    fontSize: 11,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: spacingX._15,
+  },
+  modalCard: {
+    borderWidth: 1,
+    borderRadius: radius._12,
+    padding: spacingX._12,
+    gap: spacingY._7,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    gap: spacingX._7,
+    marginTop: spacingY._5,
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: radius._10,
+    paddingVertical: spacingY._7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
     fontFamily: Fonts.sans,
   },
 });

@@ -84,6 +84,7 @@ export default function IncidentListScreen() {
   const [flatIncidents, setFlatIncidents] = useState<FlatIncident[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -119,6 +120,14 @@ export default function IncidentListScreen() {
     if (item.cleaningTaskId) params.set('cleaningTaskId', item.cleaningTaskId);
     router.push(`/incident/${incidentId}?${params.toString()}` as never);
   };
+
+  const displayedIncidents = showAll
+    ? flatIncidents
+    : flatIncidents.filter(
+        (item) =>
+          String(item.incident.incident_type || '').toUpperCase() === 'REPLENISHMENT_REQUEST' &&
+          String(item.incident['replenishment_status'] || '').toUpperCase() === 'NOT_REPLENISHED',
+      );
 
   if (!token) {
     return (
@@ -161,10 +170,41 @@ export default function IncidentListScreen() {
           </View>
         ) : (
           <>
+            <Pressable
+              style={({ pressed }) => [
+                styles.toggleBtn,
+                {
+                  backgroundColor: isDark ? palette.surface : '#eff6ff',
+                  borderColor: palette.primary,
+                  opacity: pressed ? 0.75 : 1,
+                },
+              ]}
+              onPress={() => setShowAll((v) => !v)}>
+              <MaterialIcons
+                name={showAll ? 'filter-list' : 'format-list-bulleted'}
+                size={15}
+                color={palette.primary}
+              />
+              <Text style={[styles.toggleBtnText, { color: palette.primary }]}>
+                {showAll ? 'Chỉ hiển thị cần xử lý gấp' : 'Xem tất cả sự cố'}
+              </Text>
+            </Pressable>
+            {displayedIncidents.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={[styles.emptyIcon, { backgroundColor: isDark ? palette.surface : '#f0fdf4' }]}>
+                  <MaterialIcons name="check-circle-outline" size={40} color={palette.success} />
+                </View>
+                <Text style={[styles.emptyTitle, { color: palette.text }]}>Không có sự cố cần xử lý gấp</Text>
+                <Text style={[styles.emptySubtitle, { color: palette.textMuted }]}>
+                  Không có yêu cầu bổ sung vật tư đang chờ xử lý
+                </Text>
+              </View>
+            ) : (
+              <>
             <Text style={[styles.listCount, { color: palette.textMuted }]}>
-              {flatIncidents.length} sự cố
+              {displayedIncidents.length} sự cố{!showAll ? ' cần xử lý gấp' : ''}
             </Text>
-            {flatIncidents.map((item, index) => {
+            {displayedIncidents.map((item, index) => {
               const { incident, podName } = item;
               const incidentId = String(incident.id || index);
               const sv = severityConfig(String(incident.severity || ''), palette);
@@ -265,6 +305,8 @@ export default function IncidentListScreen() {
                 </Pressable>
               );
             })}
+              </>
+            )}
           </>
         )}
       </ScrollView>
@@ -336,6 +378,17 @@ const styles = StyleSheet.create({
   footerChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   footerChipText: { fontSize: 11, fontFamily: Fonts.sans },
   arrowBtn: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  toggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
+    borderWidth: 1,
+    borderRadius: radius._10,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._7,
+    alignSelf: 'flex-start',
+  },
+  toggleBtnText: { fontSize: 13, fontFamily: Fonts.sans, fontWeight: '600' },
   bookingRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
     borderRadius: radius._10, borderWidth: 1,

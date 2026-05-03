@@ -3,7 +3,9 @@ import { getMyCleaningTasks } from '@/services/cleaner-dashboard.service';
 import type {
     CleanerCheckinReportData,
     CleanerIncident,
+    ResolveReplenishmentResult,
     UpdateCleanerIncidentStatusPayload,
+    UpdateCleanerIncidentStatusResult,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -144,7 +146,7 @@ export async function resolveReplenishment(
   token: string,
   incidentId: string,
   items: Array<{ item_id: string; quantity: number }>,
-): Promise<CleanerIncident> {
+): Promise<ResolveReplenishmentResult> {
   try {
     const response = await apiClient.patch(
       `/incidents/${encodeURIComponent(incidentId)}/resolve-replenishment`,
@@ -152,7 +154,7 @@ export async function resolveReplenishment(
       { headers: authHeader(token) },
     );
     const body = response.data as { success?: boolean; data?: unknown };
-    return (body?.data ?? body) as CleanerIncident;
+    return (body?.data ?? body) as ResolveReplenishmentResult;
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }
@@ -166,7 +168,7 @@ export async function updateCleanerIncidentStatus(
   token: string,
   incidentId: string,
   payload: UpdateCleanerIncidentStatusPayload,
-): Promise<CleanerIncident> {
+): Promise<UpdateCleanerIncidentStatusResult> {
   try {
     const response = await apiClient.patch(
       `/incidents/cleaner/${encodeURIComponent(incidentId)}/status`,
@@ -174,7 +176,7 @@ export async function updateCleanerIncidentStatus(
       { headers: authHeader(token) },
     );
     const body = response.data as { success?: boolean; data?: unknown };
-    return (body?.data ?? body) as CleanerIncident;
+    return (body?.data ?? body) as UpdateCleanerIncidentStatusResult;
   } catch (error) {
     throw new Error(getErrorMessage(error));
   }

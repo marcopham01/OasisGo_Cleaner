@@ -76,9 +76,12 @@ function taskStatusLabel(s?: string) {
 
 function bookingStatusLabel(s?: string) {
   const v = String(s || '').toUpperCase();
-  if (v === 'ACTIVE') return 'Đang diễn ra';
-  if (v === 'COMPLETED') return 'Hoàn thành';
+  if (v === 'IN_USE') return 'Đang sử dụng';
+  if (v === 'COMPLETED') return 'Đã kết thúc';
+  if (v === 'BOOKED') return 'Đã đặt';
   if (v === 'CANCELLED') return 'Đã hủy';
+  if (v === 'NO_SHOW') return 'Không đến';
+  if (v === 'ACTIVE') return 'Đang diễn ra';
   if (v === 'PENDING') return 'Chờ xác nhận';
   return s || '-';
 }
@@ -222,6 +225,7 @@ export default function IncidentDetailScreen() {
     cleaningTaskId ||
     String((incident?.cleaning_task as Record<string, unknown> | null)?.id || incident?.cleaning_task_id || '').trim();
 
+  // ── Action: REPLENISHMENT_REQUEST — navigate to repair screen ──
   const handleGoRepair = async () => {
     if (!token || !incident) return;
     const targetId = String(incident.id || '').trim();
@@ -242,6 +246,30 @@ export default function IncidentDetailScreen() {
       router.push(
         `/incident/repair?incidentId=${encodeURIComponent(targetId)}&cleaningTaskId=${encodeURIComponent(resolvedCleaningTaskId)}` as never,
       );
+    } catch (err) {
+      Alert.alert('Lỗi', getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Action: DAMAGE_REPORT — inline status progression ──
+  const handleDamageStatusUpdate = async (targetStatus: 'PROCESSING' | 'COMPLETED') => {
+    if (!token || !incident) return;
+    const targetId = String(incident.id || '').trim();
+    if (!targetId) return;
+
+    setSubmitting(true);
+    try {
+      const updated = await updateCleanerIncidentStatus(token, targetId, { status: targetStatus });
+      setIncident((prev) => prev ? { ...prev, status: updated.status ?? targetStatus } : prev);
+      if (targetStatus === 'COMPLETED') {
+        Alert.alert(
+          'Đã ghi nhận',
+          'Báo cáo hư hại đã được đánh dấu hoàn thành. Quản lý sẽ xem xét và duyệt.',
+          [{ text: 'OK' }],
+        );
+      }
     } catch (err) {
       Alert.alert('Lỗi', getErrorMessage(err));
     } finally {
@@ -300,6 +328,9 @@ export default function IncidentDetailScreen() {
   const sv = severityConfig(String(incident.severity || ''), palette);
   const st = statusConfig(String(incident.status || ''));
   const currentStatus = String(incident.status || '').toUpperCase();
+  const incidentType = String(incident.incident_type || '').toUpperCase();
+  const isDamageReport = incidentType === 'DAMAGE_REPORT';
+  const isReplenishment = incidentType === 'REPLENISHMENT_REQUEST';
   const canProcess = currentStatus === 'PENDING' || currentStatus === 'PROCESSING';
 
   const cleaningTask = incident.cleaning_task as Record<string, unknown> | null;
@@ -314,8 +345,8 @@ export default function IncidentDetailScreen() {
   const details: IncidentDetailLine[] = Array.isArray(incident.details) ? incident.details : [];
   const photoUrls: string[] = Array.isArray(incident.photo_urls) ? incident.photo_urls.map(String) : [];
 
-  const reporterName = String((incident as Record<string, unknown>)['reporter_name'] || '').trim();
-  const handledByName = String((incident as Record<string, unknown>)['handled_by_name'] || '').trim();
+  const reporterName = String(incident.reporter_name || '').trim();
+  const handledByName = String(incident.handled_by_name || '').trim();
   const escalationNote = String(incident.escalation_note || '').trim();
 
   return (
@@ -475,42 +506,85 @@ export default function IncidentDetailScreen() {
 
         {/* ── Cleaning Task ── */}
         {cleaningTask ? (
-          <SectionCard title="Nhiệm vụ dọn dẹp" icon="assignment" palette={palette}>
-            <InfoRow
-              icon="flag"
-              label="Trạng thái"
-              value={taskStatusLabel(String(cleaningTask.status || ''))}
-              palette={palette}
-            />
-            <InfoRow
-              icon="source"
-              label="Nguồn yêu cầu"
-              value={requestSourceLabel(String(cleaningTask.request_source || ''))}
-              palette={palette}
-            />
-
-          </SectionCard>
+          <View style={[styles.bookingCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <View style={[styles.bookingHeader, { borderBottomColor: palette.border }]}>
+              <MaterialIcons name="assignment" size={15} color={palette.primary} />
+              <Text style={[styles.bookingHeaderText, { color: palette.text }]}>Nhiệm vụ dọn dẹp</Text>
+            </View>
+            {(() => {
+              const ts = String(cleaningTask.status || '').toUpperCase();
+              const tCfg = (() => {
+                if (ts === 'ASSIGNED') return { label: 'Đã phân công', color: '#2563eb', bg: '#dbeafe', icon: 'assignment-ind' as const };
+                if (ts === 'ACCEPTED') return { label: 'Đã nhận việc', color: '#7c3aed', bg: '#ede9fe', icon: 'thumb-up' as const };
+                if (ts === 'IN_PROGRESS') return { label: 'Đang dọn', color: '#d97706', bg: '#fef3c7', icon: 'cleaning-services' as const };
+                if (ts === 'DONE') return { label: 'Hoàn thành', color: '#059669', bg: '#d1fae5', icon: 'check-circle' as const };
+                if (ts === 'CANCELLED') return { label: 'Đã hủy', color: '#dc2626', bg: '#fee2e2', icon: 'cancel' as const };
+                if (ts === 'MISSED') return { label: 'Bỏ lỡ', color: '#6b7280', bg: '#f3f4f6', icon: 'event-busy' as const };
+                return { label: taskStatusLabel(String(cleaningTask.status || '')), color: '#6b7280', bg: '#f3f4f6', icon: 'help-outline' as const };
+              })();
+              return (
+                <View style={[styles.bookingStatusRow, { backgroundColor: tCfg.bg + 'aa', borderColor: tCfg.color + '40' }]}>
+                  <MaterialIcons name={tCfg.icon} size={18} color={tCfg.color} />
+                  <Text style={[styles.bookingStatusLabel, { color: tCfg.color }]}>{tCfg.label}</Text>
+                </View>
+              );
+            })()}
+          </View>
         ) : null}
 
         {/* ── Booking ── */}
         {booking ? (
-          <SectionCard title="Thông tin đặt phòng" icon="book-online" palette={palette}>
-            <InfoRow
-              icon="flag"
-              label="Trạng thái booking"
-              value={bookingStatusLabel(String(booking.status || ''))}
-              palette={palette}
-            />
-            {(booking.user_name || booking.user_id) ? (
-              <InfoRow
-                icon="person"
-                label="Khách hàng"
-                value={String(booking.user_name || booking.user_id)}
-                palette={palette}
-              />
-            ) : null}
+          <View style={[styles.bookingCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            {/* Header */}
+            <View style={[styles.bookingHeader, { borderBottomColor: palette.border }]}>
+              <MaterialIcons name="book-online" size={15} color={palette.primary} />
+              <Text style={[styles.bookingHeaderText, { color: palette.text }]}>Thông tin đơn đặt pod</Text>
+            </View>
 
-          </SectionCard>
+            {/* Status badge row */}
+            {(() => {
+              const st2 = String(booking.status || '').toUpperCase();
+              const stCfg = (() => {
+                if (st2 === 'IN_USE') return { label: 'Đang sử dụng', color: '#2563eb', bg: '#dbeafe', icon: 'play-circle-outline' as const };
+                if (st2 === 'COMPLETED') return { label: 'Đã kết thúc', color: '#059669', bg: '#d1fae5', icon: 'check-circle' as const };
+                if (st2 === 'BOOKED') return { label: 'Đã đặt', color: '#7c3aed', bg: '#ede9fe', icon: 'event-available' as const };
+                if (st2 === 'CANCELLED') return { label: 'Đã hủy', color: '#dc2626', bg: '#fee2e2', icon: 'cancel' as const };
+                if (st2 === 'NO_SHOW') return { label: 'Không đến', color: '#6b7280', bg: '#f3f4f6', icon: 'person-off' as const };
+                if (st2 === 'ACTIVE') return { label: 'Đang diễn ra', color: '#2563eb', bg: '#dbeafe', icon: 'play-circle-outline' as const };
+                if (st2 === 'PENDING') return { label: 'Chờ xác nhận', color: '#d97706', bg: '#fef3c7', icon: 'hourglass-empty' as const };
+                return { label: bookingStatusLabel(String(booking.status || '')), color: '#6b7280', bg: '#f3f4f6', icon: 'help-outline' as const };
+              })();
+              return (
+                <View style={[styles.bookingStatusRow, { backgroundColor: stCfg.bg + 'aa', borderColor: stCfg.color + '40' }]}>
+                  <MaterialIcons name={stCfg.icon} size={18} color={stCfg.color} />
+                  <Text style={[styles.bookingStatusLabel, { color: stCfg.color }]}>{stCfg.label}</Text>
+                </View>
+              );
+            })()}
+
+            {/* Customer row */}
+            {(() => {
+              const customerName = String(
+                booking.user_name ||
+                booking.guest_name ||
+                cleaningTask?.booking_user_name ||
+                cleaningTask?.booking_guest_name ||
+                ''
+              ).trim();
+              if (!customerName) return null;
+              return (
+                <View style={[styles.bookingInfoRow, { borderTopColor: palette.border }]}>
+                  <View style={[styles.bookingInfoIcon, { backgroundColor: palette.primaryBg }]}>
+                    <MaterialIcons name="person" size={14} color={palette.primary} />
+                  </View>
+                  <View style={styles.bookingInfoBody}>
+                    <Text style={[styles.bookingInfoLabel, { color: palette.textMuted }]}>Khách hàng</Text>
+                    <Text style={[styles.bookingInfoValue, { color: palette.text }]}>{customerName}</Text>
+                  </View>
+                </View>
+              );
+            })()}
+          </View>
         ) : null}
 
       </ScrollView>
@@ -518,31 +592,71 @@ export default function IncidentDetailScreen() {
       {/* ── CTA Button ── */}
       {canProcess ? (
         <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border }]}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.ctaBtn,
-              {
-                backgroundColor: currentStatus === 'PROCESSING' ? '#2563eb' : palette.primary,
-                opacity: pressed || submitting ? 0.8 : 1,
-              },
-            ]}
-            disabled={submitting}
-            onPress={handleGoRepair}>
-            {submitting ? (
-              <ActivityIndicator color="#fff" size="small" />
+          {isDamageReport ? (
+            /* DAMAGE_REPORT: inline status progression, no repair screen */
+            currentStatus === 'PENDING' ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.ctaBtn,
+                  { backgroundColor: '#d97706', opacity: pressed || submitting ? 0.8 : 1 },
+                ]}
+                disabled={submitting}
+                onPress={() => handleDamageStatusUpdate('PROCESSING')}>
+                {submitting ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <>
+                    <MaterialIcons name="build" size={20} color="#fff" />
+                    <Text style={styles.ctaBtnText}>Xác nhận đang xử lý</Text>
+                  </>
+                )}
+              </Pressable>
             ) : (
-              <>
-                <MaterialIcons
-                  name={currentStatus === 'PROCESSING' ? 'build' : 'arrow-forward'}
-                  size={20}
-                  color="#fff"
-                />
-                <Text style={styles.ctaBtnText}>
-                  {currentStatus === 'PROCESSING' ? 'Tiếp tục xử lý' : 'Bắt đầu xử lý'}
-                </Text>
-              </>
-            )}
-          </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.ctaBtn,
+                  { backgroundColor: palette.success, opacity: pressed || submitting ? 0.8 : 1 },
+                ]}
+                disabled={submitting}
+                onPress={() => handleDamageStatusUpdate('COMPLETED')}>
+                {submitting ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <>
+                    <MaterialIcons name="check-circle" size={20} color="#fff" />
+                    <Text style={styles.ctaBtnText}>Đánh dấu đã hoàn thành</Text>
+                  </>
+                )}
+              </Pressable>
+            )
+          ) : isReplenishment ? (
+            /* REPLENISHMENT_REQUEST: navigate to repair screen */
+            <Pressable
+              style={({ pressed }) => [
+                styles.ctaBtn,
+                {
+                  backgroundColor: currentStatus === 'PROCESSING' ? '#2563eb' : palette.primary,
+                  opacity: pressed || submitting ? 0.8 : 1,
+                },
+              ]}
+              disabled={submitting}
+              onPress={handleGoRepair}>
+              {submitting ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <>
+                  <MaterialIcons
+                    name={currentStatus === 'PROCESSING' ? 'build' : 'arrow-forward'}
+                    size={20}
+                    color="#fff"
+                  />
+                  <Text style={styles.ctaBtnText}>
+                    {currentStatus === 'PROCESSING' ? 'Tiếp tục xử lý' : 'Bắt đầu xử lý'}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
     </SafeAreaView>
@@ -664,4 +778,54 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
   ctaBtnText: { fontSize: 16, fontWeight: '800', fontFamily: Fonts.sans, color: '#fff' },
+
+  // ── Booking Card ──
+  bookingCard: {
+    borderRadius: radius._17,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  bookingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._7,
+    paddingHorizontal: spacingX._15,
+    paddingVertical: spacingY._7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  bookingHeaderText: { fontSize: 13, fontWeight: '700', fontFamily: Fonts.sans },
+  bookingStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._10,
+    margin: spacingX._12,
+    borderRadius: radius._12,
+    borderWidth: 1,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._10,
+  },
+  bookingStatusLabel: { fontSize: 14, fontWeight: '700', fontFamily: Fonts.sans },
+  bookingInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacingX._10,
+    paddingHorizontal: spacingX._12,
+    paddingVertical: spacingY._10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  bookingInfoIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bookingInfoBody: { flex: 1 },
+  bookingInfoLabel: { fontSize: 11, fontFamily: Fonts.sans },
+  bookingInfoValue: { fontSize: 14, fontWeight: '600', fontFamily: Fonts.sans, marginTop: 1 },
 });

@@ -3,44 +3,45 @@ import { ResizeMode, Video } from 'expo-av';
 import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
+import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Keyboard,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableWithoutFeedback,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
-    createDamageReport,
-    getDamageReportItems,
-    getDamageServiceCatalogs,
-    getMyShiftAssignments,
-    getPodClusters,
-    getPodsByClusterId,
+  createDamageReport,
+  getDamageReportItems,
+  getDamageServiceCatalogs,
+  getMyWorkRosters,
+  getPodsByClusterId,
 } from '@/services/cleaner-dashboard.service';
 import type {
-    CreateDamageReportPayload,
-    DamageReportItem,
-    DamageServiceCatalogItem,
-    IncidentSeverity,
-    PodCluster,
-    PodDetails,
-    StaffShiftAssignment,
+  CreateDamageReportPayload,
+  DamageReportItem,
+  DamageServiceCatalogItem,
+  IncidentSeverity,
+  PodCluster,
+  PodDetails,
+  StaffWorkRoster,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -115,6 +116,8 @@ export default function DamageReportScreen() {
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [, requestVideoPermission] = useMicrophonePermissions();
+  const [facing, setFacing] = useState<'front' | 'back'>('back');
+  const [flashEnabled, setFlashEnabled] = useState(false);
 
   // ── Initial data load ──
   useEffect(() => {
@@ -137,33 +140,41 @@ export default function DamageReportScreen() {
       return;
     }
 
-    const today = new Date().toISOString().split('T')[0];
     Promise.all([
-      getMyShiftAssignments(token, { work_date: today }).catch((): StaffShiftAssignment[] => []),
-      getPodClusters(token).catch((): PodCluster[] => []),
+      getMyWorkRosters(token).catch((): StaffWorkRoster[] => []),
       getDamageReportItems(token).catch((): DamageReportItem[] => []),
       getDamageServiceCatalogs(token).catch((): DamageServiceCatalogItem[] => []),
     ])
-      .then(([assignments, clusters, drItems, drServices]) => {
-        const assignmentLocationIds = new Set(
-          assignments
-            .map((assignment) => String(assignment.location?.id || '').trim())
-            .filter(Boolean),
-        );
+      .then(([rosters, drItems, drServices]) => {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const todayRosters = rosters.filter((r) => {
+          if (r.is_active === false) return false;
+          if (r.is_temporary) {
+            return r.work_date ? String(r.work_date).slice(0, 10) === todayStr : false;
+          }
+          return true;
+        });
 
-        const scopedClusters = assignmentLocationIds.size > 0
-          ? clusters.filter((cluster) => assignmentLocationIds.has(String(cluster.location_id || '').trim()))
-          : [];
+        const seenIds = new Set<string>();
+        const scopedClusters: PodCluster[] = [];
+        for (const roster of todayRosters) {
+          const cId = String(roster.cluster?.id || '').trim();
+          if (cId && !seenIds.has(cId)) {
+            seenIds.add(cId);
+            scopedClusters.push({
+              id: roster.cluster?.id,
+              name: roster.cluster?.name,
+              location_id: roster.cluster?.location_id ?? roster.location_id,
+              description: roster.cluster?.description,
+            });
+          }
+        }
 
         setClusterList(scopedClusters);
         setItems(drItems.filter((it) => String(it.id || '').trim()));
         setServices(drServices);
 
-        const shiftLocationId = String((assignments[0] as StaffShiftAssignment | undefined)?.location?.id || '').trim();
-        const matched = shiftLocationId
-          ? scopedClusters.find((c) => String(c.location_id || '').trim() === shiftLocationId)
-          : undefined;
-        const def = matched ?? scopedClusters[0];
+        const def = scopedClusters[0];
         if (def?.id) {
           const id = String(def.id);
           setSelectedClusterId(id);
@@ -256,19 +267,7 @@ export default function DamageReportScreen() {
     });
   };
 
-  const openCameraForPhoto = async () => {
-    if (!cameraPermission?.granted) {
-      const result = await requestCameraPermission();
-      if (!result.granted) {
-        Alert.alert('Không thể mở camera', 'Vui lòng cấp quyền camera để chụp ảnh.');
-        return;
-      }
-    }
-    setCameraMode('picture');
-    setIsCameraOpen(true);
-  };
-
-  const openCameraForVideo = async () => {
+  const openCamera = async () => {
     if (!cameraPermission?.granted) {
       const result = await requestCameraPermission();
       if (!result.granted) {
@@ -276,12 +275,8 @@ export default function DamageReportScreen() {
         return;
       }
     }
-    const videoResult = await requestVideoPermission();
-    if (!videoResult.granted) {
-      Alert.alert('Không thể quay video', 'Vui lòng cấp quyền microphone để quay video.');
-      return;
-    }
-    setCameraMode('video');
+    // Request mic silently so video mode works without extra steps
+    await requestVideoPermission();
     setIsCameraOpen(true);
   };
 
@@ -327,6 +322,7 @@ export default function DamageReportScreen() {
           { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: video.uri, mediaType: 'VIDEO' },
         ]);
         setIsCameraOpen(false);
+        Alert.alert('Quảy video thành công', 'Video đã được thêm vào danh sách.', [{ text: 'OK' }]);
       }
     } catch {
       Alert.alert('Lỗi', 'Không thể quay video, vui lòng thử lại.');
@@ -740,15 +736,9 @@ export default function DamageReportScreen() {
               <View style={styles.incidentPhotoActionRow}>
                 <Pressable
                   style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: '#1f7aed', backgroundColor: '#1f7aed' }]}
-                  onPress={() => void openCameraForPhoto()}>
+                  onPress={() => void openCamera()}>
                   <MaterialIcons name="photo-camera" size={24} color={palette.white} />
-                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Chụp ảnh</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: '#7c3aed', backgroundColor: '#7c3aed' }]}
-                  onPress={() => void openCameraForVideo()}>
-                  <MaterialIcons name="videocam" size={24} color={palette.white} />
-                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Quay video</Text>
+                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Camera</Text>
                 </Pressable>
                 <Pressable
                   style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: palette.neutral500, backgroundColor: palette.neutral500 }]}
@@ -763,9 +753,7 @@ export default function DamageReportScreen() {
                   <View key={item.id} style={styles.requiredThumbWrap}>
                     <Pressable onPress={() => { setLightboxUri(item.uri); setLightboxIsVideo(item.mediaType === 'VIDEO'); }}>
                       {item.mediaType === 'VIDEO' ? (
-                        <View style={[styles.requiredThumb, styles.videoThumbPlaceholder]}>
-                          <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
-                        </View>
+                        <VideoThumb uri={item.uri} style={styles.requiredThumb} iconSize={32} />
                       ) : (
                         <Image source={{ uri: item.uri }} style={styles.requiredThumb} resizeMode="cover" />
                       )}
@@ -834,36 +822,95 @@ export default function DamageReportScreen() {
       </Modal>
 
       {/* ── Camera Modal ── */}
-      <Modal visible={isCameraOpen} animationType="slide" statusBarTranslucent>
+      <Modal visible={isCameraOpen} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent>
         <View style={styles.cameraModalRoot}>
-          <CameraView style={styles.cameraModalView} facing="back" ref={cameraRef} mode={cameraMode} />
-          {/* Top header */}
-          <View style={styles.cameraHeader}>
-            <Pressable style={styles.cameraBackBtn} onPress={() => { if (isRecording) handleStopRecording(); setIsCameraOpen(false); }}>
-              <MaterialIcons name="arrow-back" size={26} color="#fff" />
-            </Pressable>
-            {isRecording ? (
-              <View style={styles.recordingBadge}>
-                <View style={styles.recordingDot} />
-                <Text style={styles.recordingText}>Đang quay...</Text>
-              </View>
-            ) : null}
+          <CameraView style={styles.cameraModalView} facing={facing} ref={cameraRef} mode={cameraMode} flash={flashEnabled ? 'on' : 'off'} />
+          {/* Grid Overlay */}
+          <View style={styles.cameraGridOverlay} pointerEvents="none">
+            <View style={styles.cameraGridLine_H1} />
+            <View style={styles.cameraGridLine_H2} />
+            <View style={styles.cameraGridLine_V1} />
+            <View style={styles.cameraGridLine_V2} />
           </View>
-          {/* Bottom shutter */}
-          <View style={styles.cameraBottomBar}>
+          {/* Recording Indicator */}
+          {isRecording && (
+            <View style={styles.cameraRecordingIndicator}>
+              <View style={styles.cameraRecordingDot} />
+              <Text style={styles.cameraRecordingLabel}>REC</Text>
+            </View>
+          )}
+          {/* Top Bar */}
+          <View style={styles.cameraTopBar}>
+            <Pressable
+              style={styles.cameraTopBtn}
+              onPress={() => { if (isRecording) handleStopRecording(); setIsCameraOpen(false); }}>
+              <MaterialIcons name="arrow-back" size={24} color="#fff" />
+            </Pressable>
             {cameraMode === 'picture' ? (
               <Pressable
-                style={styles.shutterBtn}
-                onPress={() => void handleCapturePhoto()}>
-                <View style={styles.shutterInner} />
+                style={styles.cameraTopBtn}
+                onPress={() => setFlashEnabled((prev) => !prev)}>
+                {flashEnabled ? (
+                  <Zap size={22} color="#FBBF24" />
+                ) : (
+                  <ZapOff size={22} color="#fff" />
+                )}
               </Pressable>
             ) : (
-              <Pressable
-                style={[styles.shutterBtn, { backgroundColor: isRecording ? '#ef4444' : '#fff' }]}
-                onPress={() => void (isRecording ? handleStopRecording() : handleStartRecording())}>
-                <View style={[styles.shutterInner, { backgroundColor: isRecording ? '#fff' : '#ef4444', borderColor: isRecording ? '#fff' : '#ef4444' }]} />
-              </Pressable>
+              <View style={[styles.cameraTopBtn, { opacity: 0 }]} />
             )}
+            <Pressable
+              style={styles.cameraTopBtn}
+              onPress={() => setFacing((prev) => (prev === 'back' ? 'front' : 'back'))}>
+              <RefreshCw size={22} color="#fff" />
+            </Pressable>
+          </View>
+          {/* Bottom Controls */}
+          <View style={styles.cameraBottomBar}>
+            <View style={styles.cameraModeRow}>
+              <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
+                <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>
+                  VIDEO
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => { if (!isRecording) setCameraMode('picture'); }}>
+                <Text style={[styles.cameraModeTab, cameraMode === 'picture' && styles.cameraModeTabActive]}>
+                  ẢNH
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.cameraControlsRow}>
+              <Pressable
+                style={styles.cameraGalleryBtn}
+                onPress={() => void pickFromLibrary().finally(() => setIsCameraOpen(false))}>
+                <MaterialIcons name="photo-library" size={22} color="#fff" />
+              </Pressable>
+              <Pressable
+                style={styles.cameraShutterOuter}
+                onPress={() => {
+                  if (cameraMode === 'picture') {
+                    void handleCapturePhoto();
+                  } else {
+                    void (isRecording ? handleStopRecording() : handleStartRecording());
+                  }
+                }}>
+                <View
+                  style={[
+                    styles.cameraShutterInner,
+                    cameraMode === 'video' && !isRecording && styles.cameraShutterVideo,
+                    isRecording && styles.cameraShutterRecording,
+                  ]}
+                />
+              </Pressable>
+              <View style={styles.cameraCountArea}>
+                {capturedMedia.length > 0 && (
+                  <>
+                    <MaterialIcons name="collections" size={18} color="#fff" />
+                    <Text style={styles.cameraCountLabel}>{capturedMedia.length}</Text>
+                  </>
+                )}
+              </View>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1184,55 +1231,106 @@ const styles = StyleSheet.create({
   cameraModalView: {
     flex: 1,
   },
-  cameraHeader: {
+  cameraTopBar: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingTop: spacingY._50,
     paddingHorizontal: spacingX._15,
-    paddingBottom: spacingY._12,
-    backgroundColor: '#00000066',
+    paddingBottom: spacingY._15,
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
-  cameraBackBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#00000060',
+  cameraTopBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
   },
   cameraBottomBar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: spacingY._40,
-    alignItems: 'center',
+    bottom: 0,
+    backgroundColor: '#000',
+    paddingBottom: spacingY._30,
+    paddingTop: spacingY._15,
+    paddingHorizontal: spacingX._20,
+    gap: spacingY._15,
   },
-  shutterBtn: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: '#fff',
+  cameraModeRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacingX._20,
+  },
+  cameraModeTab: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+    color: 'rgba(255,255,255,0.5)',
+    letterSpacing: 1,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  cameraModeTabActive: {
+    color: '#FBBF24',
+  },
+  cameraControlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  cameraGalleryBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 4,
-    borderColor: '#ffffff88',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
   },
-  shutterInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  cameraShutterOuter: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 4,
+    borderColor: 'rgba(255,255,255,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraShutterInner: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#cbd5e1',
+  },
+  cameraShutterVideo: {
+    backgroundColor: '#ef4444',
+  },
+  cameraShutterRecording: {
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    width: 28,
+    height: 28,
+  },
+  cameraCountArea: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  cameraCountLabel: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
   },
   lightboxOverlay: {
     flex: 1,
@@ -1272,25 +1370,67 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  recordingBadge: {
+  cameraGridOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  cameraGridLine_H1: {
+    position: 'absolute',
+    top: '33.33%',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  cameraGridLine_H2: {
+    position: 'absolute',
+    top: '66.66%',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  cameraGridLine_V1: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: '33.33%',
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  cameraGridLine_V2: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: '66.66%',
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  cameraRecordingIndicator: {
+    position: 'absolute',
+    top: 100,
+    right: spacingX._15,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ef444488',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
     gap: 6,
-    marginLeft: 12,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  recordingDot: {
+  cameraRecordingDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: '#ef4444',
   },
-  recordingText: {
+  cameraRecordingLabel: {
     color: '#fff',
     fontSize: 12,
+    fontWeight: '700',
     fontFamily: Fonts.sans,
   },
 });

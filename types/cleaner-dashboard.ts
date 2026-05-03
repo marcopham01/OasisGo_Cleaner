@@ -272,14 +272,48 @@ export interface StaffAttendanceLogListResponse {
   } | null;
 }
 
+export interface StaffWorkRosterShift {
+  id?: string;
+  _id?: string;
+  shift_name?: string;
+  start_time?: string;
+  end_time?: string;
+  is_active?: boolean;
+  created_at?: string;
+}
+
+export interface StaffWorkRosterLocation {
+  id?: string;
+  _id?: string;
+  name?: string;
+  type?: string;
+  address?: string;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+export interface StaffWorkRosterCluster {
+  id?: string;
+  _id?: string;
+  name?: string;
+  description?: string;
+  location_id?: string;
+}
+
 export interface StaffWorkRoster {
   id?: string;
   _id?: string;
   staff_id: string;
-  location_shift_id: string;
-  day_of_week: number;
+  shift_id?: string;
+  location_id?: string;
+  cluster_id?: string;
   is_active?: boolean;
+  is_temporary?: boolean;
+  work_date?: string | null;
   created_at?: string;
+  shift?: StaffWorkRosterShift | null;
+  location?: StaffWorkRosterLocation | null;
+  cluster?: StaffWorkRosterCluster | null;
   [key: string]: unknown;
 }
 
@@ -777,16 +811,21 @@ export interface CleanerIncident {
   booking_id?: string | null;
   cleaning_task_id?: string | null;
   reported_by?: string;
+  handled_by?: string | null;
   description?: string;
   severity?: IncidentSeverity | string;
   status?: CleanerIncidentStatus | string;
   incident_type?: string;
   resolution_note?: string | null;
-  handled_by?: string | null;
+  escalation_note?: string | null;
   details?: IncidentDetailLine[];
   photo_urls?: string[];
   booking?: Record<string, unknown> | null;
   cleaning_task?: Record<string, unknown> | null;
+  /** Enriched fields returned by /incidents/cleaner/my-incidents and /incidents/cleaner/:id */
+  reporter_name?: string | null;
+  handled_by_name?: string | null;
+  pod_name?: string | null;
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -801,4 +840,22 @@ export interface CleanerCheckinReportData {
 export interface UpdateCleanerIncidentStatusPayload {
   status: 'PROCESSING' | 'COMPLETED';
   resolution_note?: string;
+}
+
+/** Returned by PATCH /incidents/cleaner/:id/status */
+export interface UpdateCleanerIncidentStatusResult {
+  id: string;
+  status: string;
+  previous_status: string;
+  resolution_note: string | null;
+  handled_by: string | null;
+  updated_at: string;
+}
+
+/** Returned by PATCH /incidents/:id/resolve-replenishment */
+export interface ResolveReplenishmentResult {
+  message: string;
+  incident_id: string;
+  warehouse_id: string;
+  items_processed: number;
 }

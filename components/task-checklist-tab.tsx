@@ -2,31 +2,31 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View
+    ActivityIndicator,
+    Image,
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import {
-  getCleaningTaskById,
-  getIncidentsByCleaningTaskId,
-  getMyLostFoundItems,
-  getPodItemsByPodId,
+    getCleaningTaskById,
+    getIncidentsByCleaningTaskId,
+    getMyLostFoundItems,
+    getPodItemsByPodId,
 } from '@/services/cleaner-dashboard.service';
 import { getDailyTakenItemsSummary } from '@/services/inventory.service';
 import type {
-  CleaningTask,
-  Incident,
-  LostFoundItem,
-  PodItemEntry,
+    CleaningTask,
+    Incident,
+    LostFoundItem,
+    PodItemEntry,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -332,8 +332,7 @@ export default function TaskChecklistTab({
   const hasSupplyShortage = supplyShortageItems.length > 0;
 
   const hasDamageReports = incidents.length > 0;
-  const hasLostFoundReports = lostFoundItems.length > 0;
-  const showReportActionSection = !(hasDamageReports && hasLostFoundReports);
+  const showReportActionSection = !hasDamageReports;
 
   return (
     <>
@@ -644,8 +643,7 @@ export default function TaskChecklistTab({
                   </Pressable>
                 ) : null}
 
-                {!hasLostFoundReports ? (
-                  <Pressable
+                <Pressable
                     style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: '#0ea5e9' }]}
                     onPress={() => onReportLostFound({
                       podId: task?.pod_id,
@@ -656,7 +654,6 @@ export default function TaskChecklistTab({
                       Ghi nhận đồ thất lạc
                     </Text>
                   </Pressable>
-                ) : null}
               </View>
             </View>
           ) : null}
@@ -718,62 +715,7 @@ export default function TaskChecklistTab({
             </View>
           ) : null}
 
-          {/* Existing lost-found reports */}
-          {lostFoundItems.length > 0 ? (
-            <View
-              style={[
-                styles.incidentSection,
-                { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' },
-              ]}>
-              <Text style={[styles.sectionTitle, { color: '#0369a1', alignSelf: 'center' }]}>
-                Đồ thất lạc
-              </Text>
 
-              {loadingLostFound ? (
-                <ActivityIndicator color="#0284c7" />
-              ) : (
-                lostFoundItems.map((item) => (
-                  <View
-                    key={String(item.id || item._id || Math.random())}
-                    style={[styles.incidentItem, { borderColor: '#38bdf8', backgroundColor: '#f0f9ff' }]}>
-                    <View style={styles.incidentHeader}>
-                      <Text style={[styles.lostFoundItemName, { color: '#0f172a' }]}>
-                        {String(item.item_name || '-')}
-                      </Text>
-                      <Text style={[styles.incidentStatus, { color: '#0284c7', fontSize: 11 }]}>
-                        {lostFoundStatusVi(String(item.status || 'FOUND'))}
-                      </Text>
-                    </View>
-                    {item.description ? (
-                      <Text style={[styles.incidentDescription, { color: palette.textMuted }]}>
-                        {String(item.description)}
-                      </Text>
-                    ) : null}
-                    {(() => {
-                      const urls: string[] = Array.isArray(item.photo_urls) && item.photo_urls.length > 0
-                        ? item.photo_urls.map(String)
-                        : item.photo_url ? [String(item.photo_url)] : [];
-                      if (!urls.length) return null;
-                      return (
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                          <View style={{ flexDirection: 'row', gap: 6 }}>
-                            {urls.map((uri, idx) => (
-                              <Pressable key={idx} onPress={() => setSelectedImageUri(uri)}>
-                                <Image source={{ uri }} style={styles.incidentThumb} resizeMode="cover" />
-                              </Pressable>
-                            ))}
-                          </View>
-                        </ScrollView>
-                      );
-                    })()}
-                    <Text style={[styles.incidentTime, { color: palette.textMuted }]}> 
-                      {formatDateTime(String(item.found_at || item.created_at || ''))}
-                    </Text>
-                  </View>
-                ))
-              )}
-            </View>
-          ) : null}
 
           {!isChecklistComplete ? (
             <Text style={{ textAlign: 'center', color: palette.textMuted, fontSize: 13, marginBottom: 4 }}>

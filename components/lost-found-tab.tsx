@@ -1,11 +1,9 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ResizeMode, Video } from 'expo-av';
-import * as Clipboard from 'expo-clipboard';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     Image,
     Modal,
     Pressable,
@@ -13,15 +11,18 @@ import {
     ScrollView,
     StyleSheet,
     Text,
-    View,
+    View
 } from 'react-native';
 
+import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { apiClient } from '@/services/api';
 import {
     getDamageReports,
     getMyLostFoundItems,
+    getPodById,
+    getWarehouseList,
 } from '@/services/cleaner-dashboard.service';
 import type {
     DamageReportResponse,
@@ -235,7 +236,37 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
         getMyLostFoundItems(token, { found_by_user_id: myUserId }),
         getDamageReports(token, { page: 1, limit: 50 }).catch(() => ({ items: [], pagination: null })),
       ]);
-      setItems(lfData);
+
+      // Enrich pod_name and warehouse_name
+      const uniquePodIds = [...new Set(lfData.map((i) => String(i.pod_id || '').trim()).filter(Boolean))];
+      const uniqueWarehouseIds = [...new Set(lfData.map((i) => String(i.warehouse_id || '').trim()).filter(Boolean))];
+
+      const [podResults, warehouseResults] = await Promise.all([
+        Promise.all(uniquePodIds.map((id) => getPodById(token, id).catch(() => null))),
+        uniqueWarehouseIds.length > 0 ? getWarehouseList(token).catch(() => []) : Promise.resolve([]),
+      ]);
+
+      const podNameMap: Record<string, string> = {};
+      for (let i = 0; i < uniquePodIds.length; i++) {
+        const pod = podResults[i];
+        if (pod) {
+          podNameMap[uniquePodIds[i]] = pod.name || (pod.code ? `Pod ${pod.code}` : uniquePodIds[i]);
+        }
+      }
+
+      const warehouseNameMap: Record<string, string> = {};
+      for (const wh of warehouseResults) {
+        const wId = String(wh.id || '').trim();
+        if (wId) warehouseNameMap[wId] = String(wh.name || wId);
+      }
+
+      const enriched = lfData.map((item) => ({
+        ...item,
+        pod_name: item.pod_name || (item.pod_id ? (podNameMap[String(item.pod_id)] ?? null) : null),
+        warehouse_name: item.warehouse_name || (item.warehouse_id ? (warehouseNameMap[String(item.warehouse_id)] ?? null) : null),
+      }));
+
+      setItems(enriched);
       setDamageReports(
         [...drData.items].sort((a, b) =>
           new Date(String(b.created_at || 0)).getTime() - new Date(String(a.created_at || 0)).getTime(),
@@ -279,11 +310,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             onPress={() => router.push('/report-lost-found' as never)}>
             <Text style={[styles.actionBtnText, { color: palette.white }]}>+ Báo tìm thấy đồ</Text>
           </Pressable>
-          <Pressable
-            style={[styles.actionBtn, { backgroundColor: palette.error }]}
-            onPress={() => router.push('/damage-report')}>
-            <Text style={[styles.actionBtnText, { color: palette.white }]}>⚠ Báo hư hại</Text>
-          </Pressable>
+          {/* ⚠ Báo hư hại — ẩn tạm, giữ lại logic */}
           <Pressable
             style={[styles.actionBtn, { backgroundColor: '#d97706' }]}
             onPress={() => router.push('/incident/list' as never)}>
@@ -291,7 +318,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
           </Pressable>
         </View>
 
-        {/* Sub-tab switcher */}
+        {/* Sub-tab switcher — ẩn tạm, chỉ hiện đồ thất lạc
         <View style={styles.switchRow}>
           <Pressable
             style={[styles.switchBtn, {
@@ -318,6 +345,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             </Text>
           </Pressable>
         </View>
+        */}
       </View>
 
       {error && (
@@ -331,7 +359,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
         <View style={styles.centerLoader}>
           <ActivityIndicator color={palette.primary} />
         </View>
-      ) : activeListTab === 'LOST_FOUND' ? (
+      ) : (
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={styles.listContent}
@@ -390,9 +418,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                                 style={styles.photoThumbPressable}
                                 onPress={() => setPreviewMedia({ uri, isVideo })}>
                                 {isVideo ? (
-                                  <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
-                                    <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
-                                  </View>
+                                  <VideoThumb uri={uri} style={styles.photoThumb} iconSize={32} />
                                 ) : (
                                   <Image
                                     source={{ uri }}
@@ -428,17 +454,10 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             })
           )}
         </ScrollView>
-      ) : (
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              tintColor={palette.primary}
-              onRefresh={() => void loadItems({ isRefresh: true })}
-            />
-          }>
+      )}
+
+      {/* Danh sách báo cáo hư hại — ẩn tạm
+      activeListTab === 'DAMAGE' && (
           {damageReports.length === 0 ? (
             <View style={[styles.emptyCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
               <Text style={[styles.emptyText, { color: palette.textMuted }]}>
@@ -504,9 +523,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                                 style={styles.photoThumbPressable}
                                 onPress={() => setPreviewMedia({ uri, isVideo })}>
                                 {isVideo ? (
-                                  <View style={[styles.photoThumb, styles.videoThumbPlaceholder]}>
-                                    <MaterialIcons name="play-circle-filled" size={32} color="#fff" />
-                                  </View>
+                                  <VideoThumb uri={uri} style={styles.photoThumb} iconSize={32} />
                                 ) : (
                                   <Image
                                     source={{ uri }}
@@ -548,7 +565,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
             })
           )}
         </ScrollView>
-      )}
+      */}
 
       <Modal
         visible={previewMedia !== null}

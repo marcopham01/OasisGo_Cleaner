@@ -62,6 +62,10 @@ export default function RootLayout() {
               options={{ title: 'Kết quả xử lý', gestureEnabled: false }}
             />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            <Stack.Screen
+              name="notifications/[category]"
+              options={{ title: 'Thông báo', headerBackTitle: 'Quay lại' }}
+            />
           </Stack>
           <StatusBar style="auto" />
         </ThemeProvider>
