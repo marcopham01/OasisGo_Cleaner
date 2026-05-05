@@ -32,6 +32,7 @@ import {
 import type { CleaningPhoto, CleaningTask, PodItemEntry } from '@/types/cleaner-dashboard';
 import type { InventoryActivityLogEntry } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface TaskAfterPhotoTabProps {
   token: string;
@@ -72,6 +73,7 @@ export default function TaskAfterPhotoTab({
   onClose,
   onCompleted,
 }: TaskAfterPhotoTabProps) {
+  const insets = useSafeAreaInsets();
   const [task, setTask] = useState<CleaningTask | null>(null);
   const [savedPhotos, setSavedPhotos] = useState<CleaningPhoto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -591,7 +593,7 @@ export default function TaskAfterPhotoTab({
             </View>
           )}
           {/* Top Bar */}
-          <View style={styles.cameraTopBar}>
+          <View style={[styles.cameraTopBar, { paddingTop: Math.max(insets.top, 10) + 10 }]}>
             <Pressable
               style={styles.cameraTopBtn}
               onPress={() => {
@@ -620,7 +622,7 @@ export default function TaskAfterPhotoTab({
             </Pressable>
           </View>
           {/* Bottom Controls */}
-          <View style={styles.cameraBottomBar}>
+          <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
               <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>

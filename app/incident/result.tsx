@@ -2,15 +2,15 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Image,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
@@ -60,6 +60,7 @@ function InfoRow({ label, value, palette }: { label: string; value: string; pale
 export default function IncidentResultScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
+  const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams<{ incidentId?: string; cleaningTaskId?: string }>();
@@ -244,7 +245,7 @@ export default function IncidentResultScreen() {
       </ScrollView>
 
       {/* Footer button */}
-      <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border }]}>
+      <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border, paddingBottom: Math.max(insets.bottom, spacingX._15) }]}>
         <Pressable
           style={[styles.backBtn, { backgroundColor: palette.primary }]}
           onPress={() => router.replace('/incident/list' as never)}>

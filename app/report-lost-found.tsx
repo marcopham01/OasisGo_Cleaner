@@ -21,7 +21,7 @@ import {
     TouchableWithoutFeedback,
     View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
@@ -45,6 +45,7 @@ export default function ReportLostFoundScreen() {
   const palette = Colors[theme];
   const { token } = useAuth();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     fromCleaningTask?: string;
     cleaningTaskId?: string;
@@ -598,7 +599,7 @@ export default function ReportLostFoundScreen() {
             </View>
           )}
           {/* Top Bar */}
-          <View style={styles.cameraTopBar}>
+          <View style={[styles.cameraTopBar, { paddingTop: Math.max(insets.top, 10) + 10 }]}>
             <Pressable
               style={styles.cameraTopBtn}
               onPress={() => { if (isRecording) handleStopRecording(); setIsCameraOpen(false); }}>
@@ -624,7 +625,7 @@ export default function ReportLostFoundScreen() {
             </Pressable>
           </View>
           {/* Bottom Controls */}
-          <View style={styles.cameraBottomBar}>
+          <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
               <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>

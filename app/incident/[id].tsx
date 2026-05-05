@@ -12,7 +12,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
@@ -191,6 +191,7 @@ export default function IncidentDetailScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const isDark = theme === 'dark';
+  const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string; incidentId?: string; cleaningTaskId?: string }>();
@@ -591,7 +592,7 @@ export default function IncidentDetailScreen() {
 
       {/* ── CTA Button ── */}
       {canProcess ? (
-        <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border }]}>
+        <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border, paddingBottom: Math.max(insets.bottom, spacingY._12) }]}>
           {isDamageReport ? (
             /* DAMAGE_REPORT: inline status progression, no repair screen */
             currentStatus === 'PENDING' ? (

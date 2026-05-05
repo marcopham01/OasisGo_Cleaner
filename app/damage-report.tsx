@@ -6,42 +6,42 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableWithoutFeedback,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Keyboard,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableWithoutFeedback,
+    View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
-  createDamageReport,
-  getDamageReportItems,
-  getDamageServiceCatalogs,
-  getMyWorkRosters,
-  getPodsByClusterId,
+    createDamageReport,
+    getDamageReportItems,
+    getDamageServiceCatalogs,
+    getMyWorkRosters,
+    getPodsByClusterId,
 } from '@/services/cleaner-dashboard.service';
 import type {
-  CreateDamageReportPayload,
-  DamageReportItem,
-  DamageServiceCatalogItem,
-  IncidentSeverity,
-  PodCluster,
-  PodDetails,
-  StaffWorkRoster,
+    CreateDamageReportPayload,
+    DamageReportItem,
+    DamageServiceCatalogItem,
+    IncidentSeverity,
+    PodCluster,
+    PodDetails,
+    StaffWorkRoster,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -71,6 +71,7 @@ export default function DamageReportScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
   const { token } = useAuth();
+  const insets = useSafeAreaInsets();
 
   // ── Locked context (when navigated from cleaning task) ──
   const params = useLocalSearchParams<{
@@ -840,7 +841,7 @@ export default function DamageReportScreen() {
             </View>
           )}
           {/* Top Bar */}
-          <View style={styles.cameraTopBar}>
+          <View style={[styles.cameraTopBar, { paddingTop: Math.max(insets.top, 10) + 10 }]}>
             <Pressable
               style={styles.cameraTopBtn}
               onPress={() => { if (isRecording) handleStopRecording(); setIsCameraOpen(false); }}>
@@ -866,7 +867,7 @@ export default function DamageReportScreen() {
             </Pressable>
           </View>
           {/* Bottom Controls */}
-          <View style={styles.cameraBottomBar}>
+          <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
               <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>

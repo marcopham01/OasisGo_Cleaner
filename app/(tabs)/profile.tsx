@@ -1,13 +1,13 @@
 ﻿import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Alert,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -82,8 +82,8 @@ export default function ProfileScreen() {
   const initial = (user?.name || user?.email || '?')[0].toUpperCase();
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }} edges={['top']}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.container}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: palette.primary }} edges={['top']}>
+      <ScrollView style={{ flex: 1, backgroundColor: palette.background }} contentContainerStyle={styles.container}>
 
         {/* Header */}
         <View style={[styles.headerCard, { backgroundColor: palette.primary }]}>

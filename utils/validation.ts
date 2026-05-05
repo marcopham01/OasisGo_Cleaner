@@ -146,6 +146,14 @@ export function normalizeBackendMessage(rawMessage: string): string {
   }
 
   if (
+    lower.includes('already been submitted') ||
+    lower.includes('already submitted') ||
+    (lower.includes('checklist') && lower.includes('submitted'))
+  ) {
+    return 'Phiếu kiểm kê vật tư đã được nộp trước đó, không cần nộp lại.';
+  }
+
+  if (
     lower.includes('after') && lower.includes('photo') &&
     (lower.includes('required') || lower.includes('missing') || lower.includes('must'))
   ) {

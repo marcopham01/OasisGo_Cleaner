@@ -300,11 +300,13 @@ async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayl
   }
 
   // iOS may return HEIC/HEIF assets; convert to JPEG for Cloudinary allowed formats.
+  // Resize to max 1280 px wide (aspect-ratio preserved) to match the web compression cap
+  // and significantly reduce payload size on modern high-res phone cameras.
   let normalizedUri = payload.local_uri;
   let normalizedMimeType = getMimeTypeFromUri(payload.local_uri);
   try {
-    const manipulated = await manipulateAsync(payload.local_uri, [], {
-      compress: 0.75,
+    const manipulated = await manipulateAsync(payload.local_uri, [{ resize: { width: 1280 } }], {
+      compress: 0.7,
       format: SaveFormat.JPEG,
     });
     if (manipulated.uri) {
@@ -353,8 +355,10 @@ async function toUploadFile(uri: string) {
   let normalizedUri = uri;
   let normalizedMimeType = getMimeTypeFromUri(uri);
   try {
-    const manipulated = await manipulateAsync(uri, [], {
-      compress: 0.75,
+    // Resize to max 1280 px wide + quality 0.7 — matches the web compression cap
+    // and reduces payload 3-5x for high-res phone cameras.
+    const manipulated = await manipulateAsync(uri, [{ resize: { width: 1280 } }], {
+      compress: 0.7,
       format: SaveFormat.JPEG,
     });
     if (manipulated.uri) {
@@ -387,6 +391,36 @@ async function toUploadFileVideo(uri: string) {
     name: fileName,
     type: mimeType,
   } as unknown as Blob;
+}
+
+// Upload timeout constants — upload calls bypass axios timeout so we enforce our own.
+const UPLOAD_TIMEOUT_IMAGE_MS = 90_000;  // 90 s — enough for image + Cloudinary round-trip
+const UPLOAD_TIMEOUT_VIDEO_MS = 240_000; // 4 min — video is larger, Cloudinary needs more time
+
+/**
+ * Wrapper around `fetch` that aborts after `timeoutMs`.
+ * All multipart upload calls should go through this to avoid hanging indefinitely
+ * when the server (or Cloudinary) is slow on a remote deployment.
+ */
+async function uploadFetch(
+  url: string,
+  init: RequestInit,
+  timeoutMs = UPLOAD_TIMEOUT_IMAGE_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      throw new Error(
+        `Upload quá thời gian (${Math.round(timeoutMs / 1000)}s). Vui lòng kiểm tra kết nối mạng và thử lại.`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function buildIncidentFormData(payload: CreateIncidentFromCleaningTaskPayload) {
@@ -762,14 +796,20 @@ export async function createCleaningMedia(token: string, payload: CreateCleaning
       throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
     }
 
-    // Use fetch so browser/runtime can set multipart boundary automatically.
-    const uploadResponse = await fetch(`${baseUrl}/cleaning-media`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
+    // Use uploadFetch (not axios) so the runtime sets the multipart boundary automatically.
+    // Timeout is video-length-aware to avoid hanging on slow Cloudinary round-trips.
+    const isVideoUpload =
+      payload.file_type === 'VIDEO' ||
+      /\.(mp4|mov|avi|webm|mkv)$/i.test(payload.local_uri);
+    const uploadResponse = await uploadFetch(
+      `${baseUrl}/cleaning-media`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
       },
-      body: formData,
-    });
+      isVideoUpload ? UPLOAD_TIMEOUT_VIDEO_MS : UPLOAD_TIMEOUT_IMAGE_MS,
+    );
 
     const responseBody = (await uploadResponse.json()) as ApiEnvelope<CleaningPhoto>;
     if (!uploadResponse.ok) {
@@ -864,13 +904,15 @@ export async function createOperationalIncident(
       throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
     }
 
-    const uploadResponse = await fetch(`${baseUrl}/incidents`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
+    const uploadResponse = await uploadFetch(
+      `${baseUrl}/incidents`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
       },
-      body: formData,
-    });
+      UPLOAD_TIMEOUT_IMAGE_MS,
+    );
 
     const responseBody = (await uploadResponse.json()) as ApiEnvelope<Incident>;
     if (!uploadResponse.ok) {
@@ -947,13 +989,20 @@ export async function createDamageReport(token: string, payload: CreateDamageRep
       throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
     }
 
-    const uploadResponse = await fetch(`${baseUrl}/incidents`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
+    const hasVideoMedia =
+      Array.isArray(payload.local_media) &&
+      payload.local_media.some(
+        (m) => m.mediaType === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(m.uri),
+      );
+    const uploadResponse = await uploadFetch(
+      `${baseUrl}/incidents`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
       },
-      body: formData,
-    });
+      hasVideoMedia ? UPLOAD_TIMEOUT_VIDEO_MS : UPLOAD_TIMEOUT_IMAGE_MS,
+    );
 
     const responseBody = (await uploadResponse.json()) as ApiEnvelope<DamageReportResponse>;
     if (!uploadResponse.ok) {
@@ -1229,12 +1278,21 @@ export async function createLostFoundItem(token: string, payload: CreateLostFoun
         throw new Error('Không xác định được địa chỉ backend. Vui lòng cấu hình EXPO_PUBLIC_API_URL.');
       }
 
-      // Use fetch so runtime sets multipart boundary automatically.
-      const uploadResponse = await fetch(`${baseUrl}/lost-found-items`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
+      // Use uploadFetch so the runtime sets the multipart boundary automatically
+      // and the request aborts after the timeout instead of hanging indefinitely.
+      const hasVideoLostFound = mediaItems.some(
+        ({ uri, fileType }) =>
+          fileType === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(uri),
+      );
+      const uploadResponse = await uploadFetch(
+        `${baseUrl}/lost-found-items`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        },
+        hasVideoLostFound ? UPLOAD_TIMEOUT_VIDEO_MS : UPLOAD_TIMEOUT_IMAGE_MS,
+      );
 
       const responseBody = (await uploadResponse.json()) as ApiEnvelope<LostFoundItem>;
       if (!uploadResponse.ok) {

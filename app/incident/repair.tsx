@@ -10,7 +10,7 @@ import {
     Text,
     View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
@@ -55,6 +55,7 @@ function buildSupplyItems(
 export default function IncidentRepairScreen() {
   const theme = useColorScheme() ?? 'light';
   const palette = Colors[theme];
+  const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams<{ incidentId?: string; cleaningTaskId?: string }>();
@@ -357,7 +358,7 @@ export default function IncidentRepairScreen() {
       </ScrollView>
 
       {/* CTA */}
-      <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border }]}>
+      <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border, paddingBottom: Math.max(insets.bottom, spacingY._12) }]}>
         <Pressable
           style={({ pressed }) => [
             styles.completeBtn,

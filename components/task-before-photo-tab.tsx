@@ -34,6 +34,7 @@ import type {
     CleaningTask,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type SubmittedChecklistDetail = {
   item_id: string;
@@ -67,6 +68,7 @@ export default function TaskBeforePhotoTab({
   onPhotosDone,
   onReportDamage,
 }: TaskBeforePhotoTabProps) {
+  const insets = useSafeAreaInsets();
   const [task, setTask] = useState<CleaningTask | null>(null);
   const [savedPhotos, setSavedPhotos] = useState<CleaningPhoto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -158,8 +160,20 @@ export default function TaskBeforePhotoTab({
         setChecklistQtyByItemId(defaultQtys);
         setChecklistSubmitted(false);
       } catch (err) {
-        setChecklistItems([]);
-        setChecklistLoadError(getErrorMessage(err));
+        const rawErrMsg = String(
+          (err as { response?: { data?: { message?: unknown } } })?.response?.data?.message ||
+          (err instanceof Error ? err.message : '') ||
+          ''
+        ).toLowerCase();
+        // Backend trả về "already submitted" nghĩa là checklist đã được nộp trước đó
+        if (rawErrMsg.includes('already been submitted') || rawErrMsg.includes('already submitted')) {
+          setChecklistSubmitted(true);
+          setChecklistItems([]);
+          setChecklistLoadError(null);
+        } else {
+          setChecklistItems([]);
+          setChecklistLoadError(getErrorMessage(err));
+        }
       } finally {
         setLoadingChecklist(false);
       }
@@ -361,6 +375,26 @@ export default function TaskBeforePhotoTab({
 
       onPhotosDone();
     } catch (err) {
+      const rawErrMsg = String(
+        (err as { response?: { data?: { message?: unknown } } })?.response?.data?.message ||
+        (err instanceof Error ? err.message : '') ||
+        ''
+      ).toLowerCase();
+      // Nếu backend báo checklist đã được nộp rồi, bỏ qua lỗi và tiếp tục
+      if (rawErrMsg.includes('already been submitted') || rawErrMsg.includes('already submitted')) {
+        const details: SubmittedChecklistDetail[] = checklistItems.map((item) => ({
+          item_id: item.item_id,
+          item_name: item.item_name,
+          status: checklistStatusByItemId[item.item_id] ?? 'MATCHED',
+          quantity: Number(checklistQtyByItemId[item.item_id] ?? item.expected_quantity),
+        }));
+        await AsyncStorage.setItem(`@checklist_done:${taskId}`, JSON.stringify(details));
+        setSubmittedChecklistDetails(details);
+        setChecklistSubmitted(true);
+        setUploadingPhoto(false);
+        onPhotosDone();
+        return;
+      }
       const msg = getErrorMessage(err);
       setError(msg);
       Alert.alert('Lỗi', msg);
@@ -798,7 +832,7 @@ export default function TaskBeforePhotoTab({
             </View>
           )}
           {/* Top Bar */}
-          <View style={styles.cameraTopBar}>
+          <View style={[styles.cameraTopBar, { paddingTop: Math.max(insets.top, 10) + 10 }]}>
             <Pressable
               style={styles.cameraTopBtn}
               onPress={() => {
@@ -827,7 +861,7 @@ export default function TaskBeforePhotoTab({
             </Pressable>
           </View>
           {/* Bottom Controls */}
-          <View style={styles.cameraBottomBar}>
+          <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
               <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>

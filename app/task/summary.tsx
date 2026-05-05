@@ -37,7 +37,7 @@ export default function TaskSummaryScreen() {
           gestureEnabled: false,
         }}
       />
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top', 'bottom']}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['bottom']}>
         <TaskSummaryTab
           token={token ?? ''}
           taskId={taskId ? String(taskId) : null}

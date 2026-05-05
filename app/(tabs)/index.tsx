@@ -25,7 +25,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.primaryDark }]} edges={['top']}>
       <View style={styles.container}>
         <View style={[styles.header, { backgroundColor: palette.primaryDark }]}>
           {/* Top row: greeting + avatar */}
