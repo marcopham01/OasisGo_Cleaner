@@ -41,7 +41,9 @@ function getExpoHostUri(): string | null {
 
 function resolveBaseUrl(): string | undefined {
   const rawBaseUrl = process.env.EXPO_PUBLIC_API_URL?.trim() ?? '';
+  console.log('[rawBaseUrl] Using EXPO_PUBLIC_API_URL from environment', { rawBaseUrl });
   if (rawBaseUrl) {
+    console.log('[rawBaseUrl] Using EXPO_PUBLIC_API_URL from environment', { rawBaseUrl });
     return normalizeUrl(rawBaseUrl);
   }
 
@@ -64,6 +66,8 @@ function resolveBaseUrl(): string | undefined {
 
 const resolvedBaseUrl = resolveBaseUrl();
 const resolvedTimeoutMs = resolveTimeoutMs();
+
+console.log('[api] baseURL =', resolvedBaseUrl ?? 'undefined');
 
 if (__DEV__) {
   console.info(`[api] baseURL = ${resolvedBaseUrl ?? 'undefined'}`);

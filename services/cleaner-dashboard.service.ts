@@ -4,52 +4,52 @@ import { Platform } from 'react-native';
 
 import { apiClient } from '@/services/api';
 import type {
-    BookingDetails,
-    CheckoutChecklistData,
-    CheckoutChecklistResult,
-    CheckoutChecklistSubmitItem,
-    CleanerMarkAllReadResponse,
-    CleanerNotification,
-    CleanerNotificationListResponse,
-    CleanerNotificationQuery,
-    CleanerUnreadCountResponse,
-    CleaningPhoto,
-    CleaningPhotoType,
-    CleaningTask,
-    CleaningTaskQuery,
-    CreateCleaningPhotoUploadPayload,
-    CreateDamageReportPayload,
-    CreateIncidentFromCleaningTaskPayload,
-    CreateLostFoundItemPayload,
-    DamageReportItem,
-    DamageReportListResponse,
-    DamageReportResponse,
-    DamageServiceCatalogItem,
-    Incident,
-    IncidentQuery,
-    IncidentStatus,
-    LostFoundItem,
-    LostFoundQuery,
-    LostFoundStatus,
-    MyCleanerKeyByBookingData,
-    MyCleanerKeyByTaskData,
-    PodCluster,
-    PodDetails,
-    PodItemEntry,
-    PodItemQuery,
-    PodItemsByPodData,
-    StaffAssignmentAttendanceStatus,
-    StaffAttendanceLog,
-    StaffAttendanceLogListResponse,
-    StaffAttendanceLogQuery,
-    StaffShiftAssignment,
-    StaffShiftAssignmentQuery,
-    StaffTodayAttendanceStatus,
-    StaffWorkRoster,
-    StaffWorkRosterQuery,
-    UpdateCleaningPhotoPayload,
-    UpdateCleaningTaskPayload,
-    WarehouseListItem,
+  BookingDetails,
+  CheckoutChecklistData,
+  CheckoutChecklistResult,
+  CheckoutChecklistSubmitItem,
+  CleanerMarkAllReadResponse,
+  CleanerNotification,
+  CleanerNotificationListResponse,
+  CleanerNotificationQuery,
+  CleanerUnreadCountResponse,
+  CleaningPhoto,
+  CleaningPhotoType,
+  CleaningTask,
+  CleaningTaskQuery,
+  CreateCleaningPhotoUploadPayload,
+  CreateDamageReportPayload,
+  CreateIncidentFromCleaningTaskPayload,
+  CreateLostFoundItemPayload,
+  DamageReportItem,
+  DamageReportListResponse,
+  DamageReportResponse,
+  DamageServiceCatalogItem,
+  Incident,
+  IncidentQuery,
+  IncidentStatus,
+  LostFoundItem,
+  LostFoundQuery,
+  LostFoundStatus,
+  MyCleanerKeyByBookingData,
+  MyCleanerKeyByTaskData,
+  PodCluster,
+  PodDetails,
+  PodItemEntry,
+  PodItemQuery,
+  PodItemsByPodData,
+  StaffAssignmentAttendanceStatus,
+  StaffAttendanceLog,
+  StaffAttendanceLogListResponse,
+  StaffAttendanceLogQuery,
+  StaffShiftAssignment,
+  StaffShiftAssignmentQuery,
+  StaffTodayAttendanceStatus,
+  StaffWorkRoster,
+  StaffWorkRosterQuery,
+  UpdateCleaningPhotoPayload,
+  UpdateCleaningTaskPayload,
+  WarehouseListItem,
 } from '@/types/cleaner-dashboard';
 import { normalizeBackendMessage } from '@/utils/validation';
 
@@ -302,19 +302,23 @@ async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayl
   // iOS may return HEIC/HEIF assets; convert to JPEG for Cloudinary allowed formats.
   // Resize to max 1280 px wide (aspect-ratio preserved) to match the web compression cap
   // and significantly reduce payload size on modern high-res phone cameras.
+  // Skip if the caller already compressed the image (skipManipulation: true) to avoid
+  // running manipulateAsync multiple times and wasting memory.
   let normalizedUri = payload.local_uri;
   let normalizedMimeType = getMimeTypeFromUri(payload.local_uri);
-  try {
-    const manipulated = await manipulateAsync(payload.local_uri, [{ resize: { width: 1280 } }], {
-      compress: 0.7,
-      format: SaveFormat.JPEG,
-    });
-    if (manipulated.uri) {
-      normalizedUri = manipulated.uri;
-      normalizedMimeType = 'image/jpeg';
+  if (!payload.skipManipulation) {
+    try {
+      const manipulated = await manipulateAsync(payload.local_uri, [{ resize: { width: 1280 } }], {
+        compress: 0.7,
+        format: SaveFormat.JPEG,
+      });
+      if (manipulated.uri) {
+        normalizedUri = manipulated.uri;
+        normalizedMimeType = 'image/jpeg';
+      }
+    } catch {
+      // Keep original URI if conversion fails.
     }
-  } catch {
-    // Keep original URI if conversion fails.
   }
 
   const normalizedFileName = getFileNameFromUri(normalizedUri).replace(/\.[^/.]+$/, '.jpg');
@@ -331,7 +335,7 @@ async function buildCleaningPhotoFormData(payload: CreateCleaningPhotoUploadPayl
   return formData;
 }
 
-async function toUploadFile(uri: string) {
+async function toUploadFile(uri: string, skipManipulation?: boolean) {
   const fileName = getFileNameFromUri(uri);
 
   if (Platform.OS === 'web') {
@@ -354,19 +358,21 @@ async function toUploadFile(uri: string) {
 
   let normalizedUri = uri;
   let normalizedMimeType = getMimeTypeFromUri(uri);
-  try {
-    // Resize to max 1280 px wide + quality 0.7 — matches the web compression cap
-    // and reduces payload 3-5x for high-res phone cameras.
-    const manipulated = await manipulateAsync(uri, [{ resize: { width: 1280 } }], {
-      compress: 0.7,
-      format: SaveFormat.JPEG,
-    });
-    if (manipulated.uri) {
-      normalizedUri = manipulated.uri;
-      normalizedMimeType = 'image/jpeg';
+  if (!skipManipulation) {
+    try {
+      // Resize to max 1280 px wide + quality 0.7 — matches the web compression cap
+      // and reduces payload 3-5x for high-res phone cameras.
+      const manipulated = await manipulateAsync(uri, [{ resize: { width: 1280 } }], {
+        compress: 0.7,
+        format: SaveFormat.JPEG,
+      });
+      if (manipulated.uri) {
+        normalizedUri = manipulated.uri;
+        normalizedMimeType = 'image/jpeg';
+      }
+    } catch {
+      // Keep original URI if conversion fails.
     }
-  } catch {
-    // Keep original URI if conversion fails.
   }
 
   const normalizedFileName = getFileNameFromUri(normalizedUri).replace(/\.[^/.]+$/, '.jpg');
@@ -528,7 +534,7 @@ async function buildDamageReportFormData(payload: CreateDamageReportPayload) {
     throw new Error('Thiếu chi tiết hư hại. Vui lòng chọn ít nhất một mục bị ảnh hưởng.');
   }
 
-  const mediaItems =
+  const mediaItems: Array<{ uri: string; mediaType: 'IMAGE' | 'VIDEO'; precompressed?: boolean }> =
     Array.isArray(payload.local_media) && payload.local_media.length > 0
       ? payload.local_media
       : payload.local_uris.filter(Boolean).map((uri) => ({ uri, mediaType: 'IMAGE' as const }));
@@ -539,7 +545,7 @@ async function buildDamageReportFormData(payload: CreateDamageReportPayload) {
       item.mediaType === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(item.uri);
     const uploadFile = isVideo
       ? await toUploadFileVideo(item.uri)
-      : await toUploadFile(item.uri);
+      : await toUploadFile(item.uri, item.precompressed);
     formData.append('media', uploadFile);
   }
 
@@ -840,9 +846,10 @@ export async function createCleaningMedia(token: string, payload: CreateCleaning
     const responseData = axiosError.response?.data ?? customError.responseData;
 
     if (__DEV__) {
+      const rawErrorMessage = (error instanceof Error ? error.message : String(error)) || 'unknown';
       console.error('[createCleaningPhoto] upload failed', {
         status,
-        message: responseData?.message,
+        message: responseData?.message ?? rawErrorMessage,
         errors: responseData?.errors,
         taskId: payload.cleaning_task_id,
         type: payload.type,
@@ -852,7 +859,7 @@ export async function createCleaningMedia(token: string, payload: CreateCleaning
       const debugText = JSON.stringify(
         {
           status,
-          message: responseData?.message,
+          message: responseData?.message ?? rawErrorMessage,
           errors: responseData?.errors,
           taskId: payload.cleaning_task_id,
           type: payload.type,
@@ -1170,7 +1177,10 @@ export async function getMyCleanerKeyByTaskId(token: string, cleaningTaskId: str
         headers: authHeader(token),
       },
     );
-
+console.log('getMyCleanerKeyByTaskId response', {
+  status: response.status,
+  data: response.data,
+});
     const item = extractData<MyCleanerKeyByTaskData>(response.data?.data ?? response.data);
     if (!item) {
       throw new Error('Không lấy được cleaner key cho task');
@@ -1244,7 +1254,7 @@ export async function getLostFoundItemById(token: string, itemId: string) {
 export async function createLostFoundItem(token: string, payload: CreateLostFoundItemPayload) {
   try {
     // Normalise media list from new or legacy fields
-    const mediaItems: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO' }> = [];
+    const mediaItems: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO'; precompressed?: boolean }> = [];
     if (payload.media_local_uris && payload.media_local_uris.length > 0) {
       mediaItems.push(...payload.media_local_uris);
     } else {
@@ -1265,11 +1275,11 @@ export async function createLostFoundItem(token: string, payload: CreateLostFoun
       if (payload.warehouse_id) formData.append('warehouse_id', payload.warehouse_id);
       if (payload.found_at) formData.append('found_at', payload.found_at);
 
-      for (const { uri, fileType } of mediaItems) {
+      for (const { uri, fileType, precompressed } of mediaItems) {
         const isVideo = fileType === 'VIDEO' || /\.(mp4|mov|avi|webm|mkv)$/i.test(uri);
         const mediaFile = isVideo
           ? await toUploadFileVideo(uri)
-          : await toUploadFile(uri);
+          : await toUploadFile(uri, precompressed);
         formData.append('media', mediaFile);
       }
 

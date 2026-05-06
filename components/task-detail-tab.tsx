@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -479,12 +480,24 @@ export default function TaskDetailTab({
 
         try {
           let cleanerKeyResult;
+          console.log('[OnlineKey] Bắt đầu lấy key — taskId:', taskId, '| bookingId:', bookingId);
           try {
+            console.log('[OnlineKey] Thử getMyCleanerKeyByTaskId...');
             cleanerKeyResult = await getMyCleanerKeyByTaskId(token, taskId);
-          } catch (taskKeyError) {
+            console.log('[OnlineKey] getMyCleanerKeyByTaskId thành công:', JSON.stringify(cleanerKeyResult));
+          } catch (taskKeyError: any) {
+            console.warn('[OnlineKey] getMyCleanerKeyByTaskId thất bại:', {
+              status: taskKeyError?.response?.status ?? taskKeyError?.statusCode,
+              message: taskKeyError?.response?.data?.message ?? taskKeyError?.response?.data?.error ?? taskKeyError?.message,
+              errorCode: taskKeyError?.response?.data?.error_code ?? taskKeyError?.response?.data?.code,
+              rawData: taskKeyError?.response?.data,
+            });
+            console.log('[OnlineKey] Fallback sang getMyCleanerKeyByBookingId — bookingId:', bookingId);
             cleanerKeyResult = await getMyCleanerKeyByBookingId(token, bookingId);
+            console.log('[OnlineKey] getMyCleanerKeyByBookingId thành công:', JSON.stringify(cleanerKeyResult));
           }
           const resolvedKey = cleanerKeyResult.online_key || null;
+          console.log('[OnlineKey] resolvedKey:', JSON.stringify(resolvedKey));
           setLastCleanerKey(resolvedKey);
           setOnlineKeyAccessState('OK');
 
@@ -492,6 +505,13 @@ export default function TaskDetailTab({
             setOnlineKeyNotice('Chưa được cấp chìa khóa cửa cho booking này.');
           }
         } catch (err: any) {
+          console.error('[OnlineKey] Cả hai API đều thất bại:', {
+            status: err?.response?.status ?? err?.statusCode,
+            message: err?.response?.data?.message ?? err?.response?.data?.error ?? err?.message,
+            errorCode: err?.response?.data?.error_code ?? err?.response?.data?.code,
+            rawData: err?.response?.data,
+            resolvedAccessState: resolveOnlineKeyAccessState(err),
+          });
           setLastCleanerKey(null);
           setOnlineKeyAccessState(resolveOnlineKeyAccessState(err));
           setOnlineKeyNotice(resolveStartActionError(err).message);
@@ -523,6 +543,13 @@ export default function TaskDetailTab({
   useEffect(() => {
     loadDetail();
   }, [loadDetail]);
+
+  // Silent reload when navigating back to this screen (e.g. after incident repair)
+  useFocusEffect(
+    useCallback(() => {
+      void loadDetail(true);
+    }, [loadDetail]),
+  );
 
   useEffect(() => {
     const normalizedTaskId = normalizeId(taskId);

@@ -1,33 +1,34 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ResizeMode, Video } from 'expo-av';
 import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 
 import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningMedia,
-    getCleaningMedia,
-    getCleaningTaskById,
-    getPodItemsByPodId,
-    updateCleaningTask,
+  createCleaningMedia,
+  getCleaningMedia,
+  getCleaningTaskById,
+  getPodItemsByPodId,
+  updateCleaningTask,
 } from '@/services/cleaner-dashboard.service';
 import {
-    bulkCreateInventoryActivityLogs,
-    getCleanerDailyActivityLogs,
+  bulkCreateInventoryActivityLogs,
+  getCleanerDailyActivityLogs,
 } from '@/services/inventory.service';
 import type { CleaningPhoto, CleaningTask, PodItemEntry } from '@/types/cleaner-dashboard';
 import type { InventoryActivityLogEntry } from '@/types/inventory';
@@ -43,7 +44,7 @@ interface TaskAfterPhotoTabProps {
   onCompleted: () => void;
 }
 
-type PendingPhoto = { id: string; uri: string; mediaType: 'IMAGE' | 'VIDEO' };
+type PendingPhoto = { id: string; uri: string; mediaType: 'IMAGE' | 'VIDEO'; precompressed?: boolean };
 
 function normalizeActionType(actionType?: string) {
   return String(actionType || '').trim().toUpperCase();
@@ -130,22 +131,41 @@ export default function TaskAfterPhotoTab({
         return;
       }
     }
-    // Request mic silently so VIDEO mode works inside the modal
-    await requestMicPermission();
+    // Request mic silently (fire-and-forget) so the camera modal opens immediately
+    // without waiting for the system permission dialog to be resolved.
+    void requestMicPermission();
     setIsCameraOpen(true);
   };
 
   const handleCapturePhoto = async () => {
     if (!cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
+      // Capture at lower quality — the image will be re-compressed to 1280px/0.7 below
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       if (!photo?.uri) {
         Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.');
         return;
       }
+      // Compress immediately (sequential, before adding to list) so upload time is minimal
+      // and we never send a raw full-resolution file over the network.
+      let finalUri = photo.uri;
+      let precompressed = false;
+      try {
+        const compressed = await manipulateAsync(
+          photo.uri,
+          [{ resize: { width: 1280 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        if (compressed?.uri) {
+          finalUri = compressed.uri;
+          precompressed = true;
+        }
+      } catch {
+        // Compression failed — keep original URI, service will retry manipulation
+      }
       setCapturedPhotos((prev) => [
         ...prev,
-        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri, mediaType: 'IMAGE' },
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: finalUri, mediaType: 'IMAGE', precompressed },
       ]);
       Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách.', [{ text: 'OK' }]);
     } catch {
@@ -178,6 +198,15 @@ export default function TaskAfterPhotoTab({
     cameraRef.current?.stopRecording();
   };
 
+  const handleSwitchMode = (newMode: CameraMode) => {
+    if (newMode === cameraMode) return;
+    if (isRecording) {
+      cameraRef.current?.stopRecording();
+      setIsRecording(false);
+    }
+    setCameraMode(newMode);
+  };
+
   const pickPhotoFromLibrary = async () => {
     if (!libraryPermission?.granted) {
       const result = await requestLibraryPermission();
@@ -199,9 +228,28 @@ export default function TaskAfterPhotoTab({
       return;
     }
     const isVideo = asset.type === 'video';
+    let finalUri = asset.uri;
+    let precompressed = false;
+    if (!isVideo) {
+      // Compress image from gallery immediately — gallery URIs can be content:// on Android
+      // which fetch() cannot stream; manipulateAsync converts them to file:// URIs.
+      try {
+        const compressed = await manipulateAsync(
+          asset.uri,
+          [{ resize: { width: 1280 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        if (compressed?.uri) {
+          finalUri = compressed.uri;
+          precompressed = true;
+        }
+      } catch {
+        // Compression failed — keep original URI
+      }
+    }
     setCapturedPhotos((prev) => [
       ...prev,
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: asset.uri, mediaType: isVideo ? 'VIDEO' : 'IMAGE' },
+      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: finalUri, mediaType: isVideo ? 'VIDEO' : 'IMAGE', precompressed },
     ]);
   };
 
@@ -231,13 +279,15 @@ export default function TaskAfterPhotoTab({
     setCompleting(true);
     setError(null);
     try {
-      // Upload AFTER photos/videos
+      // Upload AFTER photos sequentially to avoid concurrent manipulateAsync calls that
+      // can OOM on iOS, and to prevent temp files being GC'd while waiting in a parallel queue.
       for (const photo of capturedPhotos) {
         await createCleaningMedia(token, {
           cleaning_task_id: taskId,
           local_uri: photo.uri,
           type: 'AFTER',
           file_type: photo.mediaType,
+          skipManipulation: photo.precompressed,
         });
       }
 
@@ -572,6 +622,7 @@ export default function TaskAfterPhotoTab({
         }}>
         <View style={styles.cameraModalRoot}>
           <CameraView
+            key={cameraMode}
             style={styles.cameraModalView}
             facing={facing}
             ref={cameraRef}
@@ -624,12 +675,12 @@ export default function TaskAfterPhotoTab({
           {/* Bottom Controls */}
           <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
+              <Pressable onPress={() => handleSwitchMode('video')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>
                   VIDEO
                 </Text>
               </Pressable>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('picture'); }}>
+              <Pressable onPress={() => handleSwitchMode('picture')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'picture' && styles.cameraModeTabActive]}>
                   ẢNH
                 </Text>

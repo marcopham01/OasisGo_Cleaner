@@ -1,6 +1,7 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ResizeMode, Video } from 'expo-av';
 import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
@@ -65,7 +66,7 @@ function parseQty(value: string) {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
-type PendingMedia = { id: string; uri: string; mediaType: 'IMAGE' | 'VIDEO' };
+type PendingMedia = { id: string; uri: string; mediaType: 'IMAGE' | 'VIDEO'; precompressed?: boolean };
 
 export default function DamageReportScreen() {
   const theme = useColorScheme() ?? 'light';
@@ -276,8 +277,8 @@ export default function DamageReportScreen() {
         return;
       }
     }
-    // Request mic silently so video mode works without extra steps
-    await requestVideoPermission();
+    // Request mic silently (fire-and-forget) so the camera modal opens immediately
+    void requestVideoPermission();
     setIsCameraOpen(true);
   };
 
@@ -289,22 +290,54 @@ export default function DamageReportScreen() {
       videoMaxDuration: 60,
     });
     if (result.canceled || !result.assets?.length) return;
-    const newItems: PendingMedia[] = result.assets.map((asset) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      uri: asset.uri,
-      mediaType: asset.type === 'video' ? 'VIDEO' : 'IMAGE',
-    }));
+    // Compress images sequentially to avoid running manipulateAsync in parallel (OOM risk)
+    const newItems: PendingMedia[] = [];
+    for (const asset of result.assets) {
+      const isVideo = asset.type === 'video';
+      let finalUri = asset.uri;
+      let precompressed = false;
+      if (!isVideo) {
+        try {
+          const compressed = await manipulateAsync(
+            asset.uri,
+            [{ resize: { width: 1280 } }],
+            { compress: 0.7, format: SaveFormat.JPEG },
+          );
+          if (compressed?.uri) { finalUri = compressed.uri; precompressed = true; }
+        } catch {
+          // Compression failed — keep original URI
+        }
+      }
+      newItems.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        uri: finalUri,
+        mediaType: isVideo ? 'VIDEO' : 'IMAGE',
+        precompressed,
+      });
+    }
     setCapturedMedia((prev) => [...prev, ...newItems]);
   };
 
   const handleCapturePhoto = async () => {
     if (!cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.'); return; }
+      let finalUri = photo.uri;
+      let precompressed = false;
+      try {
+        const compressed = await manipulateAsync(
+          photo.uri,
+          [{ resize: { width: 1280 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        if (compressed?.uri) { finalUri = compressed.uri; precompressed = true; }
+      } catch {
+        // Compression failed — keep original URI
+      }
       setCapturedMedia((prev) => [
         ...prev,
-        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri, mediaType: 'IMAGE' },
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: finalUri, mediaType: 'IMAGE', precompressed },
       ]);
       Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách.', [{ text: 'OK', onPress: () => setIsCameraOpen(false) }]);
     } catch {
@@ -336,6 +369,15 @@ export default function DamageReportScreen() {
     if (cameraRef.current && isRecording) {
       cameraRef.current.stopRecording();
     }
+  };
+
+  const handleSwitchMode = (newMode: CameraMode) => {
+    if (newMode === cameraMode) return;
+    if (isRecording) {
+      cameraRef.current?.stopRecording();
+      setIsRecording(false);
+    }
+    setCameraMode(newMode);
   };
 
   const removeMedia = (mediaId: string) => {
@@ -381,7 +423,7 @@ export default function DamageReportScreen() {
       estimated_service_fee: estimatedServiceFee,
       severity,
       local_uris: capturedMedia.map((m) => m.uri),
-      local_media: capturedMedia.map((m) => ({ uri: m.uri, mediaType: m.mediaType })),
+      local_media: capturedMedia.map((m) => ({ uri: m.uri, mediaType: m.mediaType, precompressed: m.precompressed })),
     };
 
     setSubmitting(true);
@@ -560,9 +602,6 @@ export default function DamageReportScreen() {
                             <Text style={[styles.damageItemName, { color: sel ? palette.white : palette.text }]} numberOfLines={1}>
                               {String(it.name || itId)}
                             </Text>
-                            <Text style={[styles.damageItemCost, { color: sel ? palette.white : palette.textMuted }]}>
-                              {formatVnd(Number(it.unit_cost) || 0)}
-                            </Text>
                           </Pressable>
                         );
                       })}
@@ -572,7 +611,7 @@ export default function DamageReportScreen() {
                 <Text style={[styles.info, { color: palette.textMuted }]}>Chưa có dữ liệu món đồ REUSABLE.</Text>
               )}
 
-              <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chọn Vi phạm Quy chuẩn Dịch vụ</Text>
+              <Text style={[styles.subsectionTitle, { color: palette.text }]}>Chọn vi phạm quy chuẩn dịch vụ</Text>
               {loadingCatalogs ? null : services.length > 0 ? (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   <View style={styles.damageItemRow}>
@@ -592,13 +631,6 @@ export default function DamageReportScreen() {
                           onPress={() => toggleDetail('SERVICE', sId)}>
                           <Text style={[styles.damageItemName, { color: sel ? palette.white : palette.text }]} numberOfLines={1}>
                             {String(s.name || sId)}
-                          </Text>
-                          <Text style={[styles.damageItemCost, { color: sel ? palette.white : palette.textMuted }]}>
-                            {formatVnd(Number(s.base_price) || 0)}
-                          </Text>
-                          <Text style={[styles.damageItemCost, { color: sel ? palette.white : palette.textMuted }]} numberOfLines={1}>
-                            {String(s.category || 'SERVICE')}
-                            {String(s.unit_name || '').trim() ? ` • ${String(s.unit_name)}` : ''}
                           </Text>
                         </Pressable>
                       );
@@ -625,11 +657,8 @@ export default function DamageReportScreen() {
                       entry.type === 'ITEM'
                         ? items.find((it) => String(it.id || '').trim() === entry.id)
                         : services.find((s) => String(s.id || '').trim() === entry.id);
-                    const label = `${entry.type} • ${String(matched?.name ?? entry.id)}`;
-                    const amount =
-                      entry.type === 'ITEM'
-                        ? formatVnd(Number((matched as DamageReportItem | undefined)?.unit_cost) || 0)
-                        : formatVnd(Number((matched as DamageServiceCatalogItem | undefined)?.base_price) || 0);
+                    const typeLabel = entry.type === 'ITEM' ? 'Vật tư' : 'Dịch vụ';
+                    const label = `${typeLabel} • ${String(matched?.name ?? entry.id)}`;
                     const qty = getQty(entry.type, entry.id);
                     return (
                       <View
@@ -642,7 +671,6 @@ export default function DamageReportScreen() {
                             ellipsizeMode="tail">
                             {label}
                           </Text>
-                          <Text style={[styles.damageItemCost, { color: palette.textMuted }]}>{amount}</Text>
                         </View>
                         <View style={styles.detailSelectionQtyWrap}>
                           <View style={[styles.detailSelectionQtyStepper, { borderColor: palette.border, backgroundColor: palette.card }]}>
@@ -685,17 +713,7 @@ export default function DamageReportScreen() {
                   />
                 </View>
               </View>
-              <View style={[styles.incidentPricingBox, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-                <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}>
-                  Giá trị vật tư: {formatVnd(previewItemValue)}
-                </Text>
-                <Text style={[styles.incidentPricingText, { color: palette.textMuted }]}>
-                  Phí dịch vụ: {formatVnd(previewServiceValue)}
-                </Text>
-                <Text style={[styles.incidentPricingTotal, { color: palette.error }]}>
-                  Penalty dự kiến: {formatVnd(previewItemValue + previewServiceValue)}
-                </Text>
-              </View>
+
             </View>
 
             {/* ── Mức độ nghiêm trọng + Ảnh hư hại ── */}
@@ -722,17 +740,6 @@ export default function DamageReportScreen() {
                 })}
               </View>
 
-              <View style={[styles.incidentModeBox, { backgroundColor: `${palette.error}14`, borderColor: palette.error }]}>
-                <Text style={[styles.incidentModeTitle, { color: palette.error }]}>Chế độ báo cáo hư hại vật tư</Text>
-                <Text style={[styles.incidentModeText, { color: palette.textMuted }]}>
-                  Các mức độ gồm:{'\n'}
-                  - Thấp{'\n'}
-                  - Trung bình{'\n'}
-                  - Cao{'\n'}
-                  - Trầm trọng
-                </Text>
-              </View>
-
               <Text style={[styles.incidentPhotoTitle, { color: palette.text }]}>Ảnh / Video hư hại</Text>
               <View style={styles.incidentPhotoActionRow}>
                 <Pressable
@@ -740,12 +747,6 @@ export default function DamageReportScreen() {
                   onPress={() => void openCamera()}>
                   <MaterialIcons name="photo-camera" size={24} color={palette.white} />
                   <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Camera</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.requiredCaptureTile, styles.incidentPhotoActionTile, { borderColor: palette.neutral500, backgroundColor: palette.neutral500 }]}
-                  onPress={() => void pickFromLibrary()}>
-                  <MaterialIcons name="photo-library" size={24} color={palette.white} />
-                  <Text style={[styles.requiredCaptureLabel, styles.incidentPhotoActionLabel]}>Thư viện</Text>
                 </Pressable>
               </View>
 
@@ -825,7 +826,7 @@ export default function DamageReportScreen() {
       {/* ── Camera Modal ── */}
       <Modal visible={isCameraOpen} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent>
         <View style={styles.cameraModalRoot}>
-          <CameraView style={styles.cameraModalView} facing={facing} ref={cameraRef} mode={cameraMode} flash={flashEnabled ? 'on' : 'off'} />
+          <CameraView key={cameraMode} style={styles.cameraModalView} facing={facing} ref={cameraRef} mode={cameraMode} flash={flashEnabled ? 'on' : 'off'} />
           {/* Grid Overlay */}
           <View style={styles.cameraGridOverlay} pointerEvents="none">
             <View style={styles.cameraGridLine_H1} />
@@ -869,12 +870,12 @@ export default function DamageReportScreen() {
           {/* Bottom Controls */}
           <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
+              <Pressable onPress={() => handleSwitchMode('video')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>
                   VIDEO
                 </Text>
               </Pressable>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('picture'); }}>
+              <Pressable onPress={() => handleSwitchMode('picture')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'picture' && styles.cameraModeTabActive]}>
                   ẢNH
                 </Text>

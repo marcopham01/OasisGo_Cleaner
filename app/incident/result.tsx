@@ -122,8 +122,14 @@ export default function IncidentResultScreen() {
           <Text style={{ color: palette.error, textAlign: 'center', paddingHorizontal: 24 }}>{error}</Text>
           <Pressable
             style={[styles.backBtn, { backgroundColor: palette.primary, marginTop: spacingY._15 }]}
-            onPress={() => router.replace('/incident/list' as never)}>
-            <Text style={styles.backBtnText}>Quay lại trang chủ</Text>
+            onPress={() => {
+              if (cleaningTaskId) {
+                router.replace(`/task/${encodeURIComponent(cleaningTaskId)}` as never);
+              } else {
+                router.replace('/(tabs)' as never);
+              }
+            }}>
+            <Text style={styles.backBtnText}>Quay lại nhiệm vụ</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -248,8 +254,14 @@ export default function IncidentResultScreen() {
       <View style={[styles.bottomBar, { backgroundColor: palette.background, borderTopColor: palette.border, paddingBottom: Math.max(insets.bottom, spacingX._15) }]}>
         <Pressable
           style={[styles.backBtn, { backgroundColor: palette.primary }]}
-          onPress={() => router.replace('/incident/list' as never)}>
-          <Text style={styles.backBtnText}>Quay lại danh sách hư hại</Text>
+          onPress={() => {
+            if (cleaningTaskId) {
+              router.replace(`/task/${encodeURIComponent(cleaningTaskId)}` as never);
+            } else {
+              router.replace('/(tabs)' as never);
+            }
+          }}>
+          <Text style={styles.backBtnText}>Quay lại nhiệm vụ</Text>
         </Pressable>
       </View>
     </SafeAreaView>

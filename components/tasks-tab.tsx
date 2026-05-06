@@ -2,16 +2,16 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Animated,
-  Modal,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Animated,
+    Modal,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
@@ -20,7 +20,7 @@ import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import { getMyCleanerIncidents } from '@/services/incident.service';
 import type { CleanerIncident, CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import {
-  CLEANING_REQUEST_SOURCES,
+    CLEANING_REQUEST_SOURCES,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -355,6 +355,7 @@ function requestSourceLabel(source?: string) {
   if (normalized === 'USER_REQUEST') return 'Yêu cầu từ khách';
   if (normalized === 'AUTO_AFTER_CHECKOUT') return 'Dọn dẹp sau checkout';
   if (normalized === 'SYSTEM_RETRY') return 'Hệ thống thử lại';
+  if (normalized === 'ROOM_CHANGE_VACATED') return 'Đổi phòng – phòng vừa trả';
   if (!normalized) return '-';
   return normalized.replace(/_/g, ' ');
 }
@@ -825,10 +826,22 @@ export default function TasksTab({
         data = Array.from(uniqueTaskMap.values());
       }
 
+      // In TODAY mode, client-side filter by actual start time (preferred over due_at which
+      // is an end-time). The backend filters on due_at, so a task ending at 00:00 today
+      // (midnight = start of today's UTC+7 window) gets returned even though it STARTED
+      // yesterday. We fix this by comparing estimated_start_time / booking_start_time
+      // against today's UTC+7 date key and excluding cross-midnight stragglers.
+      const todayDateKey = toUtcPlus7DateKey(todayRange.start.toISOString());
       const normalizedTasks =
         taskWindowMode === 'WEEK_WINDOW'
           ? data.filter((task) => String(task.status || '').trim().toUpperCase() !== 'CANCELLED')
-          : data;
+          : data.filter((task) => {
+              const startTimeStr = String(
+                task.estimated_start_time || task.booking_start_time || '',
+              ).trim();
+              if (!startTimeStr) return true; // no start-time info – keep as-is
+              return toUtcPlus7DateKey(startTimeStr) === todayDateKey;
+            });
 
       setTasks(normalizedTasks);
       const nextDoneTodayCount = await doneCountPromise;

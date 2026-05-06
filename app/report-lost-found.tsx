@@ -1,6 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ResizeMode, Video } from 'expo-av';
 import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
@@ -70,7 +71,7 @@ export default function ReportLostFoundScreen() {
 
   // ── Camera / media ──
   const MAX_MEDIA = 5;
-  const [mediaList, setMediaList] = useState<Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO' }>>([]);
+  const [mediaList, setMediaList] = useState<Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO'; precompressed?: boolean }>>([]);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraMode, setCameraMode] = useState<CameraMode>('picture');
@@ -89,16 +90,16 @@ export default function ReportLostFoundScreen() {
         return;
       }
     }
-    // Request mic silently so video mode works without extra steps
-    await requestVideoPermission();
+    // Request mic silently (fire-and-forget) so the camera modal opens immediately
+    void requestVideoPermission();
     setIsCameraOpen(true);
   };
 
   const canAddMore = mediaList.length < MAX_MEDIA;
 
-  const appendMedia = (uri: string, fileType: 'IMAGE' | 'VIDEO') => {
+  const appendMedia = (uri: string, fileType: 'IMAGE' | 'VIDEO', precompressed?: boolean) => {
     setMediaList((prev) =>
-      prev.length < MAX_MEDIA ? [...prev, { uri, fileType }] : prev,
+      prev.length < MAX_MEDIA ? [...prev, { uri, fileType, precompressed }] : prev,
     );
   };
 
@@ -117,11 +118,32 @@ export default function ReportLostFoundScreen() {
       videoMaxDuration: 60,
     });
     if (result.canceled || !result.assets?.length) return;
+    // Compress images sequentially to avoid running manipulateAsync in parallel (OOM risk)
+    const newItems: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO'; precompressed?: boolean }> = [];
+    for (const asset of result.assets) {
+      if (newItems.length >= remaining) break;
+      const isVideo = asset.type === 'video';
+      let finalUri = asset.uri;
+      let precompressed = false;
+      if (!isVideo) {
+        try {
+          const compressed = await manipulateAsync(
+            asset.uri,
+            [{ resize: { width: 1280 } }],
+            { compress: 0.7, format: SaveFormat.JPEG },
+          );
+          if (compressed?.uri) { finalUri = compressed.uri; precompressed = true; }
+        } catch {
+          // Compression failed — keep original URI
+        }
+      }
+      newItems.push({ uri: finalUri, fileType: isVideo ? 'VIDEO' : 'IMAGE', precompressed });
+    }
     setMediaList((prev) => {
       const combined = [...prev];
-      for (const asset of result.assets) {
+      for (const item of newItems) {
         if (combined.length >= MAX_MEDIA) break;
-        combined.push({ uri: asset.uri, fileType: asset.type === 'video' ? 'VIDEO' : 'IMAGE' });
+        combined.push(item);
       }
       return combined;
     });
@@ -130,9 +152,21 @@ export default function ReportLostFoundScreen() {
   const handleCapturePhoto = async () => {
     if (!cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       if (!photo?.uri) { Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.'); return; }
-      appendMedia(photo.uri, 'IMAGE');
+      let finalUri = photo.uri;
+      let precompressed = false;
+      try {
+        const compressed = await manipulateAsync(
+          photo.uri,
+          [{ resize: { width: 1280 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        if (compressed?.uri) { finalUri = compressed.uri; precompressed = true; }
+      } catch {
+        // Compression failed — keep original URI
+      }
+      appendMedia(finalUri, 'IMAGE', precompressed);
       setIsCameraOpen(false);
     } catch {
       Alert.alert('Lỗi', 'Không thể chụp ảnh, vui lòng thử lại.');
@@ -160,6 +194,15 @@ export default function ReportLostFoundScreen() {
     if (cameraRef.current && isRecording) {
       cameraRef.current.stopRecording();
     }
+  };
+
+  const handleSwitchMode = (newMode: CameraMode) => {
+    if (newMode === cameraMode) return;
+    if (isRecording) {
+      cameraRef.current?.stopRecording();
+      setIsRecording(false);
+    }
+    setCameraMode(newMode);
   };
 
 
@@ -583,7 +626,7 @@ export default function ReportLostFoundScreen() {
       {/* ── Camera Modal ── */}
       <Modal visible={isCameraOpen} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent>
         <View style={styles.cameraModalRoot}>
-          <CameraView style={styles.cameraModalView} facing={facing} ref={cameraRef} mode={cameraMode} flash={flashEnabled ? 'on' : 'off'} />
+          <CameraView key={cameraMode} style={styles.cameraModalView} facing={facing} ref={cameraRef} mode={cameraMode} flash={flashEnabled ? 'on' : 'off'} />
           {/* Grid Overlay */}
           <View style={styles.cameraGridOverlay} pointerEvents="none">
             <View style={styles.cameraGridLine_H1} />
@@ -627,12 +670,12 @@ export default function ReportLostFoundScreen() {
           {/* Bottom Controls */}
           <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
+              <Pressable onPress={() => handleSwitchMode('video')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>
                   VIDEO
                 </Text>
               </Pressable>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('picture'); }}>
+              <Pressable onPress={() => handleSwitchMode('picture')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'picture' && styles.cameraModeTabActive]}>
                   ẢNH
                 </Text>

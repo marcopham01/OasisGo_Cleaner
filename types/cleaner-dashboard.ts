@@ -433,6 +433,11 @@ export interface CreateCleaningPhotoUploadPayload {
   type: CleaningPhotoType;
   /** 'IMAGE' | 'VIDEO' — nếu không truyền sẽ tự detect qua mime type của local_uri */
   file_type?: 'IMAGE' | 'VIDEO';
+  /**
+   * Nếu true, bỏ qua bước expo-image-manipulator vì ảnh đã được nén trước khi lưu.
+   * Giúp tránh chạy manipulateAsync song song (gây OOM) và giảm thời gian upload.
+   */
+  skipManipulation?: boolean;
 }
 
 export interface UpdateCleaningPhotoPayload {
@@ -527,7 +532,7 @@ export interface CreateDamageReportPayload {
   severity?: IncidentSeverity;
   local_uris: string[];
   /** Preferred over local_uris — carries per-file media type for video support. */
-  local_media?: Array<{ uri: string; mediaType: 'IMAGE' | 'VIDEO' }>;
+  local_media?: Array<{ uri: string; mediaType: 'IMAGE' | 'VIDEO'; precompressed?: boolean }>;
 }
 
 export interface DamageReportResponse {
@@ -650,7 +655,7 @@ export interface CreateLostFoundItemPayload {
   description?: string;
   found_at?: string;
   /** Multiple media files — up to 5 (matches BE limit) */
-  media_local_uris?: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO' }>;
+  media_local_uris?: Array<{ uri: string; fileType: 'IMAGE' | 'VIDEO'; precompressed?: boolean }>;
   /** @deprecated use media_local_uris */
   photo_local_uri?: string | null;
   /** @deprecated use media_local_uris */

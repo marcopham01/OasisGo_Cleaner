@@ -1,41 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Modal,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Modal,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { getMyCleaningTasks, getMyWorkRosters } from '@/services/cleaner-dashboard.service';
 import {
-  bulkCreateInventoryActivityLogs,
-  getAllInventoryStocks,
-  getCleanerDailyActivityLogs,
-  getDailyTakenItemsSummary,
-  getInventoryEstimate,
-  getWarehouses,
+    bulkCreateInventoryActivityLogs,
+    getAllInventoryStocks,
+    getCleanerDailyActivityLogs,
+    getDailyTakenItemsSummary,
+    getInventoryEstimate,
+    getWarehouses,
 } from '@/services/inventory.service';
 import type { StaffWorkRoster } from '@/types/cleaner-dashboard';
 import type {
-  CheckoutDraftItem,
-  CleanerDailyActivityLogResponse,
-  DailyActivityLogEntry,
-  DailyActivityLogSummaryItem,
-  DailyTakenItemsSummaryResponse,
-  FreeCheckoutDraftItem,
-  InventoryEstimateResponse,
-  InventoryStockItem,
-  InventorySuggestedStock,
-  ReturnDraftItem,
-  Warehouse,
+    CheckoutDraftItem,
+    CleanerDailyActivityLogResponse,
+    DailyActivityLogEntry,
+    DailyActivityLogSummaryItem,
+    DailyTakenItemsSummaryResponse,
+    FreeCheckoutDraftItem,
+    InventoryEstimateResponse,
+    InventoryStockItem,
+    InventorySuggestedStock,
+    ReturnDraftItem,
+    Warehouse,
 } from '@/types/inventory';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -989,39 +989,6 @@ function CheckoutModal({ visible, token, userId, today, palette, onClose, onSucc
               </View>
             )}
 
-            {/* Warehouse selector */}
-            {warehouses.length > 0 && (
-              <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: palette.text }]}>Chọn kho lấy hàng</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.warehouseRow}>
-                  {warehouses.map((wh) => {
-                    const active = selectedWarehouseId === wh.id;
-                    return (
-                      <Pressable
-                        key={wh.id}
-                        onPress={() => handleSelectWarehouse(wh.id)}
-                        style={[
-                          styles.warehouseChip,
-                          {
-                            backgroundColor: active ? palette.primary : palette.card,
-                            borderColor: active ? palette.primary : palette.border,
-                          },
-                        ]}>
-                        <Text style={[styles.warehouseChipText, { color: active ? palette.white : palette.text }]}>
-                          {wh.name}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-                {selectedWarehouseId && (
-                  <Pressable onPress={() => handleSelectWarehouse(selectedWarehouseId)} style={styles.clearWarehouse}>
-                    <Text style={[styles.clearWarehouseText, { color: palette.textMuted }]}>Bỏ chọn kho</Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
-
             {/* Items list */}
             {draftItems.length === 0 && !loading ? (
               <View style={[styles.emptyBox, { backgroundColor: palette.card, borderColor: palette.border }]}>
@@ -1132,6 +1099,7 @@ function FreeCheckoutModal({ visible, token, userId, palette, onClose, onSuccess
   const [allStocks, setAllStocks] = useState<InventoryStockItem[]>([]);
   const [scopeWarehouseIds, setScopeWarehouseIds] = useState<string[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
+  const [lockedWarehouseId, setLockedWarehouseId] = useState<string | null>(null);
   const [draftItems, setDraftItems] = useState<FreeCheckoutDraftItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1183,6 +1151,7 @@ function FreeCheckoutModal({ visible, token, userId, palette, onClose, onSuccess
       // Auto-select the first warehouse at the cleaner's location
       const defaultWarehouseId = locationWarehouses[0]?.id ?? null;
       setSelectedWarehouseId(defaultWarehouseId);
+      setLockedWarehouseId(defaultWarehouseId);
 
       // Build draft: scoped to location warehouses if found, else show all
       const baseStocks =
@@ -1291,33 +1260,24 @@ function FreeCheckoutModal({ visible, token, userId, palette, onClose, onSuccess
               />
             }>
 
-            {/* Warehouse filter chips */}
-            {warehouses.length > 0 && (
+            {/* Warehouse filter chips — only show the locked default warehouse */}
+            {lockedWarehouseId && warehouses.some((wh) => wh.id === lockedWarehouseId) && (
               <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: palette.text }]}>Chọn kho</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.warehouseRow}>
-                  {warehouses.map((wh) => {
-                    const active = selectedWarehouseId === wh.id;
-                    return (
-                      <Pressable
-                        key={wh.id}
-                        onPress={() => handleSelectWarehouse(wh.id)}
-                        style={[styles.warehouseChip, {
-                          backgroundColor: active ? palette.success : palette.card,
-                          borderColor: active ? palette.success : palette.border,
-                        }]}>
-                        <Text style={[styles.warehouseChipText, { color: active ? palette.white : palette.text }]}>
-                          {wh.name}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-                {selectedWarehouseId && (
-                  <Pressable onPress={() => handleSelectWarehouse(selectedWarehouseId)} style={styles.clearWarehouse}>
-                    <Text style={[styles.clearWarehouseText, { color: palette.textMuted }]}>Bỏ chọn kho</Text>
-                  </Pressable>
-                )}
+                <Text style={[styles.sectionTitle, { color: palette.text }]}>Kho</Text>
+                <View style={{ alignItems: 'center' }}>
+                  {warehouses.filter((wh) => wh.id === lockedWarehouseId).map((wh) => (
+                    <View
+                      key={wh.id}
+                      style={[styles.warehouseChip, {
+                        backgroundColor: palette.success,
+                        borderColor: palette.success,
+                      }]}>
+                      <Text style={[styles.warehouseChipText, { color: palette.white }]}>
+                        {wh.name}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               </View>
             )}
 

@@ -505,88 +505,9 @@ export default function IncidentDetailScreen() {
           </SectionCard>
         ) : null}
 
-        {/* ── Cleaning Task ── */}
-        {cleaningTask ? (
-          <View style={[styles.bookingCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            <View style={[styles.bookingHeader, { borderBottomColor: palette.border }]}>
-              <MaterialIcons name="assignment" size={15} color={palette.primary} />
-              <Text style={[styles.bookingHeaderText, { color: palette.text }]}>Nhiệm vụ dọn dẹp</Text>
-            </View>
-            {(() => {
-              const ts = String(cleaningTask.status || '').toUpperCase();
-              const tCfg = (() => {
-                if (ts === 'ASSIGNED') return { label: 'Đã phân công', color: '#2563eb', bg: '#dbeafe', icon: 'assignment-ind' as const };
-                if (ts === 'ACCEPTED') return { label: 'Đã nhận việc', color: '#7c3aed', bg: '#ede9fe', icon: 'thumb-up' as const };
-                if (ts === 'IN_PROGRESS') return { label: 'Đang dọn', color: '#d97706', bg: '#fef3c7', icon: 'cleaning-services' as const };
-                if (ts === 'DONE') return { label: 'Hoàn thành', color: '#059669', bg: '#d1fae5', icon: 'check-circle' as const };
-                if (ts === 'CANCELLED') return { label: 'Đã hủy', color: '#dc2626', bg: '#fee2e2', icon: 'cancel' as const };
-                if (ts === 'MISSED') return { label: 'Bỏ lỡ', color: '#6b7280', bg: '#f3f4f6', icon: 'event-busy' as const };
-                return { label: taskStatusLabel(String(cleaningTask.status || '')), color: '#6b7280', bg: '#f3f4f6', icon: 'help-outline' as const };
-              })();
-              return (
-                <View style={[styles.bookingStatusRow, { backgroundColor: tCfg.bg + 'aa', borderColor: tCfg.color + '40' }]}>
-                  <MaterialIcons name={tCfg.icon} size={18} color={tCfg.color} />
-                  <Text style={[styles.bookingStatusLabel, { color: tCfg.color }]}>{tCfg.label}</Text>
-                </View>
-              );
-            })()}
-          </View>
-        ) : null}
+        {/* ── Cleaning Task ── hidden per UX decision ── */}
 
-        {/* ── Booking ── */}
-        {booking ? (
-          <View style={[styles.bookingCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-            {/* Header */}
-            <View style={[styles.bookingHeader, { borderBottomColor: palette.border }]}>
-              <MaterialIcons name="book-online" size={15} color={palette.primary} />
-              <Text style={[styles.bookingHeaderText, { color: palette.text }]}>Thông tin đơn đặt pod</Text>
-            </View>
-
-            {/* Status badge row */}
-            {(() => {
-              const st2 = String(booking.status || '').toUpperCase();
-              const stCfg = (() => {
-                if (st2 === 'IN_USE') return { label: 'Đang sử dụng', color: '#2563eb', bg: '#dbeafe', icon: 'play-circle-outline' as const };
-                if (st2 === 'COMPLETED') return { label: 'Đã kết thúc', color: '#059669', bg: '#d1fae5', icon: 'check-circle' as const };
-                if (st2 === 'BOOKED') return { label: 'Đã đặt', color: '#7c3aed', bg: '#ede9fe', icon: 'event-available' as const };
-                if (st2 === 'CANCELLED') return { label: 'Đã hủy', color: '#dc2626', bg: '#fee2e2', icon: 'cancel' as const };
-                if (st2 === 'NO_SHOW') return { label: 'Không đến', color: '#6b7280', bg: '#f3f4f6', icon: 'person-off' as const };
-                if (st2 === 'ACTIVE') return { label: 'Đang diễn ra', color: '#2563eb', bg: '#dbeafe', icon: 'play-circle-outline' as const };
-                if (st2 === 'PENDING') return { label: 'Chờ xác nhận', color: '#d97706', bg: '#fef3c7', icon: 'hourglass-empty' as const };
-                return { label: bookingStatusLabel(String(booking.status || '')), color: '#6b7280', bg: '#f3f4f6', icon: 'help-outline' as const };
-              })();
-              return (
-                <View style={[styles.bookingStatusRow, { backgroundColor: stCfg.bg + 'aa', borderColor: stCfg.color + '40' }]}>
-                  <MaterialIcons name={stCfg.icon} size={18} color={stCfg.color} />
-                  <Text style={[styles.bookingStatusLabel, { color: stCfg.color }]}>{stCfg.label}</Text>
-                </View>
-              );
-            })()}
-
-            {/* Customer row */}
-            {(() => {
-              const customerName = String(
-                booking.user_name ||
-                booking.guest_name ||
-                cleaningTask?.booking_user_name ||
-                cleaningTask?.booking_guest_name ||
-                ''
-              ).trim();
-              if (!customerName) return null;
-              return (
-                <View style={[styles.bookingInfoRow, { borderTopColor: palette.border }]}>
-                  <View style={[styles.bookingInfoIcon, { backgroundColor: palette.primaryBg }]}>
-                    <MaterialIcons name="person" size={14} color={palette.primary} />
-                  </View>
-                  <View style={styles.bookingInfoBody}>
-                    <Text style={[styles.bookingInfoLabel, { color: palette.textMuted }]}>Khách hàng</Text>
-                    <Text style={[styles.bookingInfoValue, { color: palette.text }]}>{customerName}</Text>
-                  </View>
-                </View>
-              );
-            })()}
-          </View>
-        ) : null}
+        {/* ── Booking ── hidden per UX decision ── */}
 
       </ScrollView>
 

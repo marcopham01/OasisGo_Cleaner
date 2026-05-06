@@ -2,7 +2,9 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ResizeMode, Video } from 'expo-av';
 import { CameraMode, CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from 'expo-router';
 import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -57,6 +59,8 @@ type PendingMedia = {
   id: string;
   uri: string;
   mediaType: 'IMAGE' | 'VIDEO';
+  /** true khi ảnh đã được nén tại thời điểm chụp → bỏ qua manipulateAsync khi upload */
+  precompressed?: boolean;
 };
 
 export default function TaskBeforePhotoTab({
@@ -119,9 +123,13 @@ export default function TaskBeforePhotoTab({
     }
   }, [taskId, token]);
 
-  useEffect(() => {
-    loadDetail();
-  }, [loadDetail]);
+  // Reload saved photos every time the screen comes into focus (e.g. returning from step 2).
+  // This ensures newly-uploaded BEFORE photos appear even when the component was not remounted.
+  useFocusEffect(
+    useCallback(() => {
+      loadDetail();
+    }, [loadDetail]),
+  );
 
   // Load checkout checklist items once taskId is available
   const loadChecklist = useCallback(() => {
@@ -166,7 +174,13 @@ export default function TaskBeforePhotoTab({
           ''
         ).toLowerCase();
         // Backend trả về "already submitted" nghĩa là checklist đã được nộp trước đó
-        if (rawErrMsg.includes('already been submitted') || rawErrMsg.includes('already submitted')) {
+        // Kiểm tra cả tiếng Anh lẫn tiếng Việt vì backend có thể trả về thông báo bằng tiếng Việt
+        if (
+          rawErrMsg.includes('already been submitted') ||
+          rawErrMsg.includes('already submitted') ||
+          rawErrMsg.includes('đã được nộp') ||
+          rawErrMsg.includes('đã nộp')
+        ) {
           setChecklistSubmitted(true);
           setChecklistItems([]);
           setChecklistLoadError(null);
@@ -209,22 +223,41 @@ export default function TaskBeforePhotoTab({
         return;
       }
     }
-    // Request mic silently so VIDEO mode works inside the modal
-    await requestMicPermission();
+    // Request mic silently (fire-and-forget) so the camera modal opens immediately
+    // without waiting for the system permission dialog to be resolved.
+    void requestMicPermission();
     setIsCameraOpen(true);
   };
 
   const handleCapturePhoto = async () => {
     if (!cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.75 });
+      // Capture at lower quality — the image will be re-compressed to 1280px/0.7 below
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       if (!photo?.uri) {
         Alert.alert('Lỗi', 'Không chụp được ảnh, vui lòng thử lại.');
         return;
       }
+      // Compress immediately (sequential, before adding to list) so upload time is minimal
+      // and we never send a raw full-resolution file over the network.
+      let finalUri = photo.uri;
+      let precompressed = false;
+      try {
+        const compressed = await manipulateAsync(
+          photo.uri,
+          [{ resize: { width: 1280 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        if (compressed?.uri) {
+          finalUri = compressed.uri;
+          precompressed = true;
+        }
+      } catch {
+        // Compression failed — keep original URI, service will retry manipulation
+      }
       setCapturedPhotos((prev) => [
         ...prev,
-        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: photo.uri, mediaType: 'IMAGE' },
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: finalUri, mediaType: 'IMAGE', precompressed },
       ]);
       Alert.alert('Chụp ảnh thành công', 'Ảnh đã được thêm vào danh sách.', [{ text: 'OK' }]);
     } catch {
@@ -257,6 +290,15 @@ export default function TaskBeforePhotoTab({
     cameraRef.current?.stopRecording();
   };
 
+  const handleSwitchMode = (newMode: CameraMode) => {
+    if (newMode === cameraMode) return;
+    if (isRecording) {
+      cameraRef.current?.stopRecording();
+      setIsRecording(false);
+    }
+    setCameraMode(newMode);
+  };
+
   const pickPhotoFromLibrary = async () => {
     if (!libraryPermission?.granted) {
       const result = await requestLibraryPermission();
@@ -278,9 +320,28 @@ export default function TaskBeforePhotoTab({
       return;
     }
     const isVideo = asset.type === 'video';
+    let finalUri = asset.uri;
+    let precompressed = false;
+    if (!isVideo) {
+      // Compress image from gallery immediately — gallery URIs can be content:// on Android
+      // which fetch() cannot stream; manipulateAsync converts them to file:// URIs.
+      try {
+        const compressed = await manipulateAsync(
+          asset.uri,
+          [{ resize: { width: 1280 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        if (compressed?.uri) {
+          finalUri = compressed.uri;
+          precompressed = true;
+        }
+      } catch {
+        // Compression failed — keep original URI
+      }
+    }
     setCapturedPhotos((prev) => [
       ...prev,
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: asset.uri, mediaType: isVideo ? 'VIDEO' : 'IMAGE' },
+      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, uri: finalUri, mediaType: isVideo ? 'VIDEO' : 'IMAGE', precompressed },
     ]);
   };
 
@@ -332,7 +393,8 @@ export default function TaskBeforePhotoTab({
     setUploadingPhoto(true);
     setError(null);
     try {
-      // Upload photos first
+      // Upload photos sequentially to avoid concurrent manipulateAsync calls that can OOM
+      // on iOS, and to prevent temp files being GC'd while waiting in a parallel queue.
       if (capturedPhotos.length > 0) {
         for (const photo of capturedPhotos) {
           await createCleaningMedia(token, {
@@ -340,6 +402,7 @@ export default function TaskBeforePhotoTab({
             local_uri: photo.uri,
             type: 'BEFORE',
             file_type: photo.mediaType,
+            skipManipulation: photo.precompressed,
           });
         }
         setCapturedPhotos([]);
@@ -381,7 +444,13 @@ export default function TaskBeforePhotoTab({
         ''
       ).toLowerCase();
       // Nếu backend báo checklist đã được nộp rồi, bỏ qua lỗi và tiếp tục
-      if (rawErrMsg.includes('already been submitted') || rawErrMsg.includes('already submitted')) {
+      // Kiểm tra cả tiếng Anh lẫn tiếng Việt
+      if (
+        rawErrMsg.includes('already been submitted') ||
+        rawErrMsg.includes('already submitted') ||
+        rawErrMsg.includes('đã được nộp') ||
+        rawErrMsg.includes('đã nộp')
+      ) {
         const details: SubmittedChecklistDetail[] = checklistItems.map((item) => ({
           item_id: item.item_id,
           item_name: item.item_name,
@@ -568,7 +637,7 @@ export default function TaskBeforePhotoTab({
             ) : checklistSubmitted ? (
               submittedChecklistDetails.length === 0 ? (
                 <Text style={[styles.emptyText, { color: palette.textMuted, textAlign: 'center' }]}>
-                  Không có vật tư nào được kiểm kê.
+                  Phiếu kiểm kê vật tư đã được nộp trước đó.
                 </Text>
               ) : (
                 <>
@@ -811,6 +880,7 @@ export default function TaskBeforePhotoTab({
         }}>
         <View style={styles.cameraModalRoot}>
           <CameraView
+            key={cameraMode}
             style={styles.cameraModalView}
             facing={facing}
             ref={cameraRef}
@@ -863,12 +933,12 @@ export default function TaskBeforePhotoTab({
           {/* Bottom Controls */}
           <View style={[styles.cameraBottomBar, { paddingBottom: Math.max(insets.bottom, spacingY._10) }]}>
             <View style={styles.cameraModeRow}>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('video'); }}>
+              <Pressable onPress={() => handleSwitchMode('video')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'video' && styles.cameraModeTabActive]}>
                   VIDEO
                 </Text>
               </Pressable>
-              <Pressable onPress={() => { if (!isRecording) setCameraMode('picture'); }}>
+              <Pressable onPress={() => handleSwitchMode('picture')}>
                 <Text style={[styles.cameraModeTab, cameraMode === 'picture' && styles.cameraModeTabActive]}>
                   ẢNH
                 </Text>

@@ -331,9 +331,6 @@ export default function TaskChecklistTab({
     : [];
   const hasSupplyShortage = supplyShortageItems.length > 0;
 
-  const hasDamageReports = incidents.length > 0;
-  const showReportActionSection = !hasDamageReports;
-
   return (
     <>
       <Modal
@@ -615,48 +612,44 @@ export default function TaskChecklistTab({
           </View>
 
           {/* Incident report action section */}
-          {showReportActionSection ? (
-            <View
-              style={[
-                styles.damageSection,
-                {
-                  backgroundColor: `${palette.secondary}12`,
-                  borderColor: palette.secondary,
-                },
-              ]}>
-              <Text style={[styles.sectionTitle, { color: palette.secondary, alignSelf: 'center' }]}>
-                Báo cáo vấn đề
-              </Text>
+          <View
+            style={[
+              styles.damageSection,
+              {
+                backgroundColor: `${palette.secondary}12`,
+                borderColor: palette.secondary,
+              },
+            ]}>
+            <Text style={[styles.sectionTitle, { color: palette.secondary, alignSelf: 'center' }]}>
+              Báo cáo vấn đề
+            </Text>
 
-              <View style={styles.actionButtonRow}>
-                {!hasDamageReports ? (
-                  <Pressable
-                    style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: palette.error }]}
-                    onPress={() => onReportDamage({
-                      podId: task?.pod_id,
-                      bookingId: String(task?.booking_id ?? ''),
-                      podName: String(task?.pod_name ?? ''),
-                    })}>
-                    <Text style={[styles.actionButtonText, { color: palette.white }]}> 
-                      Báo cáo hư hại
-                    </Text>
-                  </Pressable>
-                ) : null}
+            <View style={styles.actionButtonRow}>
+              <Pressable
+                style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: palette.error }]}
+                onPress={() => onReportDamage({
+                  podId: task?.pod_id,
+                  bookingId: String(task?.booking_id ?? ''),
+                  podName: String(task?.pod_name ?? ''),
+                })}>
+                <Text style={[styles.actionButtonText, { color: palette.white }]}> 
+                  Báo cáo hư hại
+                </Text>
+              </Pressable>
 
-                <Pressable
-                    style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: '#0ea5e9' }]}
-                    onPress={() => onReportLostFound({
-                      podId: task?.pod_id,
-                      bookingId: String(task?.booking_id ?? ''),
-                      podName: String(task?.pod_name ?? ''),
-                    })}>
-                    <Text style={[styles.actionButtonText, { color: palette.white }]}> 
-                      Ghi nhận đồ thất lạc
-                    </Text>
-                  </Pressable>
-              </View>
+              <Pressable
+                style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: '#0ea5e9' }]}
+                onPress={() => onReportLostFound({
+                  podId: task?.pod_id,
+                  bookingId: String(task?.booking_id ?? ''),
+                  podName: String(task?.pod_name ?? ''),
+                })}>
+                <Text style={[styles.actionButtonText, { color: palette.white }]}> 
+                  Ghi nhận đồ thất lạc
+                </Text>
+              </Pressable>
             </View>
-          ) : null}
+          </View>
 
           {/* Existing incidents */}
           {incidents.length > 0 ? (
