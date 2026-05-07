@@ -2,33 +2,36 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    getBookingById,
-    getCleaningTaskById,
-    getIncidentsByCleaningTaskId,
-    getMyCleanerKeyByBookingId,
-    getMyCleanerKeyByTaskId,
-    getPodById,
-    updateCleaningTask
+  getBookingById,
+  getCleaningTaskById,
+  getIncidentsByCleaningTaskId,
+  getMyCleanerKeyByBookingId,
+  getMyCleanerKeyByTaskId,
+  getPodById,
+  rejectCleaningTask,
+  updateCleaningTask
 } from '@/services/cleaner-dashboard.service';
 import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import type {
-    CleanerOnlineKey,
-    CleanerRealtimeNotification,
-    CleanerTaskAction,
-    CleaningTask,
-    Incident,
+  CleanerOnlineKey,
+  CleanerRealtimeNotification,
+  CleanerTaskAction,
+  CleaningTask,
+  Incident,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -94,6 +97,7 @@ function taskStatusLabelVi(status?: string | null) {
   if (s === 'DONE') return 'Hoàn thành';
   if (s === 'CANCELLED') return 'Đã hủy';
   if (s === 'MISSED') return 'Bỏ lỡ';
+  if (s === 'REJECTED') return 'Đã từ chối';
   return s.replace(/_/g, ' ');
 }
 
@@ -418,6 +422,9 @@ export default function TaskDetailTab({
   >('UNKNOWN');
 
   const [actionLoading, setActionLoading] = useState(false);
+  const [rejectModalVisible, setRejectModalVisible] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectLoading, setRejectLoading] = useState(false);
   const realtimeReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const taskStatus = String(task?.status || '').toUpperCase();
@@ -505,13 +512,6 @@ export default function TaskDetailTab({
             setOnlineKeyNotice('Chưa được cấp chìa khóa cửa cho booking này.');
           }
         } catch (err: any) {
-          console.error('[OnlineKey] Cả hai API đều thất bại:', {
-            status: err?.response?.status ?? err?.statusCode,
-            message: err?.response?.data?.message ?? err?.response?.data?.error ?? err?.message,
-            errorCode: err?.response?.data?.error_code ?? err?.response?.data?.code,
-            rawData: err?.response?.data,
-            resolvedAccessState: resolveOnlineKeyAccessState(err),
-          });
           setLastCleanerKey(null);
           setOnlineKeyAccessState(resolveOnlineKeyAccessState(err));
           setOnlineKeyNotice(resolveStartActionError(err).message);
@@ -581,6 +581,30 @@ export default function TaskDetailTab({
     };
   }, [loadDetail, taskId, token]);
 
+  const handleRejectConfirm = async () => {
+    const reason = rejectionReason.trim();
+    if (!reason) {
+      Alert.alert('Thiếu thông tin', 'Vui lòng nhập lý do từ chối.');
+      return;
+    }
+    if (!task || !taskId) return;
+
+    setRejectLoading(true);
+    try {
+      const updated = await rejectCleaningTask(token, taskId, reason);
+      setTask(updated);
+      onTaskUpdated?.(updated);
+      setRejectModalVisible(false);
+      setRejectionReason('');
+      Alert.alert('Đã từ chối', 'Nhiệm vụ đã được từ chối. Quản lý sẽ phân công lại.');
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      Alert.alert('Lỗi', msg);
+    } finally {
+      setRejectLoading(false);
+    }
+  };
+
   const handleAction = async (action: CleanerTaskAction) => {
     if (!task || !taskId) return;
 
@@ -649,7 +673,8 @@ export default function TaskDetailTab({
 
   const canAccept = task.status === 'ASSIGNED' || task.status === 'NOTIFIED';
   const canStart = task.status === 'ACCEPTED' || task.status === 'ARRIVED';
-  const needsAssignment = !['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'DONE'].includes(taskStatus);
+  const canReject = task.status === 'ASSIGNED' || task.status === 'ACCEPTED';
+  const needsAssignment = !['ASSIGNED', 'NOTIFIED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS', 'DONE', 'REJECTED'].includes(taskStatus);
   const showReadyAction = canAccept || canStart;
   const bookingWindow = bookingWindowOverride || taskBookingWindow(task);
   function formatDateTimeNoYear(dateText?: string) {
@@ -684,6 +709,14 @@ export default function TaskDetailTab({
     }
 
     if (canStart) {
+      // Validate online key trước khi cho phép bắt đầu dọn
+      if (onlineKeyValidation.status !== 'VALID' && onlineKeyValidation.status !== 'NO_BOOKING') {
+        Alert.alert(
+          'Không thể bắt đầu dọn',
+          onlineKeyValidation.detail || 'Chìa khóa cửa không hợp lệ. Vui lòng kiểm tra lại.',
+        );
+        return;
+      }
       await handleAction('start');
       return;
     }
@@ -758,6 +791,8 @@ export default function TaskDetailTab({
             </View>
           ) : null}
         </View>
+
+        {/* Nút từ chối — đã ẩn */}
         </View>
 
         <View style={{
@@ -917,6 +952,62 @@ export default function TaskDetailTab({
           </View>
         )}
 
+        {/* Reject Modal — đã ẩn */}
+        <Modal
+          visible={false}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (!rejectLoading) {
+              setRejectModalVisible(false);
+              setRejectionReason('');
+            }
+          }}>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalCard, { backgroundColor: palette.card }]}>
+              <Text style={[styles.modalTitle, { color: palette.text }]}>Từ chối nhiệm vụ</Text>
+              <Text style={[styles.modalSubtitle, { color: palette.textMuted }]}>
+                Vui lòng nhập lý do từ chối. Quản lý sẽ được thông báo và phân công lại.
+              </Text>
+              <TextInput
+                style={[
+                  styles.modalInput,
+                  { color: palette.text, borderColor: palette.border, backgroundColor: palette.surface },
+                ]}
+                placeholder="Nhập lý do từ chối..."
+                placeholderTextColor={palette.textMuted}
+                value={rejectionReason}
+                onChangeText={setRejectionReason}
+                multiline
+                numberOfLines={4}
+                maxLength={500}
+                editable={!rejectLoading}
+              />
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={[styles.modalCancelBtn, { borderColor: palette.border }]}
+                  onPress={() => {
+                    setRejectModalVisible(false);
+                    setRejectionReason('');
+                  }}
+                  disabled={rejectLoading}>
+                  <Text style={[styles.modalCancelText, { color: palette.textMuted }]}>Hủy</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.modalConfirmBtn, { backgroundColor: palette.error }]}
+                  onPress={() => void handleRejectConfirm()}
+                  disabled={rejectLoading}>
+                  {rejectLoading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.modalConfirmText}>Xác nhận từ chối</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Ready Card */}
         {showReadyAction && (
           <View style={styles.readySection}>
@@ -968,7 +1059,24 @@ export default function TaskDetailTab({
           </View>
         )}
 
-        {needsAssignment && (
+        {taskStatus === 'REJECTED' && (
+          <View style={[styles.readySection]}>
+            <View style={[styles.readyIconWrap, { backgroundColor: '#FEE2E2' }]}>
+              <MaterialIcons name="block" size={38} color={palette.error} />
+            </View>
+            <Text style={[styles.readyTitle, { color: palette.error }]}>Đã từ chối nhiệm vụ</Text>
+            {task.rejection_reason ? (
+              <Text style={[styles.readyDescription, { color: palette.textMuted }]}>
+                Lý do: {task.rejection_reason}
+              </Text>
+            ) : null}
+            <Text style={[styles.readyDescription, { color: palette.textMuted }]}>
+              Quản lý sẽ phân công lại nhiệm vụ này.
+            </Text>
+          </View>
+        )}
+
+        {needsAssignment && taskStatus !== 'REJECTED' && (
           <View style={[styles.section, { backgroundColor: palette.card, borderColor: palette.border }]}> 
             <Text style={[styles.emptyText, { color: palette.textMuted }]}>
               Task này chưa được phân công cho bạn. Vui lòng yêu cầu phân công trước khi bắt đầu dọn dẹp.
@@ -1194,6 +1302,88 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacingX._5,
+  },
+  rejectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  rejectButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    borderRadius: 20,
+    padding: 24,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    fontFamily: Fonts.sans,
+    lineHeight: 19,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    fontFamily: Fonts.sans,
+    minHeight: 90,
+    textAlignVertical: 'top',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    fontFamily: Fonts.sans,
+  },
+  modalConfirmBtn: {
+    flex: 2,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalConfirmText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    fontFamily: Fonts.sans,
   },
   readyButtonText: {
     fontSize: 16,

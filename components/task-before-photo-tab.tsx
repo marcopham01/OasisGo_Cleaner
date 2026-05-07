@@ -8,32 +8,32 @@ import { useFocusEffect } from 'expo-router';
 import { RefreshCw, Zap, ZapOff } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import VideoThumb from '@/components/video-thumb';
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import {
-    createCleaningMedia,
-    getCheckoutChecklistItems,
-    getCleaningMedia,
-    getCleaningTaskById,
-    submitCheckoutChecklist,
+  createCleaningMedia,
+  getCheckoutChecklistItems,
+  getCleaningMedia,
+  getCleaningTaskById,
+  submitCheckoutChecklist,
 } from '@/services/cleaner-dashboard.service';
 import type {
-    CheckoutChecklistItem,
-    CheckoutChecklistStatus,
-    CleaningPhoto,
-    CleaningTask,
+  CheckoutChecklistItem,
+  CheckoutChecklistStatus,
+  CleaningPhoto,
+  CleaningTask,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -363,11 +363,6 @@ export default function TaskBeforePhotoTab({
       return mt === 'BEFORE';
     });
 
-    if (capturedPhotos.length === 0 && savedBeforePhotos.length === 0) {
-      Alert.alert('Chưa thể tiếp tục', 'Vui lòng chụp ít nhất một ảnh trước khi dọn.');
-      return;
-    }
-
     // Block if checklist failed to load
     if (checklistLoadError && !checklistSubmitted) {
       Alert.alert(
@@ -494,7 +489,7 @@ export default function TaskBeforePhotoTab({
     ).toUpperCase();
     return mt === 'BEFORE';
   });
-  const hasPhotos = capturedPhotos.length > 0 || savedBeforePhotos.length > 0;
+  const hasPhotos = true;
 
   return (
     <>
@@ -518,10 +513,10 @@ export default function TaskBeforePhotoTab({
             }}>
             <Text
               style={{ fontWeight: '700', color: '#1D4ED8', fontSize: 14, marginBottom: 4 }}>
-              Bước 1/3 – Lưu thông tin TRƯỚC khi dọn
+              Bước 1/3 – Thông tin TRƯỚC khi dọn
             </Text>
             <Text style={{ color: '#3B82F6', fontSize: 13 }}>
-              Lưu thông tin toàn cảnh phòng trước khi bắt đầu dọn dẹp. Ảnh/video sẽ được lưu vào nhiệm vụ.
+              Kiểm kê và lưu thông tin toàn cảnh phòng trước khi bắt đầu dọn dẹp.
             </Text>
           </View>
 

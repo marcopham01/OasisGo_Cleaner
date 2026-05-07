@@ -1646,18 +1646,8 @@ export default function SuppliesTab({ token, userId, palette }: SuppliesTabProps
         }>
 
         {/* CTA buttons */}
-        <View style={styles.ctaRow}>
-          <Pressable
-            onPress={() => setModalVisible(true)}
-            style={({ pressed }) => [
-              styles.ctaBtn,
-              styles.ctaBtnFlex,
-              { backgroundColor: pressed ? palette.primaryDark : palette.primary },
-            ]}>
-            <Text style={[styles.ctaBtnText, { color: palette.white }]}>＋  Lấy đồ hôm nay</Text>
-          </Pressable>
-        </View>
-        <View style={[styles.ctaRow, { marginTop: -spacingY._7 }]}>
+        {/* Lấy đồ hôm nay — tạm ẩn */}
+        <View style={[styles.ctaRow, { marginTop: 0 }]}>
           <Pressable
             onPress={() => setFreeCheckoutModalVisible(true)}
             style={({ pressed }) => [

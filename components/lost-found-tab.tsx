@@ -1,17 +1,18 @@
 ﻿import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ResizeMode, Video } from 'expo-av';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { Clock, ImageIcon, MapPin, Package, Plus } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Image,
-    Modal,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View
+  ActivityIndicator,
+  Image,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View
 } from 'react-native';
 
 import VideoThumb from '@/components/video-thumb';
@@ -19,15 +20,15 @@ import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import { apiClient } from '@/services/api';
 import {
-    getDamageReports,
-    getMyLostFoundItems,
-    getPodById,
-    getWarehouseList,
+  getDamageReports,
+  getMyLostFoundItems,
+  getPodById,
+  getWarehouseList,
 } from '@/services/cleaner-dashboard.service';
 import type {
-    DamageReportResponse,
-    IncidentSeverity,
-    LostFoundItem,
+  DamageReportResponse,
+  IncidentSeverity,
+  LostFoundItem,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -301,22 +302,20 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
     <View style={{ flex: 1, backgroundColor: palette.background }}>
       {/* ── Page header ── */}
       <View style={[styles.pageHeaderWrap, { backgroundColor: palette.background, borderBottomColor: palette.border }]}>
-        <Text style={[styles.pageTitle, { color: palette.primary }]}>Báo cáo sự cố</Text>
-
-        {/* Action buttons */}
-        <View style={styles.actionBtnRow}>
-          <Pressable
-            style={[styles.actionBtn, { backgroundColor: palette.primary }]}
-            onPress={() => router.push('/report-lost-found' as never)}>
-            <Text style={[styles.actionBtnText, { color: palette.white }]}>+ Báo tìm thấy đồ</Text>
-          </Pressable>
-          {/* ⚠ Báo hư hại — ẩn tạm, giữ lại logic */}
-          <Pressable
-            style={[styles.actionBtn, { backgroundColor: '#d97706' }]}
-            onPress={() => router.push('/incident/list' as never)}>
-            <Text style={[styles.actionBtnText, { color: '#fff' }]}>🔧 Xử lý hư hại gấp</Text>
-          </Pressable>
+        {/* Title block */}
+        <View style={styles.pageTitleBlock}>
+          <Package size={24} color={palette.primary} />
+          <Text style={[styles.pageTitle, { color: palette.primary }]}>Đồ thất lạc</Text>
+          <Text style={[styles.pageSubtitle, { color: palette.textMuted }]}>Ghi nhận các vật dụng khách để quên</Text>
         </View>
+
+        {/* Report button */}
+        <Pressable
+          style={[styles.actionBtn, { backgroundColor: palette.primaryLight, borderWidth: 1, borderColor: palette.primary }]}
+          onPress={() => router.push('/report-lost-found' as never)}>
+          <Plus size={16} color={palette.primary} />
+          <Text style={[styles.actionBtnText, { color: palette.primary }]}>Báo cáo tìm thấy đồ</Text>
+        </Pressable>
 
         {/* Sub-tab switcher — ẩn tạm, chỉ hiện đồ thất lạc
         <View style={styles.switchRow}>
@@ -377,7 +376,7 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
               </Text>
             </View>
           ) : (
-            items.map((item) => {
+            items.filter((item) => String(item.status || '').toUpperCase() !== 'RETURNED').map((item) => {
               const status = String(item.status || 'FOUND').toUpperCase();
               const id = itemId(item);
               const media = resolveLostFoundMedia(item);
@@ -385,8 +384,13 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
               return (
                 <View
                   key={id || Math.random()}
-                  style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                  <View style={styles.cardHeader}>
+                  style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border, overflow: 'hidden' }]}>
+
+                  {/* Top accent stripe */}
+                  <View style={[styles.lfAccentStripe, { backgroundColor: status === 'RETURNED' ? '#22c55e' : '#fbbf24' }]} />
+
+                  {/* Name + status badge */}
+                  <View style={[styles.cardHeader, { marginBottom: spacingY._5 }]}>
                     <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={1}>
                       {String(item.item_name || '-')}
                     </Text>
@@ -397,58 +401,68 @@ export default function LostFoundTab({ token, isDark, palette, onErrorChange }: 
                     </View>
                   </View>
 
-                  {item.description ? (
-                    <Text style={[styles.meta, { color: palette.textMuted }]}>
-                      {String(item.description)}
-                    </Text>
-                  ) : null}
-
-                  {media.length > 0 ? (
-                    <View>
-                      <Text style={[styles.meta, { color: palette.textMuted, marginBottom: spacingY._5 }]}>
-                        Media ({media.length})
+                  {/* Location (pod) */}
+                  {(item.pod_name || item.pod_id) ? (
+                    <View style={[styles.lfMetaRow, { marginBottom: 2 }]}>
+                      <MapPin size={13} color={palette.neutral400} />
+                      <Text style={[styles.lfMetaText, { color: palette.textMuted }]} numberOfLines={1}>
+                        {String(item.pod_name || item.pod_id)}
                       </Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        <View style={styles.photoRow}>
-                          {media.map(({ uri, isVideo }, idx) => (
-                            <View
-                              key={`${id || 'lost-found'}_media_${idx}`}
-                              style={{ position: 'relative' }}>
-                              <Pressable
-                                style={styles.photoThumbPressable}
-                                onPress={() => setPreviewMedia({ uri, isVideo })}>
-                                {isVideo ? (
-                                  <VideoThumb uri={uri} style={styles.photoThumb} iconSize={32} />
-                                ) : (
-                                  <Image
-                                    source={{ uri }}
-                                    style={styles.photoThumb}
-                                    resizeMode="cover"
-                                  />
-                                )}
-                              </Pressable>
-                              {isVideo ? (
-                                <View style={styles.mediaBadge}>
-                                  <MaterialIcons name="videocam" size={10} color="#fff" />
-                                </View>
-                              ) : null}
-                            </View>
-                          ))}
-                        </View>
-                      </ScrollView>
                     </View>
                   ) : null}
 
-                  <View style={styles.metaGrid}>
-                    <MetaRow label="Pod" value={item.pod_name || item.pod_id || null} palette={palette} />
-                    <MetaRow label="Kho" value={item.warehouse_name || item.warehouse_id || null} palette={palette} />
-                    <MetaRow label="Thời điểm tìm" value={formatDateTime(item.found_at)} palette={palette} />
-                    {item.claimed_at ? (
-                      <MetaRow label="Đã nhận lúc" value={formatDateTime(item.claimed_at)} palette={palette} />
-                    ) : null}
-                  </View>
+                  {/* Time found */}
+                  {item.found_at ? (
+                    <View style={[styles.lfMetaRow, { marginBottom: spacingY._7 }]}>
+                      <Clock size={13} color={palette.neutral400} />
+                      <Text style={[styles.lfMetaText, { color: palette.textMuted }]}>
+                        {formatDateTime(item.found_at)}
+                      </Text>
+                    </View>
+                  ) : null}
 
+                  {/* Media strip — horizontal scroll, all images/videos */}
+                  {media.length > 0 ? (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={{ marginBottom: spacingY._7 }}
+                      contentContainerStyle={styles.photoRow}>
+                      {media.map(({ uri, isVideo }, idx) => (
+                        <View key={`${id || 'lf'}_media_${idx}`} style={{ position: 'relative' }}>
+                          <Pressable
+                            style={styles.photoThumbPressable}
+                            onPress={() => setPreviewMedia({ uri, isVideo })}>
+                            {isVideo ? (
+                              <VideoThumb uri={uri} style={styles.lfMediaThumb} iconSize={28} />
+                            ) : (
+                              <Image source={{ uri }} style={styles.lfMediaThumb} resizeMode="cover" />
+                            )}
+                          </Pressable>
+                          {isVideo ? (
+                            <View style={styles.mediaBadge}>
+                              <MaterialIcons name="videocam" size={10} color="#fff" />
+                            </View>
+                          ) : null}
+                        </View>
+                      ))}
+                    </ScrollView>
+                  ) : (
+                    /* No media placeholder */
+                    <View style={[styles.lfNoMediaBox, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                      <ImageIcon size={18} color={palette.neutral300} />
+                      <Text style={[styles.lfNoMediaText, { color: palette.neutral400 }]}>Không có hình ảnh</Text>
+                    </View>
+                  )}
 
+                  {/* Description */}
+                  {item.description ? (
+                    <View style={[styles.lfDescBox, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                      <Text style={[styles.lfDescText, { color: palette.textMuted }]} numberOfLines={3}>
+                        {String(item.description)}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
               );
             })
@@ -626,9 +640,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     gap: spacingY._10,
   },
+  pageTitleBlock: {
+    alignItems: 'center',
+    gap: spacingY._5,
+  },
   pageTitle: {
     fontSize: 22,
     fontWeight: '700',
+    fontFamily: Fonts.sans,
+    textAlign: 'center',
+  },
+  pageSubtitle: {
+    fontSize: 12,
     fontFamily: Fonts.sans,
     textAlign: 'center',
   },
@@ -637,11 +660,13 @@ const styles = StyleSheet.create({
     gap: spacingX._10,
   },
   actionBtn: {
-    flex: 1,
     borderRadius: radius._10,
     paddingHorizontal: spacingX._12,
     paddingVertical: spacingY._10,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacingX._7,
   },
   actionBtnText: {
     fontSize: 13,
@@ -716,6 +741,54 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: Fonts.sans,
     flex: 1,
+  },
+  // Lost-found card layout
+  lfAccentStripe: {
+    height: 4,
+    borderRadius: 2,
+    marginBottom: spacingY._10,
+  },
+  lfMediaThumb: {
+    width: 90,
+    height: 90,
+    borderRadius: radius._10,
+    backgroundColor: '#dbe3ef',
+  },
+  lfNoMediaBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: radius._10,
+    paddingVertical: spacingY._10,
+    gap: spacingX._5,
+    marginBottom: spacingY._7,
+  },
+  lfNoMediaText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+  },
+  lfMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  lfMetaText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    flex: 1,
+  },
+  lfDescBox: {
+    borderWidth: 1,
+    borderRadius: radius._6,
+    paddingHorizontal: spacingX._7,
+    paddingVertical: 5,
+  },
+  lfDescText: {
+    fontSize: 12,
+    fontFamily: Fonts.sans,
+    lineHeight: 18,
   },
   // Lost-found status badge (chip style)
   lfStatusBadge: {

@@ -2,16 +2,16 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Animated,
-    Modal,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Animated,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
@@ -20,7 +20,7 @@ import { subscribeCleanerRealtimeEvent } from '@/services/cleaner-realtime-bus';
 import { getMyCleanerIncidents } from '@/services/incident.service';
 import type { CleanerIncident, CleanerRealtimeNotification, CleaningRequestSource, CleaningTask, CleaningTaskStatus } from '@/types/cleaner-dashboard';
 import {
-    CLEANING_REQUEST_SOURCES,
+  CLEANING_REQUEST_SOURCES,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -515,7 +515,8 @@ export default function TasksTab({
 
   const taskWindowRange = useMemo(() => {
     if (taskWindowMode === 'WEEK_WINDOW') {
-      const from = toUtcPlus7DayRange(-7).start;
+      // Start from beginning of today, extend 7 days into the future only
+      const from = toUtcPlus7DayRange(0).start;
       const to = toUtcPlus7DayRange(7).end;
 
       return {
@@ -526,9 +527,13 @@ export default function TasksTab({
     }
 
     const todayRange = toUtcPlus7DayRange(0);
+    // Extend dueTo to the start of tomorrow so that tasks with due_at = 00:00 next day
+    // (i.e. tasks that START today but end exactly at midnight) are returned by the backend.
+    // The client-side normalizedTasks filter then keeps only tasks whose start time is today.
+    const tomorrowStart = toUtcPlus7DayRange(1).start;
     return {
       dueFrom: todayRange.start.toISOString(),
-      dueTo: todayRange.end.toISOString(),
+      dueTo: tomorrowStart.toISOString(),
       label: formatUtcPlus7DateLabel(todayRange.start),
     };
   }, [taskWindowMode]);
@@ -826,11 +831,11 @@ export default function TasksTab({
         data = Array.from(uniqueTaskMap.values());
       }
 
-      // In TODAY mode, client-side filter by actual start time (preferred over due_at which
-      // is an end-time). The backend filters on due_at, so a task ending at 00:00 today
-      // (midnight = start of today's UTC+7 window) gets returned even though it STARTED
-      // yesterday. We fix this by comparing estimated_start_time / booking_start_time
-      // against today's UTC+7 date key and excluding cross-midnight stragglers.
+      // In TODAY mode, client-side filter by actual start time.
+      // taskWindowRange.dueTo is extended to tomorrow's start so the backend returns tasks
+      // that start today but have due_at = 00:00 next day (cross-midnight tasks).
+      // We then keep only tasks whose estimated_start_time / booking_start_time falls on today
+      // and drop any genuine next-day tasks that the wider window pulled in.
       const todayDateKey = toUtcPlus7DateKey(todayRange.start.toISOString());
       const normalizedTasks =
         taskWindowMode === 'WEEK_WINDOW'

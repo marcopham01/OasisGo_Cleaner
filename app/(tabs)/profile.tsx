@@ -82,22 +82,22 @@ export default function ProfileScreen() {
   const initial = (user?.name || user?.email || '?')[0].toUpperCase();
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: palette.primary }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }} edges={['top']}>
       <ScrollView style={{ flex: 1, backgroundColor: palette.background }} contentContainerStyle={styles.container}>
 
         {/* Header */}
-        <View style={[styles.headerCard, { backgroundColor: palette.primary }]}>
+        <View style={[styles.headerCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
           {isRefreshing && (
-            <ActivityIndicator size="small" color="rgba(255,255,255,0.7)" style={styles.refreshIndicator} />
+            <ActivityIndicator size="small" color={palette.primary} style={styles.refreshIndicator} />
           )}
-          <View style={[styles.avatarCircle, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
-            <Text style={styles.avatarInitial}>{initial}</Text>
+          <View style={[styles.avatarCircle, { backgroundColor: palette.primaryBg }]}>
+            <Text style={[styles.avatarInitial, { color: palette.primary }]}>{initial}</Text>
           </View>
-          <Text style={styles.headerName}>{user?.name || 'Cleaner'}</Text>
-          <Text style={styles.headerEmail}>{user?.email || ''}</Text>
+          <Text style={[styles.headerName, { color: palette.text }]}>{user?.name || 'Cleaner'}</Text>
+          <Text style={[styles.headerEmail, { color: palette.textMuted }]}>{user?.email || ''}</Text>
           <View style={styles.badgeRow}>
-            <View style={styles.roleBadge}>
-              <Text style={styles.roleBadgeText}>{String(user?.role || 'CLEANER').toUpperCase()}</Text>
+            <View style={[styles.roleBadge, { backgroundColor: palette.primaryBg }]}>
+              <Text style={[styles.roleBadgeText, { color: palette.primary }]}>{String(user?.role || 'CLEANER').toUpperCase()}</Text>
             </View>
             {user?.isVerified && (
               <View style={styles.verifiedBadge}>
@@ -156,15 +156,15 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { paddingHorizontal: spacingX._15, paddingTop: spacingY._12, paddingBottom: spacingY._20, gap: spacingY._12 },
-  headerCard: { borderRadius: radius._20, paddingVertical: spacingY._20, paddingHorizontal: spacingX._20, alignItems: 'center', gap: 6 },
+  headerCard: { borderRadius: radius._20, borderWidth: 1, paddingVertical: spacingY._20, paddingHorizontal: spacingX._20, alignItems: 'center', gap: 6 },
   refreshIndicator: { position: 'absolute', top: 12, right: 14 },
   avatarCircle: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
-  avatarInitial: { fontSize: 34, fontWeight: '700', color: '#ffffff', fontFamily: Fonts.sans },
-  headerName: { fontSize: 20, fontWeight: '700', color: '#ffffff', fontFamily: Fonts.sans, textAlign: 'center' },
-  headerEmail: { fontSize: 13, color: 'rgba(255,255,255,0.75)', fontFamily: Fonts.sans, textAlign: 'center' },
+  avatarInitial: { fontSize: 34, fontWeight: '700', fontFamily: Fonts.sans },
+  headerName: { fontSize: 20, fontWeight: '700', fontFamily: Fonts.sans, textAlign: 'center' },
+  headerEmail: { fontSize: 13, fontFamily: Fonts.sans, textAlign: 'center' },
   badgeRow: { flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap', justifyContent: 'center' },
-  roleBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20 },
-  roleBadgeText: { fontSize: 11, fontWeight: '700', color: '#ffffff', fontFamily: Fonts.sans, letterSpacing: 0.8 },
+  roleBadge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20 },
+  roleBadgeText: { fontSize: 11, fontWeight: '700', fontFamily: Fonts.sans, letterSpacing: 0.8 },
   verifiedBadge: { backgroundColor: 'rgba(16,185,129,0.25)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(16,185,129,0.5)' },
   verifiedBadgeText: { fontSize: 11, fontWeight: '600', color: '#10b981', fontFamily: Fonts.sans },
   divider: { height: 1 },

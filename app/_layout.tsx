@@ -87,7 +87,7 @@ function AppNavigator() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="task/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="task/before-photo" options={{ title: 'Chụp ảnh trước khi dọn', headerBackTitle: 'Quay lại' }} />
-        <Stack.Screen name="task/checklist" options={{ title: 'Dọn dẹp & Báo cáo', headerBackTitle: 'Quay lại' }} />
+        <Stack.Screen name="task/checklist" options={{ title: 'Dọn dẹp Pod', headerBackTitle: 'Quay lại' }} />
         <Stack.Screen name="task/after-photo" options={{ title: 'Chụp ảnh sau khi dọn', headerBackTitle: 'Quay lại' }} />
         <Stack.Screen
           name="task/summary"

@@ -4,52 +4,52 @@ import { Platform } from 'react-native';
 
 import { apiClient } from '@/services/api';
 import type {
-  BookingDetails,
-  CheckoutChecklistData,
-  CheckoutChecklistResult,
-  CheckoutChecklistSubmitItem,
-  CleanerMarkAllReadResponse,
-  CleanerNotification,
-  CleanerNotificationListResponse,
-  CleanerNotificationQuery,
-  CleanerUnreadCountResponse,
-  CleaningPhoto,
-  CleaningPhotoType,
-  CleaningTask,
-  CleaningTaskQuery,
-  CreateCleaningPhotoUploadPayload,
-  CreateDamageReportPayload,
-  CreateIncidentFromCleaningTaskPayload,
-  CreateLostFoundItemPayload,
-  DamageReportItem,
-  DamageReportListResponse,
-  DamageReportResponse,
-  DamageServiceCatalogItem,
-  Incident,
-  IncidentQuery,
-  IncidentStatus,
-  LostFoundItem,
-  LostFoundQuery,
-  LostFoundStatus,
-  MyCleanerKeyByBookingData,
-  MyCleanerKeyByTaskData,
-  PodCluster,
-  PodDetails,
-  PodItemEntry,
-  PodItemQuery,
-  PodItemsByPodData,
-  StaffAssignmentAttendanceStatus,
-  StaffAttendanceLog,
-  StaffAttendanceLogListResponse,
-  StaffAttendanceLogQuery,
-  StaffShiftAssignment,
-  StaffShiftAssignmentQuery,
-  StaffTodayAttendanceStatus,
-  StaffWorkRoster,
-  StaffWorkRosterQuery,
-  UpdateCleaningPhotoPayload,
-  UpdateCleaningTaskPayload,
-  WarehouseListItem,
+    BookingDetails,
+    CheckoutChecklistData,
+    CheckoutChecklistResult,
+    CheckoutChecklistSubmitItem,
+    CleanerMarkAllReadResponse,
+    CleanerNotification,
+    CleanerNotificationListResponse,
+    CleanerNotificationQuery,
+    CleanerUnreadCountResponse,
+    CleaningPhoto,
+    CleaningPhotoType,
+    CleaningTask,
+    CleaningTaskQuery,
+    CreateCleaningPhotoUploadPayload,
+    CreateDamageReportPayload,
+    CreateIncidentFromCleaningTaskPayload,
+    CreateLostFoundItemPayload,
+    DamageReportItem,
+    DamageReportListResponse,
+    DamageReportResponse,
+    DamageServiceCatalogItem,
+    Incident,
+    IncidentQuery,
+    IncidentStatus,
+    LostFoundItem,
+    LostFoundQuery,
+    LostFoundStatus,
+    MyCleanerKeyByBookingData,
+    MyCleanerKeyByTaskData,
+    PodCluster,
+    PodDetails,
+    PodItemEntry,
+    PodItemQuery,
+    PodItemsByPodData,
+    StaffAssignmentAttendanceStatus,
+    StaffAttendanceLog,
+    StaffAttendanceLogListResponse,
+    StaffAttendanceLogQuery,
+    StaffShiftAssignment,
+    StaffShiftAssignmentQuery,
+    StaffTodayAttendanceStatus,
+    StaffWorkRoster,
+    StaffWorkRosterQuery,
+    UpdateCleaningPhotoPayload,
+    UpdateCleaningTaskPayload,
+    WarehouseListItem,
 } from '@/types/cleaner-dashboard';
 import { normalizeBackendMessage } from '@/utils/validation';
 
@@ -766,6 +766,29 @@ export async function updateCleaningTask(
     const item = extractData<CleaningTask>(response.data?.data ?? response.data);
     if (!item) {
       throw new Error('Cập nhật task không thành công');
+    }
+
+    return item;
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+export async function rejectCleaningTask(
+  token: string,
+  taskId: string,
+  rejectionReason: string,
+) {
+  try {
+    const response = await apiClient.post<ApiEnvelope<CleaningTask>>(
+      `/cleaning-tasks/${taskId}/reject`,
+      { rejection_reason: rejectionReason },
+      { headers: authHeader(token) },
+    );
+
+    const item = extractData<CleaningTask>(response.data?.data ?? response.data);
+    if (!item) {
+      throw new Error('Từ chối task không thành công');
     }
 
     return item;

@@ -270,11 +270,6 @@ export default function TaskAfterPhotoTab({
       (p) => String(p.media_type || p.type || '').toUpperCase() === 'AFTER',
     );
 
-    if (capturedPhotos.length === 0 && savedAfterPhotos.length === 0) {
-      Alert.alert('Chưa thể hoàn thành', 'Vui lòng chụp ít nhất một ảnh sau khi dọn.');
-      return;
-    }
-
     isCompletingRef.current = true;
     setCompleting(true);
     setError(null);
@@ -444,7 +439,7 @@ export default function TaskAfterPhotoTab({
   const savedAfterPhotos = savedPhotos.filter(
     (p) => String(p.media_type || p.type || '').toUpperCase() === 'AFTER',
   );
-  const hasPhotos = capturedPhotos.length > 0 || savedAfterPhotos.length > 0;
+  const hasPhotos = true;
 
   return (
     <>

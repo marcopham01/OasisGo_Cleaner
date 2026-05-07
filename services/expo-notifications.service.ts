@@ -657,7 +657,16 @@ export function observeNotificationResponses(
     };
   }
 
-  const redirect = (dataValue: unknown) => {
+  // Track the last handled notification identifier to prevent the same tap
+  // from triggering multiple navigations. This can happen when both
+  // getLastNotificationResponse() and the response listener fire for the same
+  // tap event, or when the effect re-runs before clearLastNotificationResponseAsync
+  // has finished removing the stored response.
+  let lastHandledId: string | null = null;
+
+  const redirect = (dataValue: unknown, requestId: string) => {
+    if (requestId === lastHandledId) return;
+    lastHandledId = requestId;
     const target = resolveNotificationTargetFromData(dataValue);
     onTarget(target);
   };
@@ -665,12 +674,12 @@ export function observeNotificationResponses(
   try {
     const initial = Notifications.getLastNotificationResponse();
     if (initial?.notification) {
-      redirect(initial.notification.request.content.data);
+      redirect(initial.notification.request.content.data, initial.notification.request.identifier);
       Notifications.clearLastNotificationResponseAsync().catch(() => null);
     }
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      redirect(response.notification.request.content.data);
+      redirect(response.notification.request.content.data, response.notification.request.identifier);
       Notifications.clearLastNotificationResponseAsync().catch(() => null);
     });
 

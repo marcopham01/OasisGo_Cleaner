@@ -2,31 +2,36 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Image,
-    Modal,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
 } from 'react-native';
 
 import { Colors, Fonts, radius, spacingX, spacingY } from '@/constants/theme';
 import { useAuth } from '@/contexts/auth-context';
 import {
-    getCleaningTaskById,
-    getIncidentsByCleaningTaskId,
-    getMyLostFoundItems,
-    getPodItemsByPodId,
+  getCleaningTaskById,
+  getIncidentsByCleaningTaskId,
+  getMyLostFoundItems,
+  getPodItemsByPodId,
 } from '@/services/cleaner-dashboard.service';
-import { getDailyTakenItemsSummary } from '@/services/inventory.service';
+import {
+  bulkCreateInventoryActivityLogs,
+  getAllInventoryStocks,
+  getDailyTakenItemsSummary,
+} from '@/services/inventory.service';
 import type {
-    CleaningTask,
-    Incident,
-    LostFoundItem,
-    PodItemEntry,
+  CleaningTask,
+  Incident,
+  LostFoundItem,
+  PodItemEntry,
 } from '@/types/cleaner-dashboard';
 import { getErrorMessage } from '@/utils/validation';
 
@@ -136,6 +141,9 @@ export default function TaskChecklistTab({
   const [supplyInputByItemKey, setSupplyInputByItemKey] = useState<Record<string, number>>({});
   // Map of item_id -> net held quantity from today's inventory activity logs
   const [heldQtyByItemId, setHeldQtyByItemId] = useState<Record<string, number>>({});
+  // Map of item_id -> inventory_stock_id (first available stock for that item)
+  const [stockByItemId, setStockByItemId] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
@@ -248,6 +256,24 @@ export default function TaskChecklistTab({
     }
   }, [token]);
 
+  const loadStocks = useCallback(async () => {
+    if (!token) return;
+    try {
+      const stocks = await getAllInventoryStocks(token);
+      const map: Record<string, string> = {};
+      for (const s of stocks) {
+        const iid = String(s.item_id || '').trim();
+        const sid = String(s.inventory_stock_id || '').trim();
+        if (iid && sid && !map[iid]) {
+          map[iid] = sid;
+        }
+      }
+      setStockByItemId(map);
+    } catch {
+      // non-critical
+    }
+  }, [token]);
+
   const updateSupplyQuantity = useCallback(
     (itemKey: string, expectedQuantity: number, nextValue: number | string) => {
       const max = Math.max(0, Math.floor(expectedQuantity || 0));
@@ -268,7 +294,8 @@ export default function TaskChecklistTab({
     void refreshLostFoundItems();
     void refreshPodItems();
     void refreshHeldItems();
-  }, [refreshLostFoundItems, refreshPodItems, refreshHeldItems]);
+    void loadStocks();
+  }, [refreshLostFoundItems, refreshPodItems, refreshHeldItems, loadStocks]);
 
   useFocusEffect(
     useCallback(() => {
@@ -278,6 +305,87 @@ export default function TaskChecklistTab({
       void refreshHeldItems();
     }, [refreshIncidents, refreshLostFoundItems, refreshPodItems, refreshHeldItems]),
   );
+
+  const handleWorkDone = useCallback(async () => {
+    setIsSubmitting(true);
+    try {
+      // Build log entries for regular pod items (quantity = what cleaner input in stepper)
+      const podLogs = podItems
+        .map((podItem, index) => {
+          const itemId = String(podItem.item_id || '').trim();
+          const stockId = itemId ? stockByItemId[itemId] : undefined;
+          if (!stockId) return null;
+          const expectedQuantity = Math.max(0, Math.floor(Number(podItem.expected_quantity || 0)));
+          const itemKey = String(podItem.item_id || podItem.id || `pod-item-${index}`).trim();
+          const itemIdForHeld = String(podItem.item_id || '').trim();
+          const heldDefault = itemIdForHeld && Object.prototype.hasOwnProperty.call(heldQtyByItemId, itemIdForHeld)
+            ? Math.min(Number(heldQtyByItemId[itemIdForHeld] ?? 0), expectedQuantity)
+            : expectedQuantity;
+          const hasInputValue = Object.prototype.hasOwnProperty.call(supplyInputByItemKey, itemKey);
+          const qty = toBoundedInt(
+            hasInputValue ? Number(supplyInputByItemKey[itemKey] || 0) : heldDefault,
+            0,
+            expectedQuantity,
+          );
+          if (qty === 0) return null;
+          return {
+            inventory_stock_id: stockId,
+            quantity: qty,
+            action_type: 'CONSUMED' as const,
+            cleaning_task_id: taskId,
+            reason: 'Bổ sung vật tư cho pod',
+          };
+        })
+        .filter(Boolean) as { inventory_stock_id: string; quantity: number; action_type: 'CONSUMED'; cleaning_task_id: string | null; reason: string }[];
+
+      // Build log entries for damage supply items (recomputed from incidents state)
+      const damageQtyMap = new Map<string, number>();
+      for (const incident of incidents) {
+        const topId = String(incident.item_id || '').trim();
+        const topQty = Math.max(0, Number(incident.quantity_affected || 0));
+        if (topId && topQty > 0) damageQtyMap.set(topId, (damageQtyMap.get(topId) ?? 0) + topQty);
+        for (const di of incident.damaged_items ?? []) {
+          const id = String(di.item_id || '').trim();
+          const qty = Math.max(0, Number(di.quantity_damaged || 0));
+          if (id && qty > 0) damageQtyMap.set(id, (damageQtyMap.get(id) ?? 0) + qty);
+        }
+        for (const detail of incident.details ?? []) {
+          if (String(detail.type || '').toUpperCase() !== 'ITEM') continue;
+          const id = String(detail.item_id || '').trim();
+          const qty = Math.max(0, Number(detail.quantity || 0));
+          if (id && qty > 0) damageQtyMap.set(id, (damageQtyMap.get(id) ?? 0) + qty);
+        }
+      }
+      const damageLogs = Array.from(damageQtyMap.entries())
+        .map(([itemId, qty]) => {
+          const stockId = stockByItemId[itemId];
+          if (!stockId || qty === 0) return null;
+          return {
+            inventory_stock_id: stockId,
+            quantity: qty,
+            action_type: 'CONSUMED' as const,
+            cleaning_task_id: taskId,
+            reason: 'Bổ sung do hư hại',
+          };
+        })
+        .filter(Boolean) as { inventory_stock_id: string; quantity: number; action_type: 'CONSUMED'; cleaning_task_id: string | null; reason: string }[];
+
+      const allLogs = [...podLogs, ...damageLogs];
+      if (allLogs.length > 0) {
+        await bulkCreateInventoryActivityLogs(token, { logs: allLogs });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Không thể tạo log vật tư';
+      Alert.alert('Lỗi tạo log vật tư', msg, [
+        { text: 'Bỏ qua', onPress: () => onWorkDone() },
+        { text: 'Thử lại', style: 'cancel' },
+      ]);
+      setIsSubmitting(false);
+      return;
+    }
+    setIsSubmitting(false);
+    onWorkDone();
+  }, [token, taskId, podItems, supplyInputByItemKey, heldQtyByItemId, stockByItemId, incidents, onWorkDone]);
 
   const toggleChecklistItem = (item: string) => {
     setCompletedChecklistItems((prev) =>
@@ -331,6 +439,43 @@ export default function TaskChecklistTab({
     : [];
   const hasSupplyShortage = supplyShortageItems.length > 0;
 
+  // Collect items that need replacement based on incident damage reports
+  type DamageSupplyItem = { item_id: string; name: string; quantity: number };
+  const damageSupplyItemsMap = new Map<string, DamageSupplyItem>();
+  for (const incident of incidents) {
+    // Top-level item_id + quantity_affected
+    const topId = String(incident.item_id || '').trim();
+    const topQty = Math.max(0, Number(incident.quantity_affected || 0));
+    if (topId && topQty > 0) {
+      const name = String(incident.item_name_snapshot || topId);
+      const existing = damageSupplyItemsMap.get(topId);
+      if (existing) existing.quantity += topQty;
+      else damageSupplyItemsMap.set(topId, { item_id: topId, name, quantity: topQty });
+    }
+    // damaged_items array
+    for (const di of incident.damaged_items ?? []) {
+      const id = String(di.item_id || '').trim();
+      const qty = Math.max(0, Number(di.quantity_damaged || 0));
+      if (!id || qty === 0) continue;
+      const name = String(di.item_name_snapshot || id);
+      const existing = damageSupplyItemsMap.get(id);
+      if (existing) existing.quantity += qty;
+      else damageSupplyItemsMap.set(id, { item_id: id, name, quantity: qty });
+    }
+    // details array with type ITEM
+    for (const detail of incident.details ?? []) {
+      if (String(detail.type || '').toUpperCase() !== 'ITEM') continue;
+      const id = String(detail.item_id || '').trim();
+      const qty = Math.max(0, Number(detail.quantity || 0));
+      if (!id || qty === 0) continue;
+      const name = String(detail.name_snapshot || id);
+      const existing = damageSupplyItemsMap.get(id);
+      if (existing) existing.quantity += qty;
+      else damageSupplyItemsMap.set(id, { item_id: id, name, quantity: qty });
+    }
+  }
+  const damageSupplyItems = Array.from(damageSupplyItemsMap.values());
+
   return (
     <>
       <Modal
@@ -367,10 +512,10 @@ export default function TaskChecklistTab({
               borderColor: '#BBF7D0',
             }}>
             <Text style={{ fontWeight: '700', color: '#15803D', fontSize: 14, marginBottom: 4 }}>
-              Bước 2/3 – Dọn dẹp & Báo cáo hư hại
+              Bước 2/3 – Dọn dẹp Pod
             </Text>
             <Text style={{ color: '#16A34A', fontSize: 13 }}>
-              Hoàn thành danh sách dọn dẹp và báo cáo nếu có hư hại trong phòng.
+              Hoàn thành danh sách dọn dẹp và bổ sung vật tư cần thiết cho Pod.
             </Text>
           </View>
 
@@ -609,6 +754,53 @@ export default function TaskChecklistTab({
                 );
               })
             )}
+
+            {/* Damage-based supply items */}
+            {damageSupplyItems.length > 0 ? (
+              <>
+                <View style={{ height: 1, backgroundColor: palette.border, marginTop: 8, marginBottom: 10 }} />
+                <Text style={{ fontSize: 12, fontWeight: '700', color: palette.error, marginBottom: 6 }}>
+                  Bổ sung do hư hại
+                </Text>
+                {damageSupplyItems.map((item) => (
+                  <View
+                    key={item.item_id}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      paddingVertical: 10,
+                      borderBottomWidth: 1,
+                      borderBottomColor: palette.border,
+                    }}>
+                    <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+                      <Text
+                        style={{ fontSize: 14, fontWeight: '500', color: palette.text }}
+                        numberOfLines={2}>
+                        {item.name}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: palette.error, marginTop: 2 }}>
+                        Từ báo cáo hư hại
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        backgroundColor: '#FEE2E2',
+                        borderRadius: 8,
+                        paddingHorizontal: 14,
+                        paddingVertical: 6,
+                        borderWidth: 1,
+                        borderColor: palette.error,
+                        alignItems: 'center',
+                      }}>
+                      <Text style={{ fontSize: 15, fontWeight: '700', color: palette.error }}>
+                        {item.quantity}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </>
+            ) : null}
           </View>
 
           {/* Incident report action section */}
@@ -625,18 +817,6 @@ export default function TaskChecklistTab({
             </Text>
 
             <View style={styles.actionButtonRow}>
-              <Pressable
-                style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: palette.error }]}
-                onPress={() => onReportDamage({
-                  podId: task?.pod_id,
-                  bookingId: String(task?.booking_id ?? ''),
-                  podName: String(task?.pod_name ?? ''),
-                })}>
-                <Text style={[styles.actionButtonText, { color: palette.white }]}> 
-                  Báo cáo hư hại
-                </Text>
-              </Pressable>
-
               <Pressable
                 style={[styles.actionButton, styles.actionButtonHalf, { backgroundColor: '#0ea5e9' }]}
                 onPress={() => onReportLostFound({
@@ -748,9 +928,11 @@ export default function TaskChecklistTab({
                     : palette.neutral400,
               },
             ]}
-            disabled={!isChecklistComplete || hasSupplyShortage}
-            onPress={onWorkDone}>
-            <Text style={styles.workDoneButtonText}>Hoàn thành dọn dẹp</Text>
+            disabled={!isChecklistComplete || hasSupplyShortage || isSubmitting}
+            onPress={() => { void handleWorkDone(); }}>
+            <Text style={styles.workDoneButtonText}>
+              {isSubmitting ? 'Đang lưu...' : 'Hoàn thành dọn dẹp'}
+            </Text>
           </Pressable>
         </View>
       </ScrollView>
