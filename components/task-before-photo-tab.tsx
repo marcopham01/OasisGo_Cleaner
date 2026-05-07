@@ -749,6 +749,7 @@ export default function TaskBeforePhotoTab({
                         {item.user_reported_status ? (
                           <Text style={{ fontWeight: '600', color: '#6366f1' }}>
                             {item.user_reported_status === 'MATCHED' ? 'Đủ'
+                              : item.user_reported_status === 'MATCHED_BY_SYSTEM' ? 'Đủ'
                               : item.user_reported_status === 'DAMAGED' ? 'Hư hỏng'
                               : item.user_reported_status === 'MISSING' ? 'Thiếu'
                               : item.user_reported_status}
